@@ -1,0 +1,3 @@
+powershell -NoProfile -ExecutionPolicy Bypass -File "D:/openclaw-workspace/github/deerflaw/scripts/dev-windows.ps1"
+
+wsl -d Ubuntu -- bash -lc "cd /mnt/d/github/deerflaw && bash scripts/serve.sh --dev"

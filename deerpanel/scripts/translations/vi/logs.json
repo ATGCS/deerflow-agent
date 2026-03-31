@@ -1,0 +1,17 @@
+{
+  "title": "Nhật ký",
+  "desc": "Xem nhật ký dịch v�?DeerPanel",
+  "tabGateway": "Gateway",
+  "tabGatewayErr": "Lỗi Gateway",
+  "tabGuardian": "Guardian",
+  "tabBackup": "Sao lưu",
+  "tabAudit": "Kiểm toán",
+  "searchPlaceholder": "Tìm kiếm...",
+  "refresh": "Làm mới",
+  "autoScroll": "T�?động cuộn",
+  "loading": "Đang tải...",
+  "empty": "Không có nhật ký",
+  "loadFailed": "Tải thất bại",
+  "noResults": "Không có kết qu�?,
+  "searchFailed": "Tìm kiếm thất bại"
+}

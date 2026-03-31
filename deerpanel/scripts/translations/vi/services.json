@@ -1,0 +1,23 @@
+{
+  "title": "Quản lý dịch v�?,
+  "desc": "Khởi động, dừng và giám sát dịch v�?DeerPanel",
+  "gatewayTitle": "Dịch v�?Gateway",
+  "guardianTitle": "Dịch v�?Guardian",
+  "status": "Trạng thái",
+  "pid": "PID",
+  "uptime": "Thời gian hoạt động",
+  "port": "Cổng",
+  "host": "Máy ch�?,
+  "start": "Khởi động",
+  "stop": "Dừng",
+  "restart": "Khởi động lại",
+  "forceKill": "Buộc dừng",
+  "viewLogs": "Xem nhật ký",
+  "starting": "Đang khởi động...",
+  "stopping": "Đang dừng...",
+  "restarting": "Đang khởi động lại...",
+  "loadFail": "Tải trạng thái thất bại",
+  "healthCheck": "Kiểm tra sức khỏe",
+  "healthOk": "Hoạt động bình thường",
+  "healthFail": "Không phản hồi"
+}

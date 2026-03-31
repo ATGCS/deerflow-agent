@@ -1,0 +1,22 @@
+/** 渠道 key �?中文显示名（供多页面复用�?*/
+export const CHANNEL_LABELS = {
+  qqbot: 'QQ 机器�?,
+  telegram: 'Telegram',
+  feishu: '飞书',
+  dingtalk: '钉钉',
+  'dingtalk-connector': '钉钉',
+  discord: 'Discord',
+  slack: 'Slack',
+  whatsapp: 'WhatsApp',
+  msteams: 'Microsoft Teams',
+  signal: 'Signal',
+  matrix: 'Matrix',
+  irc: 'IRC',
+  googlechat: 'Google Chat',
+  imessage: 'iMessage',
+  line: 'LINE',
+  nostr: 'Nostr',
+  mattermost: 'Mattermost',
+  'deerpanel-weixin': '微信',
+  weixin: '微信',
+}

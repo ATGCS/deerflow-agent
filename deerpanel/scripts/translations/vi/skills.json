@@ -1,0 +1,19 @@
+{
+  "title": "Skills",
+  "desc": "Quản lý và cài đặt DeerPanel Skills",
+  "installed": "Đã cài",
+  "available": "Có sẵn",
+  "noSkills": "Không có Skills",
+  "install": "Cài đặt",
+  "uninstall": "G�?cài đặt",
+  "update": "Cập nhật",
+  "search": "Tìm kiếm Skills...",
+  "installing": "Đang cài...",
+  "installSuccess": "Đã cài đặt",
+  "installFailed": "Cài đặt thất bại",
+  "loadFailed": "Tải thất bại",
+  "noResults": "Không có kết qu�?,
+  "refreshList": "Làm mới danh sách",
+  "checkUpdates": "Kiểm tra cập nhật",
+  "noUpdates": "Đã cập nhật"
+}

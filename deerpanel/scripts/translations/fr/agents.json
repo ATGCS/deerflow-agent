@@ -1,0 +1,23 @@
+{
+  "title": "Gestion des Agents",
+  "desc": "Créer et gérer les Agents DeerPanel",
+  "addAgent": "+ Nouvel Agent",
+  "noAgents": "Aucun Agent",
+  "loadFailed": "Échec du chargement",
+  "default": "Par défaut",
+  "backup": "Sauvegarde",
+  "edit": "Modifier",
+  "delete": "Supprimer",
+  "notSet": "Non défini",
+  "addTitle": "Nouvel Agent",
+  "agentId": "ID Agent",
+  "agentName": "Nom",
+  "agentModel": "Modèle",
+  "created": "Agent créé",
+  "createFailed": "Échec de la création",
+  "editTitle": "Modifier l'Agent �?{id}",
+  "updated": "Mis à jour",
+  "updateFailed": "Échec de la mise à jour",
+  "deleted": "Supprimé",
+  "deleteFailed": "Échec de la suppression"
+}
