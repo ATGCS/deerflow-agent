@@ -2,33 +2,36 @@
 
 [English](./README.md) | 中文 | [日本語](./README_ja.md) | [Français](./README_fr.md) | [Русский](./README_ru.md)
 
-[![Python](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)](./backend/pyproject.toml)
-[![Node.js](https://img.shields.io/badge/Node.js-22%2B-339933?logo=node.js&logoColor=white)](./Makefile)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+[!\[Python\](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python\&logoColor=white null)](./backend/pyproject.toml)
+[!\[Node.js\](https://img.shields.io/badge/Node.js-22%2B-339933?logo=node.js\&logoColor=white null)](./Makefile)
+[!\[License: MIT\](https://img.shields.io/badge/License-MIT-yellow.svg null)](./LICENSE)
 
 <a href="https://trendshift.io/repositories/14699" target="_blank"><img src="https://trendshift.io/api/badge/repositories/14699" alt="bytedance%2Fdeer-flow | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
+
 > 2026 年 2 月 28 日，DeerFlow 2 发布后登上 GitHub Trending 第 1 名。非常感谢社区的支持，这是大家一起做到的。
 
 DeerFlow（**D**eep **E**xploration and **E**fficient **R**esearch **Flow**）是一个开源的 **super agent harness**。它把 **sub-agents**、**memory** 和 **sandbox** 组织在一起，再配合可扩展的 **skills**，让 agent 可以完成几乎任何事情。
 
-https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
+<https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18>
 
-> [!NOTE]
-> **DeerFlow 2.0 是一次彻底重写。** 它和 v1 没有共用代码。如果你要找的是最初的 Deep Research 框架，可以前往 [`1.x` 分支](https://github.com/bytedance/deer-flow/tree/main-1.x)。那里仍然欢迎贡献；当前的主要开发已经转向 2.0。
+> \[!NOTE]
+> **DeerFlow 2.0 是一次彻底重写。** 它和 v1 没有共用代码。如果你要找的是最初的 Deep Research 框架，可以前往 [`1.x`](https://github.com/bytedance/deer-flow/tree/main-1.x) [分支](https://github.com/bytedance/deer-flow/tree/main-1.x)。那里仍然欢迎贡献；当前的主要开发已经转向 2.0。
 
 ## 官网
 
 [<img width="2880" height="1600" alt="image" src="https://github.com/user-attachments/assets/a598c49f-3b2f-41ea-a052-05e21349188a" />](https://deerflow.tech)
 
-想了解更多，或者直接看**真实演示**，可以访问[**官网**](https://deerflow.tech)。
+想了解更多，或者直接看**真实演示**，可以访问**[官网](https://deerflow.tech)**。
 
 ## 字节跳动火山引擎方舟 Coding Plan
 
-[<img width="4808" height="2400" alt="codingplan -banner 素材" src="https://github.com/user-attachments/assets/d30dae52-84f2-4021-b32f-6d281252b9ea" />](https://www.volcengine.com/activity/codingplan?utm_campaign=deer_flow&utm_content=deer_flow&utm_medium=devrel&utm_source=OWO&utm_term=deer_flow)
+[<img width="4808" height="2400" alt="codingplan -banner 素材" src="https://github.com/user-attachments/assets/d30dae52-84f2-4021-b32f-6d281252b9ea" />](https://www.volcengine.com/activity/codingplan?utm_campaign=deer_flow\&utm_content=deer_flow\&utm_medium=devrel\&utm_source=OWO\&utm_term=deer_flow)
 
 - 我们推荐使用 Doubao-Seed-2.0-Code、DeepSeek v3.2 和 Kimi 2.5 运行 DeerFlow
-- [现在就加入 Coding Plan](https://www.volcengine.com/activity/codingplan?utm_campaign=deer_flow&utm_content=deer_flow&utm_medium=devrel&utm_source=OWO&utm_term=deer_flow)
-- [海外地区的开发者请点击这里](https://www.byteplus.com/en/activity/codingplan?utm_campaign=deer_flow&utm_content=deer_flow&utm_medium=devrel&utm_source=OWO&utm_term=deer_flow)
+- [现在就加入 Coding Plan](https://www.volcengine.com/activity/codingplan?utm_campaign=deer_flow\&utm_content=deer_flow\&utm_medium=devrel\&utm_source=OWO\&utm_term=deer_flow)
+- [海外地区的开发者请点击这里](https://www.byteplus.com/en/activity/codingplan?utm_campaign=deer_flow\&utm_content=deer_flow\&utm_medium=devrel\&utm_source=OWO\&utm_term=deer_flow)
+
+wsl -d Ubuntu -- bash -lc "cd /mnt/d/github/deerflaw && bash scripts/serve.sh --dev"
 
 ## 目录
 
@@ -80,26 +83,20 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 ### 配置
 
 1. **克隆 DeerFlow 仓库**
-
    ```bash
    git clone https://github.com/bytedance/deer-flow.git
    cd deer-flow
    ```
-
 2. **生成本地配置文件**
 
    在项目根目录（`deer-flow/`）执行：
-
    ```bash
    make config
    ```
-
    这个命令会基于示例模板生成本地配置文件。
-
 3. **配置你要使用的模型**
 
    编辑 `config.yaml`，至少定义一个模型：
-
    ```yaml
    models:
      - name: gpt-4                       # 内部标识
@@ -117,36 +114,29 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
        api_key: $OPENAI_API_KEY          # 这里 OpenRouter 依然沿用 OpenAI 兼容字段名
        base_url: https://openrouter.ai/api/v1
    ```
-
    OpenRouter 以及类似的 OpenAI 兼容网关，建议通过 `langchain_openai:ChatOpenAI` 配合 `base_url` 来配置。如果你更想用 provider 自己的环境变量名，也可以直接把 `api_key` 指向对应变量，例如 `api_key: $OPENROUTER_API_KEY`。
-
 4. **为已配置的模型设置 API key**
 
    可任选以下一种方式：
 
 - 方式 A：编辑项目根目录下的 `.env` 文件（推荐）
-
-   ```bash
-   TAVILY_API_KEY=your-tavily-api-key
-   OPENAI_API_KEY=your-openai-api-key
-   # 如果配置使用的是 langchain_openai:ChatOpenAI + base_url，OpenRouter 也会读取 OPENAI_API_KEY
-   # 其他 provider 的 key 按需补充
-   INFOQUEST_API_KEY=your-infoquest-api-key
-   ```
-
+  ```bash
+  TAVILY_API_KEY=your-tavily-api-key
+  OPENAI_API_KEY=your-openai-api-key
+  # 如果配置使用的是 langchain_openai:ChatOpenAI + base_url，OpenRouter 也会读取 OPENAI_API_KEY
+  # 其他 provider 的 key 按需补充
+  INFOQUEST_API_KEY=your-infoquest-api-key
+  ```
 - 方式 B：在 shell 中导出环境变量
-
-   ```bash
-   export OPENAI_API_KEY=your-openai-api-key
-   ```
-
+  ```bash
+  export OPENAI_API_KEY=your-openai-api-key
+  ```
 - 方式 C：直接编辑 `config.yaml`（不建议用于生产环境）
-
-   ```yaml
-   models:
-     - name: gpt-4
-       api_key: your-actual-api-key-here  # 替换为真实 key
-   ```
+  ```yaml
+  models:
+    - name: gpt-4
+      api_key: your-actual-api-key-here  # 替换为真实 key
+  ```
 
 ### 运行应用
 
@@ -168,10 +158,10 @@ make up     # 构建镜像并启动全部生产服务
 make down   # 停止并移除容器
 ```
 
-> [!NOTE]
+> \[!NOTE]
 > 当前 LangGraph agent server 通过开源 CLI 服务 `langgraph dev` 运行。
 
-访问地址：http://localhost:2026
+访问地址：<http://localhost:2026>
 
 更完整的 Docker 开发说明见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
@@ -185,29 +175,27 @@ make down   # 停止并移除容器
    ```bash
    make check  # 校验 Node.js 22+、pnpm、uv、nginx
    ```
-
 2. **安装依赖**：
    ```bash
    make install  # 安装 backend + frontend 依赖
    ```
-
 3. **（可选）预拉取 sandbox 镜像**：
    ```bash
    # 如果使用 Docker / Container sandbox，建议先执行
    make setup-sandbox
    ```
-
 4. **启动服务**：
    ```bash
    make dev
    ```
-
-5. **访问地址**：http://localhost:2026
+5. **访问地址**：<http://localhost:2026>
 
 ### 进阶配置
+
 #### Sandbox 模式
 
 DeerFlow 支持多种 sandbox 执行方式：
+
 - **本地执行**（直接在宿主机上运行 sandbox 代码）
 - **Docker 执行**（在隔离的 Docker 容器里运行 sandbox 代码）
 - **Docker + Kubernetes 执行**（通过 provisioner 服务在 Kubernetes Pod 中运行 sandbox 代码）
@@ -226,13 +214,13 @@ DeerFlow 支持可配置的 MCP Server 和 skills，用来扩展能力。
 
 DeerFlow 支持从即时通讯应用接收任务。只要配置完成，对应渠道会自动启动，而且都不需要公网 IP。
 
-| 渠道 | 传输方式 | 上手难度 |
-|---------|-----------|------------|
-| Telegram | Bot API（long-polling） | 简单 |
-| Slack | Socket Mode | 中等 |
-| Feishu / Lark | WebSocket | 中等 |
+| 渠道            | 传输方式                  | 上手难度 |
+| ------------- | --------------------- | ---- |
+| Telegram      | Bot API（long-polling） | 简单   |
+| Slack         | Socket Mode           | 中等   |
+| Feishu / Lark | WebSocket             | 中等   |
 
-**`config.yaml` 中的配置示例：**
+**`config.yaml`** **中的配置示例：**
 
 ```yaml
 channels:
@@ -283,6 +271,7 @@ channels:
 ```
 
 说明：
+
 - `assistant_id: lead_agent` 会直接调用默认的 LangGraph assistant。
 - 如果 `assistant_id` 填的是自定义 agent 名，DeerFlow 仍然会走 `lead_agent`，同时把该值注入为 `agent_name`，这样 IM 渠道也会生效对应 agent 的 SOUL 和配置。
 
@@ -325,13 +314,13 @@ FEISHU_APP_SECRET=your_app_secret
 
 渠道连接完成后，你可以直接在聊天窗口里和 DeerFlow 交互：
 
-| 命令 | 说明 |
-|---------|-------------|
-| `/new` | 开启新对话 |
+| 命令        | 说明             |
+| --------- | -------------- |
+| `/new`    | 开启新对话          |
 | `/status` | 查看当前 thread 信息 |
-| `/models` | 列出可用模型 |
-| `/memory` | 查看 memory |
-| `/help` | 查看帮助 |
+| `/models` | 列出可用模型         |
+| `/memory` | 查看 memory      |
+| `/help`   | 查看帮助           |
 
 > 没有命令前缀的消息会被当作普通聊天处理。DeerFlow 会自动创建 thread，并以对话方式回复。
 
@@ -404,6 +393,7 @@ npx skills add https://github.com/bytedance/deer-flow --skill claude-to-deerflow
 然后确认 DeerFlow 已经启动（默认地址是 `http://localhost:2026`），在 Claude Code 里使用 `/claude-to-deerflow` 命令即可。
 
 **你可以做的事情包括：**
+
 - 给 DeerFlow 发送消息，并接收流式响应
 - 选择执行模式：flash（更快）、standard、pro（规划模式）、ultra（sub-agents 模式）
 - 检查 DeerFlow 健康状态，列出 models / skills / agents
@@ -546,7 +536,4 @@ DeerFlow 建立在开源社区大量优秀工作的基础上。所有让 DeerFlo
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=bytedance/deer-flow&type=Date)](https://star-history.com/#bytedance/deer-flow&Date)
-
-
-
+[!\[Star History Chart\](https://api.star-history.com/svg?repos=bytedance/deer-flow\&type=Date null)](https://star-history.com/#bytedance/deer-flow\&Date)

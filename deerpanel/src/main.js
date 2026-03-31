@@ -1,19 +1,15 @@
 /**
- * DeerPanel 入口
+ * ClawPanel 入口
  */
-
-// 模块已加载，取消 splash 超时回退（防止假阳性的 "页面加载失败" 提示�?if (window._splashTimer) { clearTimeout(window._splashTimer); window._splashTimer = null }
-
-import { registerRoute, initRouter, navigate, setDefaultRoute } from './router.js'
+import { registerRoute, initRouter, navigate } from './router.js'
 import { renderSidebar, openMobileSidebar } from './components/sidebar.js'
 import { initTheme } from './lib/theme.js'
-import { detectOpenclawStatus, isOpenclawReady, isUpgrading, isGatewayRunning, onGatewayChange, startGatewayPoll, onGuardianGiveUp, resetAutoRestart, loadActiveInstance, getActiveInstance, onInstanceChange } from './lib/app-state.js'
+import { detectOpenclawStatus, isOpenclawReady, isGatewayRunning, onGatewayChange, startGatewayPoll, onGuardianGiveUp, resetAutoRestart, loadActiveInstance, getActiveInstance, onInstanceChange } from './lib/app-state.js'
 import { wsClient } from './lib/ws-client.js'
 import { api, checkBackendHealth, isBackendOnline, onBackendStatusChange } from './lib/tauri-api.js'
 import { version as APP_VERSION } from '../package.json'
 import { statusIcon } from './lib/icons.js'
 import { tryShowEngagement } from './components/engagement.js'
-import { initI18n } from './lib/i18n.js'
 
 // 样式
 import './style/variables.css'
@@ -27,25 +23,22 @@ import './style/debug.css'
 import './style/assistant.css'
 import './style/ai-drawer.css'
 
-// 初始化主�?+ 国际�?initTheme()
-initI18n()
+// 初始化主题
+initTheme()
 
-/** HTML 转义，防�?XSS 注入 */
-function escapeHtml(str) {
-  return (str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
-}
-
-// === 访问密码保护（Web + 桌面端通用�?===
+// === 访问密码保护（Web + 桌面端通用） ===
 const isTauri = !!window.__TAURI_INTERNALS__
 
 async function checkAuth() {
   if (isTauri) {
-    // 桌面端：�?deerpanel.json，检查密码配�?    try {
+    // 桌面端：读 clawpanel.json，检查密码配置
+    try {
       const { api } = await import('./lib/tauri-api.js')
       const cfg = await api.readPanelConfig()
       if (!cfg.accessPassword) return { ok: true }
-      if (sessionStorage.getItem('deerpanel_authed') === '1') return { ok: true }
-      // 默认密码：直接传给登录页，避免二次读�?      const defaultPw = (cfg.mustChangePassword && cfg.accessPassword) ? cfg.accessPassword : null
+      if (sessionStorage.getItem('clawpanel_authed') === '1') return { ok: true }
+      // 默认密码：直接传给登录页，避免二次读取
+      const defaultPw = (cfg.mustChangePassword && cfg.accessPassword) ? cfg.accessPassword : null
       return { ok: false, defaultPw }
     } catch { return { ok: true } }
   }
@@ -68,7 +61,7 @@ function _hideSplash() {
   if (splash) { splash.classList.add('hide'); setTimeout(() => splash.remove(), 500) }
 }
 
-// === 后端离线检测（Web 模式�?===
+// === 后端离线检测（Web 模式） ===
 let _backendRetryTimer = null
 
 function showBackendDownOverlay() {
@@ -79,19 +72,19 @@ function showBackendDownOverlay() {
   overlay.innerHTML = `
     <div class="login-card" style="text-align:center">
       ${_logoSvg}
-      <div class="login-title" style="color:var(--error,#ef4444)">后端未启�?/div>
+      <div class="login-title" style="color:var(--error,#ef4444)">后端未启动</div>
       <div class="login-desc" style="line-height:1.8">
-        DeerPanel 后端服务未运行，无法获取真实数据�?br>
-        <span style="font-size:12px;color:var(--text-tertiary)">请在服务器上启动后端服务后刷新页面�?/span>
+        ClawPanel 后端服务未运行，无法获取真实数据。<br>
+        <span style="font-size:12px;color:var(--text-tertiary)">请在服务器上启动后端服务后刷新页面。</span>
       </div>
       <div style="background:var(--bg-tertiary);border-radius:var(--radius-md,8px);padding:14px 18px;margin:16px 0;text-align:left;font-family:var(--font-mono,monospace);font-size:12px;line-height:1.8;user-select:all;color:var(--text-secondary)">
-        <div style="color:var(--text-tertiary);margin-bottom:4px"># 开发模�?/div>
+        <div style="color:var(--text-tertiary);margin-bottom:4px"># 开发模式</div>
         npm run dev<br>
         <div style="color:var(--text-tertiary);margin-top:8px;margin-bottom:4px"># 生产模式</div>
         npm run preview
       </div>
       <button class="login-btn" id="btn-backend-retry" style="margin-top:8px">
-        <span id="backend-retry-text">重新检�?/span>
+        <span id="backend-retry-text">重新检测</span>
       </button>
       <div id="backend-retry-status" style="font-size:12px;color:var(--text-tertiary);margin-top:12px"></div>
       <div style="margin-top:16px;font-size:11px;color:#aaa">
@@ -121,15 +114,16 @@ function showBackendDownOverlay() {
       overlay.classList.add('hide')
       setTimeout(() => { overlay.remove(); location.reload() }, 600)
     } else {
-      statusEl.textContent = '后端仍未响应，请确认服务已启�?
+      statusEl.textContent = '后端仍未响应，请确认服务已启动'
       statusEl.style.color = 'var(--error,#ef4444)'
-      textEl.textContent = '重新检�?
+      textEl.textContent = '重新检测'
       btn.disabled = false
       retrying = false
     }
   })
 
-  // 自动轮询：每 5 秒检测一�?  if (_backendRetryTimer) clearInterval(_backendRetryTimer)
+  // 自动轮询：每 5 秒检测一次
+  if (_backendRetryTimer) clearInterval(_backendRetryTimer)
   _backendRetryTimer = setInterval(async () => {
     const ok = await checkBackendHealth()
     if (ok) {
@@ -160,25 +154,25 @@ function showLoginOverlay(defaultPw) {
   overlay.innerHTML = `
     <div class="login-card">
       ${_logoSvg}
-      <div class="login-title">DeerPanel</div>
+      <div class="login-title">ClawPanel</div>
       <div class="login-desc">${hasDefault
-        ? '首次使用，默认密码已自动填充<br><span style="font-size:12px;color:#6366f1;font-weight:600">登录后请前往「安全设置」修改密�?/span>'
-        : (isTauri ? '应用已锁定，请输入密�? : '请输入访问密�?)}</div>
+        ? '首次使用，默认密码已自动填充<br><span style="font-size:12px;color:#6366f1;font-weight:600">登录后请前往「安全设置」修改密码</span>'
+        : (isTauri ? '应用已锁定，请输入密码' : '请输入访问密码')}</div>
       <form id="login-form">
         <input class="login-input" type="${hasDefault ? 'text' : 'password'}" id="login-pw" placeholder="访问密码" autocomplete="current-password" autofocus value="${hasDefault ? defaultPw : ''}" />
         <div id="login-captcha" style="display:${_captcha ? 'block' : 'none'};margin-bottom:10px">
-          <div style="font-size:12px;color:#888;margin-bottom:6px">请先完成验证�?strong id="captcha-q" style="color:var(--text-primary,#333)">${_captcha ? _captcha.q : ''}</strong></div>
+          <div style="font-size:12px;color:#888;margin-bottom:6px">请先完成验证：<strong id="captcha-q" style="color:var(--text-primary,#333)">${_captcha ? _captcha.q : ''}</strong></div>
           <input class="login-input" type="number" id="login-captcha-input" placeholder="输入计算结果" style="text-align:center" />
         </div>
-        <button class="login-btn" type="submit">�?�?/button>
+        <button class="login-btn" type="submit">登 录</button>
         <div class="login-error" id="login-error"></div>
       </form>
       ${!hasDefault ? `<details class="login-forgot" style="margin-top:16px;text-align:center">
-        <summary style="font-size:11px;color:#aaa;cursor:pointer;list-style:none;user-select:none">忘记密码�?/summary>
+        <summary style="font-size:11px;color:#aaa;cursor:pointer;list-style:none;user-select:none">忘记密码？</summary>
         <div style="margin-top:8px;font-size:11px;color:#888;line-height:1.8;text-align:left;background:rgba(0,0,0,.03);border-radius:8px;padding:10px 14px">
           ${isTauri
-            ? '删除配置文件中的 <code style="background:rgba(99,102,241,.1);padding:1px 5px;border-radius:3px;font-size:10px">accessPassword</code> 字段即可重置�?br><code style="background:rgba(99,102,241,.1);padding:2px 6px;border-radius:3px;font-size:10px;word-break:break-all">~/.deerpanel/deerpanel.json</code>'
-            : '编辑服务器上的配置文件，删除 <code style="background:rgba(99,102,241,.1);padding:1px 5px;border-radius:3px;font-size:10px">accessPassword</code> 字段后重启服务：<br><code style="background:rgba(99,102,241,.1);padding:2px 6px;border-radius:3px;font-size:10px;word-break:break-all">~/.deerpanel/deerpanel.json</code>'
+            ? '删除配置文件中的 <code style="background:rgba(99,102,241,.1);padding:1px 5px;border-radius:3px;font-size:10px">accessPassword</code> 字段即可重置：<br><code style="background:rgba(99,102,241,.1);padding:2px 6px;border-radius:3px;font-size:10px;word-break:break-all">~/.openclaw/clawpanel.json</code>'
+            : '编辑服务器上的配置文件，删除 <code style="background:rgba(99,102,241,.1);padding:1px 5px;border-radius:3px;font-size:10px">accessPassword</code> 字段后重启服务：<br><code style="background:rgba(99,102,241,.1);padding:2px 6px;border-radius:3px;font-size:10px;word-break:break-all">~/.openclaw/clawpanel.json</code>'
           }
         </div>
       </details>` : ''}
@@ -198,18 +192,19 @@ function showLoginOverlay(defaultPw) {
       const btn = overlay.querySelector('.login-btn')
       const errEl = overlay.querySelector('#login-error')
       btn.disabled = true
-      btn.textContent = '登录�?..'
+      btn.textContent = '登录中...'
       errEl.textContent = ''
-      // 验证码校�?      if (_captcha) {
+      // 验证码校验
+      if (_captcha) {
         const captchaVal = parseInt(overlay.querySelector('#login-captcha-input')?.value)
         if (captchaVal !== _captcha.a) {
-          errEl.textContent = '验证码错�?
+          errEl.textContent = '验证码错误'
           _captcha = _genCaptcha()
           const qEl = overlay.querySelector('#captcha-q')
           if (qEl) qEl.textContent = _captcha.q
           overlay.querySelector('#login-captcha-input').value = ''
           btn.disabled = false
-          btn.textContent = '�?�?
+          btn.textContent = '登 录'
           return
         }
       }
@@ -227,11 +222,12 @@ function showLoginOverlay(defaultPw) {
             }
             errEl.textContent = `密码错误${_loginFailCount >= CAPTCHA_THRESHOLD ? '' : ` (${_loginFailCount}/${CAPTCHA_THRESHOLD})`}`
             btn.disabled = false
-            btn.textContent = '�?�?
+            btn.textContent = '登 录'
             return
           }
-          sessionStorage.setItem('deerpanel_authed', '1')
-          // 同步建立 web session（WEB_ONLY_CMDS 需�?cookie 认证�?          try {
+          sessionStorage.setItem('clawpanel_authed', '1')
+          // 同步建立 web session（WEB_ONLY_CMDS 需要 cookie 认证）
+          try {
             await fetch('/__api/auth_login', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -241,7 +237,7 @@ function showLoginOverlay(defaultPw) {
           overlay.classList.add('hide')
           setTimeout(() => overlay.remove(), 400)
           if (cfg.accessPassword === '123456') {
-            sessionStorage.setItem('deerpanel_must_change_pw', '1')
+            sessionStorage.setItem('clawpanel_must_change_pw', '1')
           }
           resolve()
         } else {
@@ -261,26 +257,27 @@ function showLoginOverlay(defaultPw) {
             }
             errEl.textContent = (data.error || '登录失败') + (_loginFailCount >= CAPTCHA_THRESHOLD ? '' : ` (${_loginFailCount}/${CAPTCHA_THRESHOLD})`)
             btn.disabled = false
-            btn.textContent = '�?�?
+            btn.textContent = '登 录'
             return
           }
           overlay.classList.add('hide')
           setTimeout(() => overlay.remove(), 400)
           if (data.mustChangePassword || data.defaultPassword === '123456') {
-            sessionStorage.setItem('deerpanel_must_change_pw', '1')
+            sessionStorage.setItem('clawpanel_must_change_pw', '1')
           }
           resolve()
         }
       } catch (err) {
         errEl.textContent = '网络错误: ' + (err.message || err)
         btn.disabled = false
-        btn.textContent = '�?�?
+        btn.textContent = '登 录'
       }
     })
   })
 }
 
-// 全局 401 拦截：API 返回 401 时弹出登�?window.__deerpanel_show_login = async function() {
+// 全局 401 拦截：API 返回 401 时弹出登录
+window.__clawpanel_show_login = async function() {
   if (document.getElementById('login-overlay')) return
   await showLoginOverlay()
   location.reload()
@@ -304,7 +301,6 @@ async function boot() {
   registerRoute('/security', () => import('./pages/security.js'))
   registerRoute('/about', () => import('./pages/about.js'))
   registerRoute('/assistant', () => import('./pages/assistant.js'))
-  registerRoute('/setup', () => import('./pages/setup.js'))
   registerRoute('/channels', () => import('./pages/channels.js'))
   registerRoute('/cron', () => import('./pages/cron.js'))
   registerRoute('/usage', () => import('./pages/usage.js'))
@@ -314,7 +310,8 @@ async function boot() {
   renderSidebar(sidebar)
   initRouter(content)
 
-  // 移动端顶栏（汉堡菜单 + 标题�?  const mainCol = document.getElementById('main-col')
+  // 移动端顶栏（汉堡菜单 + 标题）
+  const mainCol = document.getElementById('main-col')
   const topbar = document.createElement('div')
   topbar.className = 'mobile-topbar'
   topbar.id = 'mobile-topbar'
@@ -322,31 +319,33 @@ async function boot() {
     <button class="mobile-hamburger" id="btn-mobile-menu">
       <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
     </button>
-    <span class="mobile-topbar-title">DeerPanel</span>
+    <span class="mobile-topbar-title">ClawPanel</span>
   `
   topbar.querySelector('.mobile-hamburger').addEventListener('click', openMobileSidebar)
   mainCol.prepend(topbar)
 
-  // 隐藏启动加载�?  const splash = document.getElementById('splash')
+  // 隐藏启动加载屏
+  const splash = document.getElementById('splash')
   if (splash) {
     splash.classList.add('hide')
     setTimeout(() => splash.remove(), 500)
   }
 
   // 默认密码提醒横幅
-  if (sessionStorage.getItem('deerpanel_must_change_pw') === '1') {
+  if (sessionStorage.getItem('clawpanel_must_change_pw') === '1') {
     const banner = document.createElement('div')
     banner.id = 'pw-change-banner'
     banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:999;background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;padding:10px 20px;display:flex;align-items:center;justify-content:center;gap:12px;font-size:13px;font-weight:500;box-shadow:0 2px 8px rgba(0,0,0,0.15)'
     banner.innerHTML = `
-      <span>${statusIcon('warn', 14)} 当前使用的是系统生成的默认密码，为了安全请尽快修�?/span>
-      <a href="#/security" style="color:#fff;background:rgba(255,255,255,0.2);padding:4px 14px;border-radius:6px;text-decoration:none;font-size:12px;font-weight:600" onclick="document.getElementById('pw-change-banner').remove();sessionStorage.removeItem('deerpanel_must_change_pw')">前往安全设置</a>
-      <button onclick="this.parentElement.remove()" style="background:none;border:none;color:rgba(255,255,255,0.7);cursor:pointer;font-size:16px;padding:0 4px;margin-left:4px">�?/button>
+      <span>${statusIcon('warn', 14)} 当前使用的是系统生成的默认密码，为了安全请尽快修改</span>
+      <a href="#/security" style="color:#fff;background:rgba(255,255,255,0.2);padding:4px 14px;border-radius:6px;text-decoration:none;font-size:12px;font-weight:600" onclick="document.getElementById('pw-change-banner').remove();sessionStorage.removeItem('clawpanel_must_change_pw')">前往安全设置</a>
+      <button onclick="this.parentElement.remove()" style="background:none;border:none;color:rgba(255,255,255,0.7);cursor:pointer;font-size:16px;padding:0 4px;margin-left:4px">✕</button>
     `
     document.body.prepend(banner)
   }
 
-  // Tauri 模式：确�?web session 存在（页面刷新后 cookie 可能丢失），然后加载实例和检测状�?  const ensureWebSession = isTauri
+  // Tauri 模式：确保 web session 存在（页面刷新后 cookie 可能丢失），然后加载实例和检测状态
+  const ensureWebSession = isTauri
     ? api.readPanelConfig().then(cfg => {
         if (cfg.accessPassword) {
           return fetch('/__api/auth_login', {
@@ -359,68 +358,64 @@ async function boot() {
     : Promise.resolve()
 
   ensureWebSession.then(() => loadActiveInstance()).then(() => detectOpenclawStatus()).then(() => {
-    // 重新渲染侧边栏（检测完成后 isOpenclawReady 状态已更新�?    renderSidebar(sidebar)
-    if (!isOpenclawReady()) {
-      setDefaultRoute('/setup')
-      navigate('/setup')
-    } else {
-      if (window.location.hash === '#/setup') navigate('/dashboard')
-      setupGatewayBanner()
-      startGatewayPoll()
+    // 重新渲染侧边栏（检测完成后 isOpenclawReady 状态已更新）
+    renderSidebar(sidebar)
+    if (window.location.hash === '#/setup') navigate('/dashboard')
+    // 实时聊天不展示 Gateway 检查提示（减少干扰）
+    if (!(window.location.hash || '').startsWith('#/chat')) setupGatewayBanner()
+    startGatewayPoll()
 
-      // 自动连接 WebSocket（如�?Gateway 正在运行�?      if (isGatewayRunning()) {
+    // 自动连接 WebSocket（如果 Gateway 正在运行）
+    if (isGatewayRunning()) {
+      autoConnectWebSocket()
+    }
+
+    // 监听 Gateway 状态变化，自动连接/断开 WebSocket
+    onGatewayChange((running) => {
+      if (running) {
         autoConnectWebSocket()
-      }
-
-      // 监听 Gateway 状态变化，自动连接/断开 WebSocket
-      onGatewayChange((running) => {
-        if (running) {
-          autoConnectWebSocket()
-          // 正向时机：Gateway 启动成功，延迟弹社区引导
-          setTimeout(tryShowEngagement, 5000)
-        } else {
-          wsClient.disconnect()
-        }
-      })
-
-      // 守护放弃时，弹出恢复选项
-      if (window.__TAURI_INTERNALS__) {
-        import('@tauri-apps/api/event').then(async ({ listen }) => {
-          await listen('guardian-event', (e) => {
-            if (e.payload?.kind === 'give_up') showGuardianRecovery()
-          })
-        }).catch(() => {})
-        api.guardianStatus().then(status => {
-          if (status?.giveUp) showGuardianRecovery()
-        }).catch(() => {})
+        // 正向时机：Gateway 启动成功，延迟弹社区引导
+        setTimeout(tryShowEngagement, 5000)
       } else {
-        onGuardianGiveUp(() => {
-          showGuardianRecovery()
-        })
-      }
-
-      // 实例切换时，重连 WebSocket + 重新检测状�?      onInstanceChange(async () => {
         wsClient.disconnect()
-        await detectOpenclawStatus()
-        if (isGatewayRunning()) autoConnectWebSocket()
+      }
+    })
+
+    // 守护放弃时，弹出恢复选项
+    if (window.__TAURI_INTERNALS__) {
+      import('@tauri-apps/api/event').then(async ({ listen }) => {
+        await listen('guardian-event', (e) => {
+          if (e.payload?.kind === 'give_up') showGuardianRecovery()
+        })
+      }).catch(() => {})
+      api.guardianStatus().then(status => {
+        if (status?.giveUp) showGuardianRecovery()
+      }).catch(() => {})
+    } else {
+      onGuardianGiveUp(() => {
+        showGuardianRecovery()
       })
     }
 
-    // 全局监听后台任务完成/失败事件，自动刷新安装状态和侧边�?    if (window.__TAURI_INTERNALS__) {
+    // 实例切换时，重连 WebSocket + 重新检测状态
+    onInstanceChange(async () => {
+      wsClient.disconnect()
+      await detectOpenclawStatus()
+      if (isGatewayRunning()) autoConnectWebSocket()
+    })
+
+    // 全局监听后台任务完成/失败事件，自动刷新安装状态和侧边栏
+    if (window.__TAURI_INTERNALS__) {
       import('@tauri-apps/api/event').then(async ({ listen }) => {
         const refreshAfterTask = async () => {
-          // 清除 API 缓存，确保拿到最新状�?          const { invalidate } = await import('./lib/tauri-api.js')
+          // 清除 API 缓存，确保拿到最新状态
+          const { invalidate } = await import('./lib/tauri-api.js')
           invalidate('check_installation', 'get_services_status', 'get_version_info')
           await detectOpenclawStatus()
           renderSidebar(sidebar)
-          // 如果安装完成后变为就绪，跳转到仪表盘
-          if (isOpenclawReady() && window.location.hash === '#/setup') {
+          // setup 页面已停用：若仍停留其路由，统一跳回仪表盘
+          if (window.location.hash === '#/setup') {
             navigate('/dashboard')
-          }
-          // 如果卸载后变为未就绪，跳转到 setup
-          if (!isOpenclawReady() && !isUpgrading()) {
-            setDefaultRoute('/setup')
-            navigate('/setup')
           }
         }
         await listen('upgrade-done', refreshAfterTask)
@@ -439,37 +434,39 @@ async function autoConnectWebSocket() {
     const rawToken = config?.gateway?.auth?.token
     const token = (typeof rawToken === 'string') ? rawToken : ''
 
-    // 启动前先确保设备已配�?+ allowedOrigins 已写入，无需用户手动操作
+    // 启动前先确保设备已配对 + allowedOrigins 已写入，无需用户手动操作
     let needReload = false
     try {
       const pairResult = await api.autoPairDevice()
-      console.log('[main] 设备配对 + origins 已就�?', pairResult)
-      // 仅在配置实际变更时才需�?reload（dev-api 返回 {changed}，Tauri 返回字符串）
+      console.log('[main] 设备配对 + origins 已就绪:', pairResult)
+      // 仅在配置实际变更时才需要 reload（dev-api 返回 {changed}，Tauri 返回字符串）
       if (typeof pairResult === 'object' && pairResult.changed) {
         needReload = true
-      } else if (typeof pairResult === 'string' && pairResult !== '设备已配�?) {
+      } else if (typeof pairResult === 'string' && pairResult !== '设备已配对') {
         needReload = true
       }
     } catch (pairErr) {
-      console.warn('[main] autoPairDevice 失败（非致命�?', pairErr)
+      console.warn('[main] autoPairDevice 失败（非致命）:', pairErr)
     }
 
-    // 确保模型配置包含 vision 支持（input: ["text", "image"]�?    try {
+    // 确保模型配置包含 vision 支持（input: ["text", "image"]）
+    try {
       const patched = await api.patchModelVision()
       if (patched) {
         console.log('[main] 已为模型添加 vision 支持')
         needReload = true
       }
     } catch (visionErr) {
-      console.warn('[main] patchModelVision 失败（非致命�?', visionErr)
+      console.warn('[main] patchModelVision 失败（非致命）:', visionErr)
     }
 
-    // 统一 reload Gateway（配�?origins + vision patch 合并为一�?reload�?    if (needReload) {
+    // 统一 reload Gateway（配对 origins + vision patch 合并为一次 reload）
+    if (needReload) {
       try {
         await api.reloadGateway()
-        console.log('[main] Gateway 已重�?)
+        console.log('[main] Gateway 已重载')
       } catch (reloadErr) {
-        console.warn('[main] reloadGateway 失败（非致命�?', reloadErr)
+        console.warn('[main] reloadGateway 失败（非致命）:', reloadErr)
       }
     }
 
@@ -486,7 +483,7 @@ async function autoConnectWebSocket() {
       host = window.__TAURI_INTERNALS__ ? `127.0.0.1:${port}` : location.host
     }
     wsClient.connect(host, token)
-    console.log(`[main] WebSocket 连接已启�?-> ${host}`)
+    console.log(`[main] WebSocket 连接已启动 -> ${host}`)
   } catch (e) {
     console.error('[main] 自动连接 WebSocket 失败:', e)
   }
@@ -504,10 +501,10 @@ function setupGatewayBanner() {
       banner.classList.remove('gw-banner-hidden')
       banner.innerHTML = `
         <div class="gw-banner-content">
-          <span class="gw-banner-icon">${statusIcon('info', 16)}</span>
-          <span>Gateway 未运�?/span>
-          <button class="btn btn-sm btn-secondary" id="btn-gw-start" style="margin-left:auto">启动</button>
-          <a class="btn btn-sm btn-ghost" href="#/services">服务管理</a>
+          <span class="gw-banner-icon">${statusIcon('warn', 16)}</span>
+          <span>Gateway 未运行</span>
+          <button class="btn btn-sm btn-primary" id="btn-gw-start" style="margin-left:auto">启动</button>
+          <a class="btn btn-sm btn-ghost" href="#/services" style="color:inherit;font-size:12px">服务管理</a>
           <button class="gw-banner-close" id="btn-gw-dismiss" title="关闭提示">&times;</button>
         </div>
       `
@@ -519,20 +516,20 @@ function setupGatewayBanner() {
         const btn = e.target
         btn.disabled = true
         btn.classList.add('btn-loading')
-        btn.textContent = '启动�?..'
+        btn.textContent = '启动中...'
         try {
-          await api.startService('ai.deerpanel.gateway')
+          await api.startService('ai.openclaw.gateway')
         } catch (err) {
           const errMsg = (err.message || String(err)).slice(0, 120)
           banner.innerHTML = `
             <div class="gw-banner-content" style="flex-wrap:wrap">
-              <span class="gw-banner-icon">${statusIcon('info', 16)}</span>
+              <span class="gw-banner-icon">${statusIcon('warn', 16)}</span>
               <span>启动失败</span>
-              <button class="btn btn-sm btn-secondary" id="btn-gw-start" style="margin-left:auto">重试</button>
-              <a class="btn btn-sm btn-ghost" href="#/services">服务管理</a>
-              <a class="btn btn-sm btn-ghost" href="#/logs">查看日志</a>
+              <button class="btn btn-sm btn-primary" id="btn-gw-start" style="margin-left:auto">重试</button>
+              <a class="btn btn-sm btn-ghost" href="#/services" style="color:inherit;font-size:12px">服务管理</a>
+              <a class="btn btn-sm btn-ghost" href="#/logs" style="color:inherit;font-size:12px">查看日志</a>
             </div>
-            <div style="font-size:11px;opacity:0.7;margin-top:4px;font-family:monospace;word-break:break-all">${escapeHtml(errMsg)}</div>
+            <div style="font-size:11px;opacity:0.7;margin-top:4px;font-family:monospace;word-break:break-all">${errMsg}</div>
           `
           update(false)
           return
@@ -542,24 +539,25 @@ function setupGatewayBanner() {
         while (Date.now() - t0 < 30000) {
           try {
             const s = await api.getServicesStatus()
-            const gw = s?.find?.(x => x.label === 'ai.deerpanel.gateway') || s?.[0]
+            const gw = s?.find?.(x => x.label === 'ai.openclaw.gateway') || s?.[0]
             if (gw?.running) { update(true); return }
           } catch {}
           const sec = Math.floor((Date.now() - t0) / 1000)
-          btn.textContent = `启动�?.. ${sec}s`
+          btn.textContent = `启动中... ${sec}s`
           await new Promise(r => setTimeout(r, 1500))
         }
-        // 超时后尝试获取日志帮助排�?        let logHint = ''
+        // 超时后尝试获取日志帮助排查
+        let logHint = ''
         try {
           const logs = await api.readLogTail('gateway', 5)
           if (logs?.trim()) logHint = `<div style="font-size:12px;margin-top:4px;opacity:0.8;font-family:monospace;white-space:pre-wrap">${logs.trim().split('\n').slice(-3).join('\n')}</div>`
         } catch {}
         banner.innerHTML = `
           <div class="gw-banner-content">
-            <span class="gw-banner-icon">${statusIcon('info', 16)}</span>
-            <span>启动超时，Gateway 可能仍在启动�?/span>
-            <button class="btn btn-sm btn-secondary" id="btn-gw-start" style="margin-left:auto">重试</button>
-            <a class="btn btn-sm btn-ghost" href="#/logs">查看日志</a>
+            <span class="gw-banner-icon">${statusIcon('warn', 16)}</span>
+            <span>启动超时，Gateway 可能仍在启动中</span>
+            <button class="btn btn-sm btn-primary" id="btn-gw-start">重试</button>
+            <a class="btn btn-sm btn-ghost" href="#/logs" style="color:inherit;text-decoration:underline">查看日志</a>
           </div>
           ${logHint}
         `
@@ -579,79 +577,32 @@ function showGuardianRecovery() {
   banner.innerHTML = `
     <div class="gw-banner-content" style="flex-wrap:wrap;gap:8px">
       <span class="gw-banner-icon">${statusIcon('warn', 16)}</span>
-      <span>${t('dashboard.guardianFailed')}</span>
-      <button class="btn btn-sm btn-primary" id="btn-gw-recover-fix" style="margin-left:auto">${t('dashboard.autoFix')}</button>
-      <button class="btn btn-sm btn-secondary" id="btn-gw-recover-restart">${t('dashboard.retryStart')}</button>
-      <a class="btn btn-sm btn-ghost" href="#/logs">${t('sidebar.logs')}</a>
+      <span>Gateway 反复启动失败，可能配置有误</span>
+      <button class="btn btn-sm btn-primary" id="btn-gw-recover-restart">重试启动</button>
+      <button class="btn btn-sm btn-secondary" id="btn-gw-recover-backup">从备份恢复</button>
+      <a class="btn btn-sm btn-ghost" href="#/services" style="color:inherit;text-decoration:underline">服务管理</a>
+      <a class="btn btn-sm btn-ghost" href="#/logs" style="color:inherit;text-decoration:underline">查看日志</a>
     </div>
   `
-  banner.querySelector('#btn-gw-recover-fix')?.addEventListener('click', async (e) => {
-    const btn = e.target
-    btn.disabled = true
-    btn.textContent = t('dashboard.fixing')
-    // 弹出修复弹窗
-    const overlay = document.createElement('div')
-    overlay.className = 'modal-overlay'
-    overlay.innerHTML = `
-      <div class="modal" style="max-width:560px">
-        <div class="modal-title">${t('dashboard.fixModalTitle')}</div>
-        <div style="font-size:var(--font-size-sm);color:var(--text-secondary);margin-bottom:12px">
-          ${t('dashboard.fixModalDesc')}
-        </div>
-        <div id="fix-log" style="font-family:var(--font-mono);font-size:11px;background:var(--bg-tertiary);padding:12px;border-radius:var(--radius-md);max-height:300px;overflow-y:auto;white-space:pre-wrap;line-height:1.6;color:var(--text-secondary)">${t('dashboard.fixRunning')}\n</div>
-        <div id="fix-status" style="margin-top:12px;font-size:var(--font-size-sm);font-weight:600"></div>
-        <div class="modal-actions" style="margin-top:16px">
-          <button class="btn btn-secondary btn-sm" id="fix-close" style="display:none">${t('common.close')}</button>
-        </div>
-      </div>
-    `
-    document.body.appendChild(overlay)
-    const logEl = overlay.querySelector('#fix-log')
-    const statusEl = overlay.querySelector('#fix-status')
-    const closeBtn = overlay.querySelector('#fix-close')
-    closeBtn.onclick = () => overlay.remove()
-
-    try {
-      const result = await api.doctorFix()
-      const output = result?.stdout || result?.output || JSON.stringify(result, null, 2)
-      logEl.textContent = output || t('dashboard.fixDoneNoOutput')
-      logEl.scrollTop = logEl.scrollHeight
-      if (result?.errors) {
-        statusEl.innerHTML = `<span style="color:var(--warning)">${t('dashboard.fixDoneWarning')}${escapeHtml(String(result.errors).slice(0, 200))}</span>`
-      } else {
-        statusEl.innerHTML = `<span style="color:var(--success)">${t('dashboard.fixDoneRestarting')}</span>`
-        resetAutoRestart()
-        try {
-          await api.startService('ai.deerpanel.gateway')
-          statusEl.innerHTML = `<span style="color:var(--success)">${t('dashboard.fixDoneRestarted')}</span>`
-        } catch {
-          statusEl.innerHTML = `<span style="color:var(--warning)">${t('dashboard.fixDoneRestartFail')}</span>`
-        }
-      }
-    } catch (err) {
-      logEl.textContent += '\n�?' + (err.message || String(err))
-      statusEl.innerHTML = `<span style="color:var(--error)">${t('dashboard.fixFailed')}${escapeHtml(String(err.message || err).slice(0, 200))}</span>`
-    }
-    closeBtn.style.display = ''
-    btn.textContent = t('dashboard.autoFix')
-    btn.disabled = false
-  })
   banner.querySelector('#btn-gw-recover-restart')?.addEventListener('click', async (e) => {
     const btn = e.target
     btn.disabled = true
-    btn.textContent = t('dashboard.fixing')
+    btn.textContent = '启动中...'
     resetAutoRestart()
     try {
-      await api.startService('ai.deerpanel.gateway')
-      btn.textContent = t('dashboard.startSent')
+      await api.startService('ai.openclaw.gateway')
+      btn.textContent = '已发送启动命令'
     } catch (err) {
-      btn.textContent = t('dashboard.retryStart')
+      btn.textContent = '启动失败'
       btn.disabled = false
     }
   })
+  banner.querySelector('#btn-gw-recover-backup')?.addEventListener('click', () => {
+    navigate('/services')
+  })
 }
 
-// === 全局版本更新检�?===
+// === 全局版本更新检测 ===
 const UPDATE_CHECK_INTERVAL = 30 * 60 * 1000 // 30 分钟
 let _updateCheckTimer = null
 
@@ -667,12 +618,8 @@ async function checkGlobalUpdate() {
     if (!ver) return
 
     // 用户已忽略过该版本，不再打扰
-    const dismissed = localStorage.getItem('deerpanel_update_dismissed')
+    const dismissed = sessionStorage.getItem('clawpanel_update_dismissed')
     if (dismissed === ver) return
-
-    // 热更新已下载并重载过，不再重复提示同一版本
-    const hotApplied = localStorage.getItem('deerpanel_hot_update_applied')
-    if (hotApplied === ver) return
 
     const changelog = info.manifest?.changelog || ''
     const isWeb = !window.__TAURI_INTERNALS__
@@ -682,41 +629,43 @@ async function checkGlobalUpdate() {
       <div class="update-banner-content">
         <div class="update-banner-text">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-          <span class="update-banner-ver">DeerPanel v${ver} 可用</span>
+          <span class="update-banner-ver">ClawPanel v${ver} 可用</span>
           ${changelog ? `<span class="update-banner-changelog">· ${changelog}</span>` : ''}
         </div>
         ${isWeb
           ? `<button class="btn btn-sm" id="btn-update-show-cmd">更新方法</button>
-             <a class="btn btn-sm" href="https://github.com/qingchencloud/deerpanel/releases" target="_blank" rel="noopener">Release Notes</a>`
-          : `<button class="btn btn-sm" id="btn-update-hot">热更�?/button>
-             <a class="btn btn-sm" href="https://github.com/qingchencloud/deerpanel/releases" target="_blank" rel="noopener">完整安装�?/a>`
+             <a class="btn btn-sm" href="https://github.com/qingchencloud/clawpanel/releases" target="_blank" rel="noopener">Release Notes</a>`
+          : `<button class="btn btn-sm" id="btn-update-hot">热更新</button>
+             <a class="btn btn-sm" href="https://github.com/qingchencloud/clawpanel/releases" target="_blank" rel="noopener">完整安装包</a>`
         }
-        <button class="update-banner-close" id="btn-update-dismiss" title="忽略此版�?>�?/button>
+        <button class="update-banner-close" id="btn-update-dismiss" title="忽略此版本">✕</button>
       </div>
     `
 
     // 关闭按钮：记住忽略的版本
     banner.querySelector('#btn-update-dismiss')?.addEventListener('click', () => {
-      localStorage.setItem('deerpanel_update_dismissed', ver)
+      sessionStorage.setItem('clawpanel_update_dismissed', ver)
       banner.classList.add('update-banner-hidden')
     })
 
-    // Web 模式：显示更新命令弹�?    banner.querySelector('#btn-update-show-cmd')?.addEventListener('click', () => {
+    // Web 模式：显示更新命令弹窗
+    banner.querySelector('#btn-update-show-cmd')?.addEventListener('click', () => {
       const overlay = document.createElement('div')
       overlay.className = 'modal-overlay'
       overlay.innerHTML = `
         <div class="modal" style="max-width:480px">
-          <div class="modal-title">更新�?v${ver}</div>
+          <div class="modal-title">更新到 v${ver}</div>
           <div style="font-size:var(--font-size-sm);line-height:1.8">
             <p style="margin-bottom:12px">在服务器上执行以下命令：</p>
-            <pre style="background:var(--bg-tertiary);padding:12px 16px;border-radius:var(--radius-md);font-family:var(--font-mono);font-size:var(--font-size-xs);overflow-x:auto;white-space:pre-wrap;user-select:all">cd /opt/deerpanel
+            <pre style="background:var(--bg-tertiary);padding:12px 16px;border-radius:var(--radius-md);font-family:var(--font-mono);font-size:var(--font-size-xs);overflow-x:auto;white-space:pre-wrap;user-select:all">cd /opt/clawpanel
 git pull origin main
 npm install
 npm run build
-sudo systemctl restart deerpanel</pre>
+sudo systemctl restart clawpanel</pre>
             <p style="margin-top:12px;color:var(--text-tertiary);font-size:var(--font-size-xs)">
-              如果 git pull 失败，可先执�?<code style="background:var(--bg-tertiary);padding:2px 6px;border-radius:4px">git checkout -- .</code> 丢弃本地修改�?br>
-              路径请替换为实际�?DeerPanel 安装目录�?            </p>
+              如果 git pull 失败，可先执行 <code style="background:var(--bg-tertiary);padding:2px 6px;border-radius:4px">git checkout -- .</code> 丢弃本地修改。<br>
+              路径请替换为实际的 ClawPanel 安装目录。
+            </p>
           </div>
           <div class="modal-actions">
             <button class="btn btn-secondary btn-sm" data-action="close">关闭</button>
@@ -729,14 +678,14 @@ sudo systemctl restart deerpanel</pre>
       overlay.addEventListener('keydown', (e) => { if (e.key === 'Escape') overlay.remove() })
     })
 
-    // Tauri 热更新按�?    banner.querySelector('#btn-update-hot')?.addEventListener('click', async () => {
+    // Tauri 热更新按钮
+    banner.querySelector('#btn-update-hot')?.addEventListener('click', async () => {
       const btn = banner.querySelector('#btn-update-hot')
       if (!btn) return
       btn.disabled = true
-      btn.textContent = '下载�?..'
+      btn.textContent = '下载中...'
       try {
         await api.downloadFrontendUpdate(info.manifest?.url || '', info.manifest?.hash || '')
-        localStorage.setItem('deerpanel_hot_update_applied', ver)
         btn.textContent = '重载应用'
         btn.disabled = false
         btn.onclick = () => window.location.reload()
@@ -748,17 +697,21 @@ sudo systemctl restart deerpanel</pre>
       }
     })
   } catch {
-    // 检查失败静默忽�?  }
+    // 检查失败静默忽略
+  }
 }
 
 function startUpdateChecker() {
-  // 启动�?5 秒检查一�?  setTimeout(checkGlobalUpdate, 5000)
-  // 之后�?30 分钟检查一�?  _updateCheckTimer = setInterval(checkGlobalUpdate, UPDATE_CHECK_INTERVAL)
+  // 启动后 5 秒检查一次
+  setTimeout(checkGlobalUpdate, 5000)
+  // 之后每 30 分钟检查一次
+  _updateCheckTimer = setInterval(checkGlobalUpdate, UPDATE_CHECK_INTERVAL)
 }
 
-// 启动：先检查后�?�?认证 �?加载应用
+// 启动：先检查后端 → 认证 → 加载应用
 ;(async () => {
-  // Web 模式：先检测后端是否在线（不在线则显示提示，不加载应用�?  if (!isTauri) {
+  // Web 模式：先检测后端是否在线（不在线则显示提示，不加载应用）
+  if (!isTauri) {
     const backendOk = await checkBackendHealth()
     if (!backendOk) {
       showBackendDownOverlay()
@@ -780,7 +733,7 @@ function startUpdateChecker() {
         <div style="font-size:18px;font-weight:600;margin-bottom:8px;color:#18181b">页面加载失败</div>
         <div style="font-size:13px;color:#71717a;max-width:400px;line-height:1.6;margin-bottom:16px">${String(bootErr?.message || bootErr).replace(/</g,'&lt;')}</div>
         <button onclick="location.reload()" style="padding:8px 20px;border-radius:8px;border:none;background:#6366f1;color:#fff;font-size:13px;cursor:pointer">刷新重试</button>
-        <div style="margin-top:24px;font-size:11px;color:#a1a1aa">如果问题持续出现，请尝试重新安装 DeerPanel<br>或在 <a href="https://github.com/qingchencloud/deerpanel/issues" target="_blank" style="color:#6366f1">GitHub Issues</a> 反馈</div>
+        <div style="margin-top:24px;font-size:11px;color:#a1a1aa">如果问题持续出现，请尝试重新安装 ClawPanel<br>或在 <a href="https://github.com/qingchencloud/clawpanel/issues" target="_blank" style="color:#6366f1">GitHub Issues</a> 反馈</div>
       </div>`
   }
   startUpdateChecker()
@@ -790,21 +743,22 @@ function startUpdateChecker() {
     const { initAIFab, registerPageContext, openAIDrawerWithError } = await import('./components/ai-drawer.js')
     initAIFab()
 
-    // 注册各页面上下文提供�?    registerPageContext('/chat-debug', async () => {
+    // 注册各页面上下文提供器
+    registerPageContext('/chat-debug', async () => {
       const { isOpenclawReady, isGatewayRunning } = await import('./lib/app-state.js')
       const { wsClient } = await import('./lib/ws-client.js')
       const { api } = await import('./lib/tauri-api.js')
       const lines = ['## 系统诊断快照']
-      lines.push(`- DeerPanel: ${isOpenclawReady() ? '就绪' : '未就�?}`)
-      lines.push(`- Gateway: ${isGatewayRunning() ? '运行�? : '未运�?}`)
-      lines.push(`- WebSocket: ${wsClient.connected ? '已连�? : '未连�?}`)
+      lines.push(`- OpenClaw: ${isOpenclawReady() ? '就绪' : '未就绪'}`)
+      lines.push(`- Gateway: ${isGatewayRunning() ? '运行中' : '未运行'}`)
+      lines.push(`- WebSocket: ${wsClient.connected ? '已连接' : '未连接'}`)
       try {
         const node = await api.checkNode()
         lines.push(`- Node.js: ${node?.version || '未知'}`)
       } catch {}
       try {
         const ver = await api.getVersionInfo()
-        lines.push(`- 版本: 当前 ${ver?.current || '?'} / 推荐 ${ver?.recommended || '?'} / 最�?${ver?.latest || '?'}${ver?.ahead_of_recommended ? ' / 当前版本高于推荐�? : ''}`)
+        lines.push(`- 版本: 当前 ${ver?.current || '?'} / 推荐 ${ver?.recommended || '?'} / 最新 ${ver?.latest || '?'}${ver?.ahead_of_recommended ? ' / 当前版本高于推荐版' : ''}`)
       } catch {}
       return { detail: lines.join('\n') }
     })
@@ -812,13 +766,13 @@ function startUpdateChecker() {
     registerPageContext('/services', async () => {
       const { isGatewayRunning } = await import('./lib/app-state.js')
       const { api } = await import('./lib/tauri-api.js')
-      const lines = ['## 服务状�?]
-      lines.push(`- Gateway: ${isGatewayRunning() ? '运行�? : '未运�?}`)
+      const lines = ['## 服务状态']
+      lines.push(`- Gateway: ${isGatewayRunning() ? '运行中' : '未运行'}`)
       try {
         const svc = await api.getServicesStatus()
         if (svc?.[0]) {
-          lines.push(`- CLI: ${svc[0].cli_installed ? '已安�? : '未安�?}`)
-          lines.push(`- PID: ${svc[0].pid || '�?}`)
+          lines.push(`- CLI: ${svc[0].cli_installed ? '已安装' : '未安装'}`)
+          lines.push(`- PID: ${svc[0].pid || '无'}`)
         }
       } catch {}
       return { detail: lines.join('\n') }
@@ -832,16 +786,13 @@ function startUpdateChecker() {
         const lines = ['## Gateway 配置']
         lines.push(`- 端口: ${gw.port || 18789}`)
         lines.push(`- 模式: ${gw.mode || 'local'}`)
-        lines.push(`- Token: ${gw.auth?.token ? '已设�? : '未设�?}`)
+        lines.push(`- Token: ${gw.auth?.token ? '已设置' : '未设置'}`)
         if (gw.controlUi?.allowedOrigins) lines.push(`- Origins: ${JSON.stringify(gw.controlUi.allowedOrigins)}`)
         return { detail: lines.join('\n') }
       } catch { return null }
     })
 
-    registerPageContext('/setup', () => {
-      return { detail: '用户正在进行 DeerPanel 初始安装，请帮助检�?Node.js 环境和网络状�? }
-    })
-
-    // 挂到全局，供安装/升级失败时调�?    window.__openAIDrawerWithError = openAIDrawerWithError
+    // 挂到全局，供安装/升级失败时调用
+    window.__openAIDrawerWithError = openAIDrawerWithError
   }, 500)
 })()

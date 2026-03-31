@@ -4,17 +4,19 @@ use std::fs;
 use std::io::Read;
 use std::path::PathBuf;
 
-/// 前端热更新目�?(~/.deerpanel/deerpanel/web-update/)
+/// 前端热更新目录 (~/.openclaw/clawpanel/web-update/)
 pub fn update_dir() -> PathBuf {
-    super::deerpanel_dir().join("deerpanel").join("web-update")
+    super::openclaw_dir().join("clawpanel").join("web-update")
 }
 
-/// 更新清单 URL（GitHub Pages 托管�?const LATEST_JSON_URL: &str = "https://claw.qt.cool/update/latest.json";
+/// 更新清单 URL（GitHub Pages 托管）
+const LATEST_JSON_URL: &str = "https://claw.qt.cool/update/latest.json";
 
-/// 检查前端是否有新版本可�?#[tauri::command]
+/// 检查前端是否有新版本可用
+#[tauri::command]
 pub async fn check_frontend_update() -> Result<Value, String> {
-    let client = super::build_http_client(std::time::Duration::from_secs(10), Some("DeerPanel"))
-        .map_err(|e| format!("HTTP 客户端错�? {e}"))?;
+    let client = super::build_http_client(std::time::Duration::from_secs(10), Some("ClawPanel"))
+        .map_err(|e| format!("HTTP 客户端错误: {e}"))?;
 
     let resp = client
         .get(LATEST_JSON_URL)
@@ -23,7 +25,7 @@ pub async fn check_frontend_update() -> Result<Value, String> {
         .map_err(|e| format!("请求失败: {e}"))?;
 
     if !resp.status().is_success() {
-        return Err(format!("服务器返�?{}", resp.status()));
+        return Err(format!("服务器返回 {}", resp.status()));
     }
 
     let manifest: Value = resp.json().await.map_err(|e| format!("解析失败: {e}"))?;
@@ -36,7 +38,8 @@ pub async fn check_frontend_update() -> Result<Value, String> {
 
     let current = env!("CARGO_PKG_VERSION");
 
-    // 检查最低兼容的 app 版本（前端可能依赖较新的 Rust 后端命令�?    let min_app = manifest
+    // 检查最低兼容的 app 版本（前端可能依赖较新的 Rust 后端命令）
+    let min_app = manifest
         .get("minAppVersion")
         .and_then(|v| v.as_str())
         .unwrap_or("0.0.0");
@@ -59,8 +62,8 @@ pub async fn check_frontend_update() -> Result<Value, String> {
 /// 下载并解压前端更新包
 #[tauri::command]
 pub async fn download_frontend_update(url: String, expected_hash: String) -> Result<Value, String> {
-    let client = super::build_http_client(std::time::Duration::from_secs(120), Some("DeerPanel"))
-        .map_err(|e| format!("HTTP 客户端错�? {e}"))?;
+    let client = super::build_http_client(std::time::Duration::from_secs(120), Some("ClawPanel"))
+        .map_err(|e| format!("HTTP 客户端错误: {e}"))?;
 
     let resp = client
         .get(&url)
@@ -86,14 +89,14 @@ pub async fn download_frontend_update(url: String, expected_hash: String) -> Res
             .strip_prefix("sha256:")
             .unwrap_or(&expected_hash);
         if hash != expected {
-            return Err(format!("哈希校验失败: 期望 {}，实�?{}", expected, hash));
+            return Err(format!("哈希校验失败: 期望 {}，实际 {}", expected, hash));
         }
     }
 
     // 清理旧更新，解压新包
     let dir = update_dir();
     if dir.exists() {
-        fs::remove_dir_all(&dir).map_err(|e| format!("清理旧更新失�? {e}"))?;
+        fs::remove_dir_all(&dir).map_err(|e| format!("清理旧更新失败: {e}"))?;
     }
     fs::create_dir_all(&dir).map_err(|e| format!("创建更新目录失败: {e}"))?;
 
@@ -109,10 +112,10 @@ pub async fn download_frontend_update(url: String, expected_hash: String) -> Res
         let target = dir.join(&name);
 
         if name.ends_with('/') {
-            fs::create_dir_all(&target).map_err(|e| format!("创建子目录失�? {e}"))?;
+            fs::create_dir_all(&target).map_err(|e| format!("创建子目录失败: {e}"))?;
         } else {
             if let Some(parent) = target.parent() {
-                fs::create_dir_all(parent).map_err(|e| format!("创建父目录失�? {e}"))?;
+                fs::create_dir_all(parent).map_err(|e| format!("创建父目录失败: {e}"))?;
             }
             let mut buf = Vec::new();
             file.read_to_end(&mut buf)
@@ -138,7 +141,8 @@ pub fn rollback_frontend_update() -> Result<Value, String> {
     Ok(serde_json::json!({ "success": true }))
 }
 
-/// 获取当前热更新状�?#[tauri::command]
+/// 获取当前热更新状态
+#[tauri::command]
 pub fn get_update_status() -> Result<Value, String> {
     let dir = update_dir();
     let ready = dir.join("index.html").exists();
@@ -189,7 +193,7 @@ fn version_gt(left: &str, right: &str) -> bool {
     version_ge(left, right) && !version_ge(right, left)
 }
 
-/// 根据文件扩展名推�?MIME 类型
+/// 根据文件扩展名推断 MIME 类型
 pub fn mime_from_path(path: &str) -> &'static str {
     match path.rsplit('.').next().unwrap_or("") {
         "html" => "text/html",

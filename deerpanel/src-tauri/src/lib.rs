@@ -9,16 +9,12 @@ use commands::{
 };
 
 pub fn run() {
-    let hot_update_dir = commands::deerpanel_dir()
-        .join("deerpanel")
+    let hot_update_dir = commands::openclaw_dir()
+        .join("clawpanel")
         .join("web-update");
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_autostart::init(
-            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            None,
-        ))
         .register_uri_scheme_protocol("tauri", move |ctx, request| {
             let uri_path = request.uri().path();
             let path = if uri_path == "/" || uri_path.is_empty() {
@@ -41,10 +37,11 @@ pub fn run() {
                 }
             }
 
-            // 2. 回退到内嵌资�?            if let Some(asset) = ctx.app_handle().asset_resolver().get(path.to_string()) {
+            // 2. 回退到内嵌资源
+            if let Some(asset) = ctx.app_handle().asset_resolver().get(path.to_string()) {
                 let builder = tauri::http::Response::builder()
                     .header(tauri::http::header::CONTENT_TYPE, &asset.mime_type);
-                // Tauri 内嵌资源可能�?CSP header
+                // Tauri 内嵌资源可能带 CSP header
                 let builder = if let Some(csp) = asset.csp_header {
                     builder.header("Content-Security-Policy", csp)
                 } else {
@@ -65,14 +62,13 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             // 配置
-            config::read_deerpanel_config,
-            config::write_deerpanel_config,
-            config::validate_deerpanel_config,
+            config::read_openclaw_config,
+            config::write_openclaw_config,
             config::read_mcp_config,
             config::write_mcp_config,
             config::get_version_info,
             config::check_installation,
-            config::init_deerpanel_config,
+            config::init_openclaw_config,
             config::check_node,
             config::check_node_at_path,
             config::scan_node_paths,
@@ -86,14 +82,13 @@ pub fn run() {
             config::restart_gateway,
             config::test_model,
             config::list_remote_models,
-            config::list_deerpanel_versions,
-            config::upgrade_deerpanel,
-            config::uninstall_deerpanel,
+            config::list_openclaw_versions,
+            config::upgrade_openclaw,
+            config::uninstall_openclaw,
             config::install_gateway,
             config::uninstall_gateway,
             config::patch_model_vision,
             config::check_panel_update,
-            config::get_deerpanel_dir,
             config::read_panel_config,
             config::write_panel_config,
             config::test_proxy,
@@ -104,9 +99,6 @@ pub fn run() {
             config::configure_git_https,
             config::invalidate_path_cache,
             config::get_status_summary,
-            config::doctor_fix,
-            config::doctor_check,
-            config::relaunch_app,
             // 设备密钥 + Gateway 握手
             device::create_connect_frame,
             // 设备配对
@@ -164,21 +156,12 @@ pub fn run() {
             messaging::remove_messaging_platform,
             messaging::toggle_messaging_platform,
             messaging::verify_bot_token,
-            messaging::diagnose_channel,
-            messaging::repair_qqbot_channel_setup,
             messaging::list_configured_platforms,
             messaging::get_channel_plugin_status,
             messaging::install_channel_plugin,
             messaging::install_qqbot_plugin,
-            messaging::run_channel_action,
-            messaging::check_weixin_plugin_status,
-            // Agent 渠道绑定管理
-            messaging::get_agent_bindings,
-            messaging::list_all_bindings,
-            messaging::save_agent_binding,
-            messaging::delete_agent_binding,
-            messaging::delete_agent_all_bindings,
-            // Skills 管理（openclaw skills CLI�?            skills::skills_list,
+            // Skills 管理（openclaw skills CLI）
+            skills::skills_list,
             skills::skills_info,
             skills::skills_check,
             skills::skills_install_dep,
@@ -189,20 +172,14 @@ pub fn run() {
             skills::skills_clawhub_search,
             skills::skills_clawhub_install,
             skills::skills_uninstall,
-            skills::skills_validate,
-            // 前端热更�?            update::check_frontend_update,
+            // 前端热更新
+            update::check_frontend_update,
             update::download_frontend_update,
             update::rollback_frontend_update,
             update::get_update_status,
         ])
-        .on_window_event(|window, event| {
-            // 关闭窗口时最小化到托盘，不退出应�?            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                api.prevent_close();
-                let _ = window.hide();
-            }
-        })
         .build(tauri::generate_context!())
-        .expect("启动 DeerPanel 失败")
+        .expect("启动 ClawPanel 失败")
         .run(|_app, event| {
             if let tauri::RunEvent::Exit = event {
                 #[cfg(target_os = "windows")]
@@ -211,7 +188,7 @@ pub fn run() {
                     use std::os::windows::process::CommandExt;
                     const CREATE_NO_WINDOW: u32 = 0x08000000;
                     let _ = std::process::Command::new("cmd")
-                        .args(["/c", "taskkill", "/fi", "WINDOWTITLE eq DeerPanel Gateway"])
+                        .args(["/c", "taskkill", "/fi", "WINDOWTITLE eq OpenClaw Gateway"])
                         .creation_flags(CREATE_NO_WINDOW)
                         .output();
                 }

@@ -5,7 +5,6 @@
 import { api } from '../lib/tauri-api.js'
 import { toast } from '../components/toast.js'
 import { statusIcon } from '../lib/icons.js'
-import { t } from '../lib/i18n.js'
 
 // HTML 转义，防止 XSS
 function escapeHtml(str) {
@@ -23,17 +22,17 @@ export async function render() {
 
   page.innerHTML = `
     <div class="page-header">
-      <h1 class="page-title">${t('ext.title')}</h1>
-      <p class="page-desc">${t('ext.desc')}</p>
+      <h1 class="page-title">扩展工具</h1>
+      <p class="page-desc">管理 cftunnel 内网穿透和 ClawApp 移动客户端</p>
     </div>
     <div id="cftunnel-card" class="config-section">
-      <div class="config-section-title">${t('ext.cftunnelTitle')}</div>
-      <div class="form-hint" style="margin-bottom:var(--space-md)">${t('ext.cftunnelDesc')}</div>
+      <div class="config-section-title">cftunnel 内网穿透</div>
+      <div class="form-hint" style="margin-bottom:var(--space-md)">通过 Cloudflare Tunnel 将本地服务暴露到公网，无需公网 IP 和端口映射。</div>
       <div id="cftunnel-content"><div class="stat-card loading-placeholder" style="height:64px"></div></div>
     </div>
     <div id="clawapp-card" class="config-section">
-      <div class="config-section-title">${t('ext.clawappTitle')}</div>
-      <div class="form-hint" style="margin-bottom:var(--space-md)">${t('ext.clawappDesc')}</div>
+      <div class="config-section-title">ClawApp 移动客户端</div>
+      <div class="form-hint" style="margin-bottom:var(--space-md)">H5 移动聊天客户端，通过代理服务端连接 Gateway。支持本地和外网访问。</div>
       <div id="clawapp-content"><div class="stat-card loading-placeholder" style="height:64px"></div></div>
     </div>
   `
@@ -58,17 +57,17 @@ async function loadCftunnel(page) {
     const status = await api.getCftunnelStatus()
     renderCftunnel(el, status)
   } catch (e) {
-    el.innerHTML = `<div style="color:var(--error)">${t('common.loadFailed')}: ${e}</div>`
+    el.innerHTML = `<div style="color:var(--error)">加载失败: ${e}</div>`
   }
 }
 
 function renderCftunnel(el, s) {
   if (!s.installed) {
     el.innerHTML = `
-      <div style="color:var(--text-tertiary);margin-bottom:var(--space-md)">${t('ext.cftunnelNotInstalled')}</div>
+      <div style="color:var(--text-tertiary);margin-bottom:var(--space-md)">cftunnel 未安装</div>
       <div style="display:flex;gap:var(--space-sm);align-items:center">
-        <button class="btn btn-primary btn-sm" data-action="install-cftunnel">${t('ext.installBtn')}</button>
-        <a class="btn btn-secondary btn-sm" href="https://github.com/qingchencloud/cftunnel" target="_blank" rel="noopener">${t('ext.viewDocs')}</a>
+        <button class="btn btn-primary btn-sm" data-action="install-cftunnel">一键安装</button>
+        <a class="btn btn-secondary btn-sm" href="https://github.com/qingchencloud/cftunnel" target="_blank" rel="noopener">查看文档</a>
       </div>
       <div id="install-progress-area"></div>
     `
@@ -82,25 +81,25 @@ function renderCftunnel(el, s) {
     <div class="stat-cards" style="margin-bottom:var(--space-md)">
       <div class="stat-card">
         <div class="stat-card-header">
-          <span class="stat-card-label">${t('ext.status')}</span>
+          <span class="stat-card-label">状态</span>
           <span class="status-dot ${running ? 'running' : 'stopped'}"></span>
         </div>
-        <div class="stat-card-value">${running ? t('ext.running') : t('ext.stopped')}</div>
+        <div class="stat-card-value">${running ? '运行中' : '已停止'}</div>
         <div class="stat-card-meta">${s.tunnel_name || ''}${s.pid ? ' (PID: ' + s.pid + ')' : ''}</div>
       </div>
       <div class="stat-card">
-        <div class="stat-card-header"><span class="stat-card-label">${t('ext.version')}</span></div>
-        <div class="stat-card-value" style="font-size:var(--font-size-md)">${s.version || t('ext.unknown')}</div>
-        <div class="stat-card-meta">${routes.length} ${t('ext.routes')}</div>
+        <div class="stat-card-header"><span class="stat-card-label">版本</span></div>
+        <div class="stat-card-value" style="font-size:var(--font-size-md)">${s.version || '未知'}</div>
+        <div class="stat-card-meta">${routes.length} 条路由</div>
       </div>
     </div>
     <div style="display:flex;gap:var(--space-sm);margin-bottom:var(--space-md)">
       ${running
-        ? '<button class="btn btn-danger btn-sm" data-action="cftunnel-down">' + t('ext.stopTunnel') + '</button>'
-        : '<button class="btn btn-primary btn-sm" data-action="cftunnel-up">' + t('ext.startTunnel') + '</button>'
+        ? '<button class="btn btn-danger btn-sm" data-action="cftunnel-down">停止隧道</button>'
+        : '<button class="btn btn-primary btn-sm" data-action="cftunnel-up">启动隧道</button>'
       }
-      <button class="btn btn-secondary btn-sm" data-action="cftunnel-logs">${t('ext.viewLogs')}</button>
-      <button class="btn btn-secondary btn-sm" data-action="cftunnel-refresh">${t('ext.refresh')}</button>
+      <button class="btn btn-secondary btn-sm" data-action="cftunnel-logs">查看日志</button>
+      <button class="btn btn-secondary btn-sm" data-action="cftunnel-refresh">刷新</button>
     </div>
     ${renderRoutes(routes)}
     <div id="cftunnel-logs-area"></div>
@@ -108,7 +107,7 @@ function renderCftunnel(el, s) {
 }
 
 function renderRoutes(routes) {
-  if (!routes.length) return '<div style="color:var(--text-tertiary);padding:var(--space-md) 0">' + t('ext.noRoutes') + '</div>'
+  if (!routes.length) return '<div style="color:var(--text-tertiary);padding:var(--space-md) 0">暂无路由</div>'
   return `
     <div class="tunnel-routes">
       ${routes.map(r => `
@@ -117,7 +116,7 @@ function renderRoutes(routes) {
             <span class="tunnel-route-name">${escapeHtml(r.name)}</span>
             <span class="tunnel-route-badge">
               <span class="status-dot running" style="width:6px;height:6px"></span>
-              ${t('ext.active')}
+              活跃
             </span>
           </div>
           <div class="tunnel-route-domain">
@@ -134,7 +133,7 @@ function renderRoutes(routes) {
               <line x1="6" y1="6" x2="6.01" y2="6"></line>
               <line x1="6" y1="18" x2="6.01" y2="18"></line>
             </svg>
-            <span>${t('ext.localService')}:</span>
+            <span>本地服务:</span>
             <code>${escapeHtml(r.service)}</code>
           </div>
         </div>
@@ -151,17 +150,17 @@ async function loadClawapp(page) {
     const status = await api.getClawappStatus()
     renderClawapp(el, status)
   } catch (e) {
-    el.innerHTML = `<div style="color:var(--error)">${t('common.loadFailed')}: ${e}</div>`
+    el.innerHTML = `<div style="color:var(--error)">加载失败: ${e}</div>`
   }
 }
 
 function renderClawapp(el, s) {
   if (!s.installed) {
     el.innerHTML = `
-      <div style="color:var(--text-tertiary);margin-bottom:var(--space-md)">${t('ext.clawappNotInstalled')}</div>
+      <div style="color:var(--text-tertiary);margin-bottom:var(--space-md)">ClawApp 未安装</div>
       <div style="display:flex;gap:var(--space-sm);align-items:center">
-        <button class="btn btn-primary btn-sm" data-action="install-clawapp">${t('ext.installBtn')}</button>
-        <a class="btn btn-secondary btn-sm" href="https://github.com/qingchencloud/clawapp" target="_blank" rel="noopener">${t('ext.viewDocs')}</a>
+        <button class="btn btn-primary btn-sm" data-action="install-clawapp">一键安装</button>
+        <a class="btn btn-secondary btn-sm" href="https://github.com/qingchencloud/clawapp" target="_blank" rel="noopener">查看文档</a>
       </div>
       <div id="install-clawapp-progress-area"></div>
     `
@@ -173,22 +172,22 @@ function renderClawapp(el, s) {
     <div class="stat-cards" style="margin-bottom:var(--space-md)">
       <div class="stat-card">
         <div class="stat-card-header">
-          <span class="stat-card-label">${t('ext.status')}</span>
+          <span class="stat-card-label">状态</span>
           <span class="status-dot ${running ? 'running' : 'stopped'}"></span>
         </div>
-        <div class="stat-card-value">${running ? t('ext.running') : t('ext.stopped')}</div>
-        <div class="stat-card-meta">${s.pid ? 'PID: ' + s.pid : ''}${s.port ? ' ' + t('ext.port') + ': ' + s.port : ''}</div>
+        <div class="stat-card-value">${running ? '运行中' : '已停止'}</div>
+        <div class="stat-card-meta">${s.pid ? 'PID: ' + s.pid : ''}${s.port ? ' 端口: ' + s.port : ''}</div>
       </div>
       <div class="stat-card">
-        <div class="stat-card-header"><span class="stat-card-label">${t('ext.accessUrl')}</span></div>
+        <div class="stat-card-header"><span class="stat-card-label">访问地址</span></div>
         <div class="stat-card-value" style="font-size:var(--font-size-sm)">${s.url || 'http://localhost:3210'}</div>
-        <div class="stat-card-meta">${t('ext.publicUrl')}: chat.qrj.ai</div>
+        <div class="stat-card-meta">外网: chat.qrj.ai</div>
       </div>
     </div>
     <div style="display:flex;gap:var(--space-sm)">
-      <a class="btn btn-primary btn-sm" href="${s.url || 'http://localhost:3210'}" target="_blank" rel="noopener">${t('ext.openClawapp')}</a>
-      <a class="btn btn-secondary btn-sm" href="https://chat.qrj.ai" target="_blank" rel="noopener">${t('ext.openPublicUrl')}</a>
-      <button class="btn btn-secondary btn-sm" data-action="clawapp-refresh">${t('ext.refresh')}</button>
+      <a class="btn btn-primary btn-sm" href="${s.url || 'http://localhost:3210'}" target="_blank" rel="noopener">打开 ClawApp</a>
+      <a class="btn btn-secondary btn-sm" href="https://chat.qrj.ai" target="_blank" rel="noopener">打开外网地址</a>
+      <button class="btn btn-secondary btn-sm" data-action="clawapp-refresh">刷新</button>
     </div>
   `
 }
@@ -228,16 +227,16 @@ function bindEvents(page) {
 }
 
 async function handleCftunnelAction(page, action) {
-  const label = action === 'up' ? t('ext.start') : t('ext.stop')
+  const label = action === 'up' ? '启动' : '停止'
   const btn = page.querySelector(`[data-action="cftunnel-${action === 'up' ? 'up' : 'down'}"]`)
-  if (btn) { btn.classList.add('btn-loading'); btn.disabled = true; btn.textContent = `${label}...` }
+  if (btn) { btn.classList.add('btn-loading'); btn.disabled = true; btn.textContent = `${label}中...` }
   try {
     await api.cftunnelAction(action)
-    toast(t('ext.tunnelActionDone', { action: label }), 'success')
+    toast(`隧道已${label}`, 'success')
     await loadCftunnel(page)
   } catch (e) {
-    toast(t('ext.tunnelActionFail', { action: label }) + ': ' + e, 'error')
-    if (btn) { btn.classList.remove('btn-loading'); btn.disabled = false; btn.textContent = label }
+    toast(`${label}失败: ${e}`, 'error')
+    if (btn) { btn.classList.remove('btn-loading'); btn.disabled = false; btn.textContent = `${label}隧道` }
   }
 }
 
@@ -254,14 +253,14 @@ async function handleCftunnelLogs(page) {
     area.innerHTML = `
       <div style="margin-top:var(--space-md)">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-sm)">
-          <span style="font-weight:600;font-size:var(--font-size-sm)">${t('ext.recentLogs')}</span>
-          <button class="btn btn-secondary btn-sm" data-action="cftunnel-logs">${t('ext.collapse')}</button>
+          <span style="font-weight:600;font-size:var(--font-size-sm)">最近日志</span>
+          <button class="btn btn-secondary btn-sm" data-action="cftunnel-logs">收起</button>
         </div>
-        <pre class="log-viewer">${escapeHtml(logs) || t('ext.noLogs')}</pre>
+        <pre class="log-viewer">${escapeHtml(logs) || '暂无日志'}</pre>
       </div>
     `
   } catch (e) {
-    area.innerHTML = `<div style="color:var(--error);margin-top:var(--space-sm)">${t('ext.readLogsFailed')}: ${e}</div>`
+    area.innerHTML = `<div style="color:var(--error);margin-top:var(--space-sm)">读取日志失败: ${e}</div>`
   }
 }
 
@@ -276,7 +275,7 @@ async function handleInstallCftunnel(page) {
         <div class="upgrade-progress-bar">
           <div class="upgrade-progress-fill" id="install-progress-fill" style="width:0%"></div>
         </div>
-        <div class="upgrade-progress-text" id="install-progress-text">${t('ext.preparing')}</div>
+        <div class="upgrade-progress-text" id="install-progress-text">准备安装...</div>
       </div>
       <div class="upgrade-log-box" id="install-log-box"></div>
     </div>
@@ -298,31 +297,31 @@ async function handleInstallCftunnel(page) {
         unlistenProgress = await listen('install-progress', (e) => {
           const progress = e.payload
           progressFill.style.width = progress + '%'
-          progressText.textContent = t('ext.installing') + ` ${progress}%`
+          progressText.textContent = `安装中... ${progress}%`
         })
-      } catch { /* Web mode no Tauri event */ }
+      } catch { /* Web 模式无 Tauri event */ }
     } else {
-      logBox.textContent += t('ext.webModeNoLogs') + '\n'
+      logBox.textContent += 'Web 模式：安装日志不可用，请等待完成...\n'
     }
 
     await api.installCftunnel()
 
     progressFill.classList.add('done')
-    progressText.innerHTML = `${statusIcon('ok', 14)} ${t('ext.installDone')}`
-    toast(t('ext.installSuccess', { name: 'cftunnel' }), 'success')
+    progressText.innerHTML = `${statusIcon('ok', 14)} 安装完成`
+    toast('cftunnel 安装成功', 'success')
 
     // 3 秒后刷新状态
     setTimeout(() => loadCftunnel(page), 3000)
   } catch (e) {
     progressFill.classList.add('error')
-    progressText.innerHTML = `${statusIcon('err', 14)} ${t('ext.installFailed')}`
-    logBox.textContent += '\n' + t('ext.error') + ': ' + e
-    toast(t('ext.installFailed') + ': ' + e, 'error')
+    progressText.innerHTML = `${statusIcon('err', 14)} 安装失败`
+    logBox.textContent += '\n错误: ' + e
+    toast('安装失败: ' + e, 'error')
     if (window.__openAIDrawerWithError) {
       window.__openAIDrawerWithError({
-        title: t('ext.installFailedTitle', { name: 'cftunnel' }),
+        title: '安装 cftunnel 失败',
         error: logBox.textContent,
-        scene: t('ext.installScene', { name: 'cftunnel' }),
+        scene: '安装 cftunnel 内网穿透工具',
         hint: String(e),
       })
     }
@@ -342,7 +341,7 @@ async function handleInstallClawapp(page) {
         <div class="upgrade-progress-bar">
           <div class="upgrade-progress-fill" id="install-clawapp-progress-fill" style="width:0%"></div>
         </div>
-        <div class="upgrade-progress-text" id="install-clawapp-progress-text">${t('ext.preparing')}</div>
+        <div class="upgrade-progress-text" id="install-clawapp-progress-text">准备安装...</div>
       </div>
       <div class="upgrade-log-box" id="install-clawapp-log-box"></div>
     </div>
@@ -364,30 +363,30 @@ async function handleInstallClawapp(page) {
         unlistenProgress = await listen('install-progress', (e) => {
           const progress = e.payload
           progressFill.style.width = progress + '%'
-          progressText.textContent = t('ext.installing') + ` ${progress}%`
+          progressText.textContent = `安装中... ${progress}%`
         })
-      } catch { /* Web mode no Tauri event */ }
+      } catch { /* Web 模式无 Tauri event */ }
     } else {
-      logBox.textContent += t('ext.webModeNoLogs') + '\n'
+      logBox.textContent += 'Web 模式：安装日志不可用，请等待完成...\n'
     }
 
     await api.installClawapp()
 
     progressFill.classList.add('done')
-    progressText.innerHTML = `${statusIcon('ok', 14)} ${t('ext.installDone')}`
-    toast(t('ext.installSuccess', { name: 'ClawApp' }), 'success')
+    progressText.innerHTML = `${statusIcon('ok', 14)} 安装完成`
+    toast('ClawApp 安装成功', 'success')
 
     setTimeout(() => loadClawapp(page), 3000)
   } catch (e) {
     progressFill.classList.add('error')
-    progressText.innerHTML = `${statusIcon('err', 14)} ${t('ext.installFailed')}`
-    logBox.textContent += '\n' + t('ext.error') + ': ' + e
-    toast(t('ext.installFailed') + ': ' + e, 'error')
+    progressText.innerHTML = `${statusIcon('err', 14)} 安装失败`
+    logBox.textContent += '\n错误: ' + e
+    toast('安装失败: ' + e, 'error')
     if (window.__openAIDrawerWithError) {
       window.__openAIDrawerWithError({
-        title: t('ext.installFailedTitle', { name: 'ClawApp' }),
+        title: '安装 ClawApp 失败',
         error: logBox.textContent,
-        scene: t('ext.installScene', { name: 'ClawApp' }),
+        scene: '安装 ClawApp 手机客户端',
         hint: String(e),
       })
     }

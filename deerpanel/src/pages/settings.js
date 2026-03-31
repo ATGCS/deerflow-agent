@@ -1,12 +1,9 @@
 /**
  * 面板设置页面
- * 统一管理 DeerPanel 的网络代理、npm 源、模型代理等配置
+ * 统一管理 ClawPanel 的网络代理、npm 源、模型代理等配置
  */
 import { api } from '../lib/tauri-api.js'
 import { toast } from '../components/toast.js'
-import { showConfirm } from '../components/modal.js'
-import { t, getLang, setLang, getAvailableLangs, onLangChange } from '../lib/i18n.js'
-import { renderSidebar } from '../components/sidebar.js'
 
 const isTauri = !!window.__TAURI_INTERNALS__
 
@@ -16,9 +13,9 @@ function escapeHtml(str) {
 }
 
 const REGISTRIES = [
-  { label: () => t('settings.registryTaobao'), value: 'https://registry.npmmirror.com' },
-  { label: () => t('settings.registryNpm'), value: 'https://registry.npmjs.org' },
-  { label: () => t('settings.registryHuawei'), value: 'https://repo.huaweicloud.com/repository/npm/' },
+  { label: '淘宝镜像 (推荐)', value: 'https://registry.npmmirror.com' },
+  { label: 'npm 官方源', value: 'https://registry.npmjs.org' },
+  { label: '华为云镜像', value: 'https://repo.huaweicloud.com/repository/npm/' },
 ]
 
 export async function render() {
@@ -27,45 +24,24 @@ export async function render() {
 
   page.innerHTML = `
     <div class="page-header">
-      <h1 class="page-title">${t('settings.title')}</h1>
-      <p class="page-desc">${t('settings.desc')}</p>
+      <h1 class="page-title">面板设置</h1>
+      <p class="page-desc">管理 ClawPanel 的网络、代理和下载源配置</p>
     </div>
 
     <div class="config-section" id="proxy-section">
-      <div class="config-section-title">${t('settings.networkProxy')}</div>
+      <div class="config-section-title">网络代理</div>
       <div id="proxy-bar"><div class="stat-card loading-placeholder" style="height:48px"></div></div>
     </div>
 
     <div class="config-section" id="model-proxy-section">
-      <div class="config-section-title">${t('settings.modelProxy')}</div>
+      <div class="config-section-title">模型请求代理</div>
       <div id="model-proxy-bar"><div class="stat-card loading-placeholder" style="height:48px"></div></div>
     </div>
 
     <div class="config-section" id="registry-section">
-      <div class="config-section-title">${t('settings.npmRegistry')}</div>
+      <div class="config-section-title">npm 源设置</div>
       <div id="registry-bar"><div class="stat-card loading-placeholder" style="height:48px"></div></div>
     </div>
-
-    <div class="config-section" id="deerpanel-dir-section">
-      <div class="config-section-title">${t('settings.deerpanelDir')}</div>
-      <div id="deerpanel-dir-bar"><div class="stat-card loading-placeholder" style="height:48px"></div></div>
-    </div>
-
-    <div class="config-section" id="cli-binding-section">
-      <div class="config-section-title">${t('settings.deerpanelCli')}</div>
-      <div id="cli-binding-bar"><div class="stat-card loading-placeholder" style="height:48px"></div></div>
-    </div>
-
-    <div class="config-section" id="language-section">
-      <div class="config-section-title">${t('settings.language')}</div>
-      <div id="language-bar"></div>
-    </div>
-
-    ${window.__TAURI_INTERNALS__ ? `<div class="config-section" id="autostart-section">
-      <div class="config-section-title">${t('settings.autostart') || '开机自�?}</div>
-      <div id="autostart-bar"><div class="stat-card loading-placeholder" style="height:48px"></div></div>
-    </div>` : ''}
-
   `
 
   bindEvents(page)
@@ -74,11 +50,9 @@ export async function render() {
 }
 
 async function loadAll(page) {
-  const tasks = [loadProxyConfig(page), loadModelProxyConfig(page), loadOpenclawDir(page), loadCliBinding(page)]
+  const tasks = [loadProxyConfig(page), loadModelProxyConfig(page)]
   tasks.push(loadRegistry(page))
-  if (window.__TAURI_INTERNALS__) tasks.push(loadAutostart(page))
   await Promise.all(tasks)
-  loadLanguageSwitcher(page)
 }
 
 // ===== 网络代理 =====
@@ -92,17 +66,17 @@ async function loadProxyConfig(page) {
     bar.innerHTML = `
       <div style="display:flex;align-items:center;gap:var(--space-sm);flex-wrap:wrap">
         <input class="form-input" data-name="proxy-url" placeholder="http://127.0.0.1:7897" value="${escapeHtml(proxyUrl)}" style="max-width:360px">
-        <button class="btn btn-primary btn-sm" data-action="save-proxy">${t('common.save')}</button>
-        <button class="btn btn-secondary btn-sm" data-action="test-proxy" ${proxyUrl ? '' : 'disabled'}>${t('settings.testProxy')}</button>
-        <button class="btn btn-secondary btn-sm" data-action="clear-proxy" ${proxyUrl ? '' : 'disabled'}>${t('settings.clearProxy')}</button>
+        <button class="btn btn-primary btn-sm" data-action="save-proxy">保存</button>
+        <button class="btn btn-secondary btn-sm" data-action="test-proxy" ${proxyUrl ? '' : 'disabled'}>测试连通</button>
+        <button class="btn btn-secondary btn-sm" data-action="clear-proxy" ${proxyUrl ? '' : 'disabled'}>关闭代理</button>
       </div>
       <div id="proxy-test-result" style="margin-top:var(--space-xs);font-size:var(--font-size-xs);min-height:20px"></div>
       <div class="form-hint" style="margin-top:var(--space-xs)">
-        ${t('settings.proxyHint')}
+        设置后，npm 安装/升级、版本检测、GitHub/Gitee 更新检查、ClawHub Skills 等下载类操作会走此代理。自动绕过 localhost 和内网地址。保存后新请求立即生效；如 Gateway 正在运行，建议重启一次服务。
       </div>
     `
   } catch (e) {
-    bar.innerHTML = `<div style="color:var(--error)">${t('common.loadFailed')}: ${escapeHtml(String(e))}</div>`
+    bar.innerHTML = `<div style="color:var(--error)">加载失败: ${escapeHtml(String(e))}</div>`
   }
 }
 
@@ -121,23 +95,23 @@ async function loadModelProxyConfig(page) {
       <div style="display:flex;align-items:center;gap:var(--space-sm);flex-wrap:wrap">
         <label style="display:flex;align-items:center;gap:6px;font-size:var(--font-size-sm);cursor:pointer">
           <input type="checkbox" data-name="model-proxy-toggle" ${modelProxy ? 'checked' : ''} ${hasProxy ? '' : 'disabled'}>
-          ${t('settings.modelProxyToggle')}
+          模型测试和模型列表请求也走代理
         </label>
-        <button class="btn btn-primary btn-sm" data-action="save-model-proxy">${t('common.save')}</button>
+        <button class="btn btn-primary btn-sm" data-action="save-model-proxy">保存</button>
       </div>
       <div class="form-hint" style="margin-top:var(--space-xs)">
         ${hasProxy
-          ? t('settings.modelProxyHint')
-          : t('settings.modelProxyNoProxy')
+          ? '默认关闭。部分用户的模型 API 地址本身就是国内中转或内网地址，走代理反而会连接失败。只有当你的模型服务商需要翻墙访问时才建议开启。'
+          : '请先在上方设置网络代理地址后，才能启用此选项。'
         }
       </div>
     `
   } catch (e) {
-    bar.innerHTML = `<div style="color:var(--error)">${t('common.loadFailed')}: ${escapeHtml(String(e))}</div>`
+    bar.innerHTML = `<div style="color:var(--error)">加载失败: ${escapeHtml(String(e))}</div>`
   }
 }
 
-// ===== npm 源设�?=====
+// ===== npm 源设置 =====
 
 async function loadRegistry(page) {
   const bar = page.querySelector('#registry-bar')
@@ -147,13 +121,13 @@ async function loadRegistry(page) {
     bar.innerHTML = `
       <div style="display:flex;align-items:center;gap:var(--space-sm);flex-wrap:wrap">
         <select class="form-input" data-name="registry" style="max-width:320px">
-          ${REGISTRIES.map(r => `<option value="${r.value}" ${r.value === current ? 'selected' : ''}>${typeof r.label === 'function' ? r.label() : r.label}</option>`).join('')}
-          <option value="custom" ${!isPreset ? 'selected' : ''}>${t('settings.registryCustom')}</option>
+          ${REGISTRIES.map(r => `<option value="${r.value}" ${r.value === current ? 'selected' : ''}>${r.label}</option>`).join('')}
+          <option value="custom" ${!isPreset ? 'selected' : ''}>自定义</option>
         </select>
         <input class="form-input" data-name="custom-registry" placeholder="https://..." value="${isPreset ? '' : escapeHtml(current)}" style="max-width:320px;${isPreset ? 'display:none' : ''}">
-        <button class="btn btn-primary btn-sm" data-action="save-registry">${t('common.save')}</button>
+        <button class="btn btn-primary btn-sm" data-action="save-registry">保存</button>
       </div>
-      <div class="form-hint" style="margin-top:var(--space-xs)">${t('settings.registryHint')}</div>
+      <div class="form-hint" style="margin-top:var(--space-xs)">升级和版本检测使用此源下载 npm 包，国内用户推荐淘宝镜像</div>
     `
     const select = bar.querySelector('[data-name="registry"]')
     const customInput = bar.querySelector('[data-name="custom-registry"]')
@@ -161,73 +135,7 @@ async function loadRegistry(page) {
       customInput.style.display = select.value === 'custom' ? '' : 'none'
     }
   } catch (e) {
-    bar.innerHTML = `<div style="color:var(--error)">${t('common.loadFailed')}: ${escapeHtml(String(e))}</div>`
-  }
-}
-
-// ===== DeerPanel 安装路径 =====
-
-async function loadOpenclawDir(page) {
-  const bar = page.querySelector('#deerpanel-dir-bar')
-  if (!bar) return
-  try {
-    const info = isTauri ? await api.getOpenclawDir() : { path: '~/.deerpanel', isCustom: false, configExists: true }
-    const cfg = await api.readPanelConfig()
-    const customValue = cfg?.deerpanelDir || ''
-    const statusText = info.configExists
-      ? `<span style="color:var(--success)">${t('settings.configExists')}</span>`
-      : `<span style="color:var(--warning)">${t('settings.configMissing')}</span>`
-    bar.innerHTML = `
-      <div style="margin-bottom:var(--space-xs)">
-        <span class="form-hint">${t('settings.currentPath')}:</span>
-        <strong style="font-size:var(--font-size-sm)">${escapeHtml(info.path)}</strong>
-        <span style="margin-left:var(--space-xs);font-size:var(--font-size-xs)">${statusText}</span>
-        ${info.isCustom ? `<span class="clawhub-badge" style="margin-left:var(--space-xs);background:rgba(99,102,241,0.14);color:#6366f1;font-size:var(--font-size-xs)">${t('settings.customBadge')}</span>` : ''}
-      </div>
-      <div style="display:flex;align-items:center;gap:var(--space-sm);flex-wrap:wrap">
-        <input class="form-input" data-name="deerpanel-dir" placeholder="${t('settings.dirPlaceholder')}" value="${escapeHtml(customValue)}" style="max-width:420px">
-        <button class="btn btn-primary btn-sm" data-action="save-deerpanel-dir">${t('common.save')}</button>
-        ${info.isCustom ? `<button class="btn btn-secondary btn-sm" data-action="reset-deerpanel-dir">${t('settings.resetDefault')}</button>` : ''}
-      </div>
-      <div class="form-hint" style="margin-top:var(--space-xs)">
-        ${t('settings.dirHint')}
-      </div>
-    `
-  } catch (e) {
-    bar.innerHTML = `<div style="color:var(--error)">${t('common.loadFailed')}: ${escapeHtml(String(e))}</div>`
-  }
-}
-
-async function handleSaveOpenclawDir(page) {
-  const input = page.querySelector('[data-name="deerpanel-dir"]')
-  const value = (input?.value || '').trim()
-  const cfg = await api.readPanelConfig()
-  if (value) {
-    cfg.deerpanelDir = value
-  } else {
-    delete cfg.deerpanelDir
-  }
-  await api.writePanelConfig(cfg)
-  await loadOpenclawDir(page)
-  await promptRestart(value ? t('settings.customPathSaved') : t('settings.defaultRestored'))
-}
-
-async function handleResetOpenclawDir(page) {
-  const cfg = await api.readPanelConfig()
-  delete cfg.deerpanelDir
-  await api.writePanelConfig(cfg)
-  await loadOpenclawDir(page)
-  await promptRestart(t('settings.defaultRestored'))
-}
-
-async function promptRestart(msg) {
-  if (!isTauri) { toast(msg, 'success'); return }
-  const ok = await showConfirm(`${msg}\n\n${t('settings.restartConfirm')}`)
-  if (ok) {
-    toast(t('settings.restarting'), 'info')
-    try { await api.relaunchApp() } catch { toast(t('settings.restartFailed'), 'warning') }
-  } else {
-    toast(`${msg}, ${t('settings.effectNextLaunch')}`, 'success')
+    bar.innerHTML = `<div style="color:var(--error)">加载失败: ${escapeHtml(String(e))}</div>`
   }
 }
 
@@ -256,18 +164,6 @@ function bindEvents(page) {
         case 'save-registry':
           await handleSaveRegistry(page)
           break
-        case 'save-deerpanel-dir':
-          await handleSaveOpenclawDir(page)
-          break
-        case 'reset-deerpanel-dir':
-          await handleResetOpenclawDir(page)
-          break
-        case 'bind-cli':
-          await handleBindCli(page, btn.dataset.path)
-          break
-        case 'unbind-cli':
-          await handleUnbindCli(page)
-          break
       }
     } catch (e) {
       toast(e.toString(), 'error')
@@ -275,30 +171,29 @@ function bindEvents(page) {
       btn.disabled = false
     }
   })
-
 }
 
 function normalizeProxyUrl(value) {
   const url = String(value || '').trim()
   if (!url) return ''
   if (!/^https?:\/\//i.test(url)) {
-    throw new Error(t('settings.proxyUrlInvalid'))
+    throw new Error('代理地址必须以 http:// 或 https:// 开头')
   }
   return url
 }
 
 async function handleTestProxy(page) {
   const resultEl = page.querySelector('#proxy-test-result')
-  if (resultEl) resultEl.innerHTML = `<span style="color:var(--text-tertiary)">${t('settings.testingProxy')}</span>`
+  if (resultEl) resultEl.innerHTML = '<span style="color:var(--text-tertiary)">正在测试代理连通性...</span>'
   try {
     const r = await api.testProxy()
     if (resultEl) {
       resultEl.innerHTML = r.ok
-        ? `<span style="color:var(--success)">�?${t('settings.proxyOk', { status: r.status, ms: r.elapsed_ms, target: escapeHtml(r.target) })}</span>`
-        : `<span style="color:var(--warning)">�?${t('settings.proxyWarn', { status: r.status, ms: r.elapsed_ms })}</span>`
+        ? `<span style="color:var(--success)">✓ 代理连通（HTTP ${r.status}，耗时 ${r.elapsed_ms}ms）→ ${escapeHtml(r.target)}</span>`
+        : `<span style="color:var(--warning)">⚠ 代理可达但返回异常（HTTP ${r.status}，${r.elapsed_ms}ms）</span>`
     }
   } catch (e) {
-    if (resultEl) resultEl.innerHTML = `<span style="color:var(--error)">�?${escapeHtml(String(e))}</span>`
+    if (resultEl) resultEl.innerHTML = `<span style="color:var(--error)">✗ ${escapeHtml(String(e))}</span>`
   }
 }
 
@@ -306,7 +201,7 @@ async function handleSaveProxy(page) {
   const input = page.querySelector('[data-name="proxy-url"]')
   const proxyUrl = normalizeProxyUrl(input?.value || '')
   if (!proxyUrl) {
-    toast(t('settings.proxyUrlEmpty'), 'error')
+    toast('请输入代理地址，或点击"关闭代理"', 'error')
     return
   }
   const cfg = await api.readPanelConfig()
@@ -315,7 +210,7 @@ async function handleSaveProxy(page) {
   }
   cfg.networkProxy.url = proxyUrl
   await api.writePanelConfig(cfg)
-  toast(t('settings.proxySaved'), 'success')
+  toast('网络代理已保存；如 Gateway 正在运行，建议重启服务', 'success')
   await loadProxyConfig(page)
   await loadModelProxyConfig(page)
 }
@@ -324,7 +219,7 @@ async function handleClearProxy(page) {
   const cfg = await api.readPanelConfig()
   delete cfg.networkProxy
   await api.writePanelConfig(cfg)
-  toast(t('settings.proxyCleared'), 'success')
+  toast('网络代理已关闭', 'success')
   await loadProxyConfig(page)
   await loadModelProxyConfig(page)
 }
@@ -338,158 +233,14 @@ async function handleSaveModelProxy(page) {
   }
   cfg.networkProxy.proxyModelRequests = checked
   await api.writePanelConfig(cfg)
-  toast(checked ? t('settings.modelProxyOn') : t('settings.modelProxyOff'), 'success')
+  toast(checked ? '模型请求将走代理' : '模型请求已关闭代理', 'success')
 }
 
 async function handleSaveRegistry(page) {
   const select = page.querySelector('[data-name="registry"]')
   const customInput = page.querySelector('[data-name="custom-registry"]')
   const registry = select.value === 'custom' ? customInput.value.trim() : select.value
-  if (!registry) { toast(t('settings.registryEmpty'), 'error'); return }
+  if (!registry) { toast('请输入源地址', 'error'); return }
   await api.setNpmRegistry(registry)
-  toast(t('settings.registrySaved'), 'success')
-}
-
-// ===== CLI 绑定 =====
-
-async function loadCliBinding(page) {
-  const bar = page.querySelector('#cli-binding-bar')
-  if (!bar) return
-  try {
-    const version = await api.getVersionInfo()
-    const cfg = await api.readPanelConfig()
-    const boundPath = cfg?.deerpanelCliPath || ''
-    const installations = version.all_installations || []
-    const currentPath = version.cli_path || ''
-
-    const sourceLabel = (src) => ({
-      standalone: t('dashboard.cliSourceStandalone'),
-      'npm-zh': t('dashboard.cliSourceNpmZh'),
-      'npm-official': t('dashboard.cliSourceNpmOfficial'),
-      'npm-global': t('dashboard.cliSourceNpmGlobal'),
-    })[src] || t('dashboard.cliSourceUnknown')
-
-    let html = `<div class="form-hint" style="margin-bottom:var(--space-sm)">${t('settings.cliBindHint')}</div>`
-
-    if (currentPath) {
-      html += `<div style="margin-bottom:var(--space-sm);font-size:var(--font-size-sm)">
-        <span style="color:var(--text-secondary)">${t('settings.cliCurrent')}:</span>
-        <code style="font-size:var(--font-size-xs)">${escapeHtml(currentPath)}</code>
-        ${boundPath ? `<span class="clawhub-badge" style="margin-left:var(--space-xs);background:rgba(99,102,241,0.14);color:#6366f1;font-size:var(--font-size-xs)">${t('settings.cliBound')}</span>` : ''}
-      </div>`
-    }
-
-    if (installations.length > 0) {
-      html += '<div style="display:flex;flex-direction:column;gap:var(--space-xs)">'
-      // Auto-detect option
-      html += `<div style="display:flex;align-items:center;gap:var(--space-sm);padding:6px 10px;border-radius:var(--radius-sm);border:1px solid var(--border);${!boundPath ? 'background:var(--bg-active);border-color:var(--accent)' : ''}">
-        <span style="flex:1;font-size:var(--font-size-sm)">${t('settings.cliAutoDetect')}</span>
-        ${boundPath ? '<button class="btn btn-secondary btn-xs" data-action="unbind-cli">' + t('common.reset') + '</button>' : '<span style="color:var(--success);font-size:var(--font-size-xs)">�?' + t('settings.cliActive') + '</span>'}
-      </div>`
-      for (const inst of installations) {
-        const isActive = inst.active
-        const isBound = boundPath && inst.path === boundPath
-        html += `<div style="display:flex;align-items:center;gap:var(--space-sm);padding:6px 10px;border-radius:var(--radius-sm);border:1px solid var(--border);${isBound ? 'background:var(--bg-active);border-color:var(--accent)' : ''}">
-          <div style="flex:1;min-width:0">
-            <div style="font-size:var(--font-size-xs);font-family:var(--font-mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(inst.path)}">${escapeHtml(inst.path)}</div>
-            <div style="font-size:11px;color:var(--text-tertiary)">${sourceLabel(inst.source)}${inst.version ? ' · v' + inst.version : ''}</div>
-          </div>
-          ${isBound ? '<span style="color:var(--success);font-size:var(--font-size-xs)">�?' + t('settings.cliBound') + '</span>' : `<button class="btn btn-secondary btn-xs" data-action="bind-cli" data-path="${escapeHtml(inst.path)}">${t('common.confirm')}</button>`}
-        </div>`
-      }
-      html += '</div>'
-    } else {
-      html += `<div style="color:var(--text-tertiary);font-size:var(--font-size-sm)">${t('common.noData')}</div>`
-    }
-
-    bar.innerHTML = html
-  } catch (e) {
-    bar.innerHTML = `<div style="color:var(--error)">${t('common.loadFailed')}: ${escapeHtml(String(e))}</div>`
-  }
-}
-
-async function handleBindCli(page, path) {
-  if (!path) return
-  const ok = await showConfirm(t('settings.cliSwitchConfirm'))
-  if (!ok) return
-  const cfg = await api.readPanelConfig()
-  cfg.deerpanelCliPath = path
-  await api.writePanelConfig(cfg)
-  toast(t('common.saveSuccess'), 'success')
-  await loadCliBinding(page)
-}
-
-async function handleUnbindCli(page) {
-  const cfg = await api.readPanelConfig()
-  delete cfg.deerpanelCliPath
-  await api.writePanelConfig(cfg)
-  toast(t('common.saveSuccess'), 'success')
-  await loadCliBinding(page)
-}
-
-// ===== 语言切换 =====
-
-function loadLanguageSwitcher(page) {
-  const bar = page.querySelector('#language-bar')
-  if (!bar) return
-  const langs = getAvailableLangs()
-  const current = getLang()
-  bar.innerHTML = `
-    <div style="display:flex;align-items:center;gap:var(--space-sm);flex-wrap:wrap">
-      <select class="form-input" id="lang-select" style="max-width:200px">
-        ${langs.map(l => `<option value="${l.code}" ${l.code === current ? 'selected' : ''}>${l.label}</option>`).join('')}
-      </select>
-    </div>
-    <div class="form-hint" style="margin-top:var(--space-xs)">${t('settings.languageHint')}</div>
-  `
-  const select = bar.querySelector('#lang-select')
-  select.onchange = () => {
-    setLang(select.value)
-    // Re-render sidebar + current page
-    const sidebarEl = document.getElementById('sidebar')
-    if (sidebarEl) renderSidebar(sidebarEl)
-    // Re-render settings page
-    const pageEl = page.closest('.page') || page
-    render().then(newPage => {
-      pageEl.replaceWith(newPage)
-    }).catch(() => {})
-  }
-}
-
-// ===== 开机自�?=====
-
-async function loadAutostart(page) {
-  const bar = page.querySelector('#autostart-bar')
-  if (!bar) return
-  try {
-    const { isEnabled, enable, disable } = await import('@tauri-apps/plugin-autostart')
-    const enabled = await isEnabled()
-    bar.innerHTML = `
-      <div style="display:flex;align-items:center;gap:var(--space-sm)">
-        <label style="display:flex;align-items:center;gap:6px;font-size:var(--font-size-sm);cursor:pointer">
-          <input type="checkbox" id="autostart-toggle" ${enabled ? 'checked' : ''}>
-          ${t('settings.autostartToggle') || '系统启动时自动运�?DeerPanel'}
-        </label>
-      </div>
-      <div class="form-hint" style="margin-top:var(--space-xs)">
-        ${t('settings.autostartHint') || '开启后，电脑重启时 DeerPanel 会自动启动并检�?Gateway 状�?}
-      </div>
-    `
-    bar.querySelector('#autostart-toggle')?.addEventListener('change', async (e) => {
-      try {
-        if (e.target.checked) {
-          await enable()
-          toast(t('settings.autostartEnabled') || '已开启开机自�?, 'success')
-        } else {
-          await disable()
-          toast(t('settings.autostartDisabled') || '已关闭开机自�?, 'success')
-        }
-      } catch (err) {
-        e.target.checked = !e.target.checked
-        toast((t('settings.autostartFailed') || '设置失败') + ': ' + err, 'error')
-      }
-    })
-  } catch {
-    bar.innerHTML = `<div style="color:var(--text-tertiary);font-size:var(--font-size-sm)">${t('settings.autostartUnavailable') || '当前环境不支持开机自�?}</div>`
-  }
+  toast('npm 源已保存', 'success')
 }

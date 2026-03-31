@@ -4,7 +4,6 @@
 import { api } from '../lib/tauri-api.js'
 import { toast } from '../components/toast.js'
 import { tryShowEngagement } from '../components/engagement.js'
-import { t } from '../lib/i18n.js'
 
 // 兼容新版 SecretRef：token 可能是 string 或 { $env: "VAR" } / { $ref: "x/y" }
 function _tokenDisplayStr(token) {
@@ -27,8 +26,8 @@ export async function render() {
 
   page.innerHTML = `
     <div class="page-header">
-      <h1 class="page-title">${t('gateway.title')}</h1>
-      <p class="page-desc">${t('gateway.desc')}</p>
+      <h1 class="page-title">Gateway 配置</h1>
+      <p class="page-desc">Gateway 是 AI 模型的统一入口，所有应用通过它来调用模型服务</p>
     </div>
     <div id="gateway-config">
       <div class="config-section"><div class="stat-card loading-placeholder" style="height:80px"></div></div>
@@ -38,9 +37,9 @@ export async function render() {
     <div class="gw-save-bar">
       <button class="btn btn-primary" id="btn-save-gw">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/></svg>
-        ${t('gateway.saveApply')}
+        保存并生效
       </button>
-      <span class="gw-save-hint">${t('gateway.saveHint')}</span>
+      <span class="gw-save-hint">修改后点击保存，Gateway 会自动重载</span>
     </div>
   `
 
@@ -51,13 +50,13 @@ export async function render() {
     const btn = page.querySelector('#btn-save-gw')
     btn.disabled = true
     btn.classList.add('btn-loading')
-    btn.textContent = t('gateway.saving')
+    btn.textContent = '保存中...'
     try {
       await saveConfig(page, state)
     } finally {
       btn.disabled = false
       btn.classList.remove('btn-loading')
-      btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/></svg> ${t('gateway.saveApply')}`
+      btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/></svg> 保存并生效`
     }
   }
   return page
@@ -70,8 +69,8 @@ async function loadConfig(page, state) {
     state._origToken = state.config?.gateway?.auth?.token ?? null
     renderConfig(page, state)
   } catch (e) {
-    el.innerHTML = '<div style="color:var(--error);padding:20px">' + t('gateway.loadFailed') + ': ' + e + '</div>'
-    toast(t('gateway.loadFailed') + ': ' + e, 'error')
+    el.innerHTML = '<div style="color:var(--error);padding:20px">加载配置失败: ' + e + '</div>'
+    toast('加载配置失败: ' + e, 'error')
   }
 }
 
@@ -84,19 +83,19 @@ function renderConfig(page, state) {
     <div class="config-section">
       <div class="config-section-title">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/></svg>
-        ${t('gateway.portTitle')}
+        服务端口
       </div>
       <div class="form-group">
-        <label class="form-label">${t('gateway.portLabel')}</label>
+        <label class="form-label">端口号</label>
         <input class="form-input" id="gw-port" type="number" value="${gw.port || 18789}" min="1024" max="65535" style="max-width:200px">
-        <div class="form-hint">${t('gateway.portHint')}</div>
+        <div class="form-hint">应用通过这个端口连接 Gateway，默认 18789，一般不需要改</div>
       </div>
     </div>
 
     <div class="config-section">
       <div class="config-section-title">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>
-        ${t('gateway.accessTitle')}
+        谁能访问
       </div>
       <div class="gw-option-cards">
         <label class="gw-option-card ${(gw.bind === 'lan' || gw.bind === 'all') ? '' : 'selected'}" data-bind="loopback">
@@ -105,8 +104,8 @@ function renderConfig(page, state) {
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
           </div>
           <div class="gw-option-text">
-            <div class="gw-option-title">${t('gateway.localOnly')}</div>
-            <div class="gw-option-desc">${t('gateway.localOnlyDesc')}</div>
+            <div class="gw-option-title">仅本机使用</div>
+            <div class="gw-option-desc">只有这台电脑上的应用能访问，最安全</div>
           </div>
         </label>
         <label class="gw-option-card ${(gw.bind === 'lan' || gw.bind === 'all') ? 'selected' : ''}" data-bind="lan">
@@ -115,8 +114,8 @@ function renderConfig(page, state) {
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="6" width="7" height="10" rx="1"/><rect x="9" y="3" width="6" height="14" rx="1"/><rect x="16" y="6" width="7" height="10" rx="1"/><line x1="8" y1="12" x2="9" y2="12"/><line x1="15" y1="12" x2="16" y2="12"/></svg>
           </div>
           <div class="gw-option-text">
-            <div class="gw-option-title">${t('gateway.lanShare')}</div>
-            <div class="gw-option-desc">${t('gateway.lanShareDesc')}</div>
+            <div class="gw-option-title">局域网共享</div>
+            <div class="gw-option-desc">同一网络下的手机、平板等设备也能用</div>
           </div>
         </label>
       </div>
@@ -125,10 +124,10 @@ function renderConfig(page, state) {
     <div class="config-section">
       <div class="config-section-title">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
-        ${t('gateway.authTitle')}
+        安全认证
       </div>
       <div class="form-group" style="margin-bottom:var(--space-md)">
-        <label class="form-label">${t('gateway.authMode')}</label>
+        <label class="form-label">认证方式</label>
         <div class="gw-option-cards">
           <label class="gw-option-card ${gw.auth?.mode === 'password' ? '' : 'selected'}" data-auth="token">
             <input type="radio" name="gw-auth-mode" value="token" ${gw.auth?.mode === 'password' ? '' : 'checked'} hidden>
@@ -136,8 +135,8 @@ function renderConfig(page, state) {
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 11-7.778 7.778 5.5 5.5 0 017.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
             </div>
             <div class="gw-option-text">
-              <div class="gw-option-title">${t('gateway.authToken')}</div>
-              <div class="gw-option-desc">${t('gateway.authTokenDesc')}</div>
+              <div class="gw-option-title">Token 密钥</div>
+              <div class="gw-option-desc">标准认证方式，适合本地和局域网使用</div>
             </div>
           </label>
           <label class="gw-option-card ${gw.auth?.mode === 'password' ? 'selected' : ''}" data-auth="password">
@@ -146,37 +145,37 @@ function renderConfig(page, state) {
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
             </div>
             <div class="gw-option-text">
-              <div class="gw-option-title">${t('gateway.authPassword')}</div>
-              <div class="gw-option-desc">${t('gateway.authPasswordDesc')}</div>
+              <div class="gw-option-title">密码认证</div>
+              <div class="gw-option-desc">Tailscale Funnel 等外网暴露场景必须使用此模式</div>
             </div>
           </label>
         </div>
       </div>
       <div class="form-group" id="gw-auth-token-group" style="${gw.auth?.mode === 'password' ? 'display:none' : ''}">
-        <label class="form-label">${t('gateway.tokenLabel')}</label>
+        <label class="form-label">访问密钥（Token）</label>
         <div style="display:flex;gap:8px">
-          <input class="form-input" id="gw-token" type="password" value="${_tokenDisplayStr(gw.auth?.token || gw.authToken)}" placeholder="${t('gateway.tokenPlaceholder')}" style="flex:1" ${_isSecretRef(gw.auth?.token) ? 'readonly' : ''}>
-          <button class="btn btn-sm btn-secondary" id="btn-toggle-token">${t('gateway.show')}</button>
+          <input class="form-input" id="gw-token" type="password" value="${_tokenDisplayStr(gw.auth?.token || gw.authToken)}" placeholder="不设置则任何人都能调用" style="flex:1" ${_isSecretRef(gw.auth?.token) ? 'readonly' : ''}>
+          <button class="btn btn-sm btn-secondary" id="btn-toggle-token">显示</button>
         </div>
-        <div class="form-hint">${_isSecretRef(gw.auth?.token) ? t('gateway.tokenHintRef') : t('gateway.tokenHintNormal')}</div>
+        <div class="form-hint">${_isSecretRef(gw.auth?.token) ? '当前 Token 通过环境变量/引用配置，如需改为明文请清空后输入' : '设置后，应用调用时需要带上这个密钥才能通过。如果选了「局域网共享」，强烈建议设置'}</div>
       </div>
       <div class="form-group" id="gw-auth-password-group" style="${gw.auth?.mode === 'password' ? '' : 'display:none'}">
-        <label class="form-label">${t('gateway.passwordLabel')}</label>
+        <label class="form-label">密码</label>
         <div style="display:flex;gap:8px">
-          <input class="form-input" id="gw-password" type="password" value="${gw.auth?.password || ''}" placeholder="${t('gateway.passwordPlaceholder')}" style="flex:1">
-          <button class="btn btn-sm btn-secondary" id="btn-toggle-password">${t('gateway.show')}</button>
+          <input class="form-input" id="gw-password" type="password" value="${gw.auth?.password || ''}" placeholder="设置 Gateway 访问密码" style="flex:1">
+          <button class="btn btn-sm btn-secondary" id="btn-toggle-password">显示</button>
         </div>
-        <div class="form-hint">${t('gateway.passwordHint')}</div>
+        <div class="form-hint">通过 Tailscale Funnel 暴露 Gateway 时，必须使用密码认证模式</div>
       </div>
     </div>
 
     <div class="config-section">
       <div class="config-section-title">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><path d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94l-3.76 3.76z"/></svg>
-        ${t('gateway.toolsTitle')}
+        Agent 工具权限
       </div>
       <div class="form-group" style="margin-bottom:var(--space-md)">
-        <label class="form-label">${t('gateway.toolsPermission')}</label>
+        <label class="form-label">工具调用权限</label>
         <div class="gw-option-cards">
           <label class="gw-option-card ${(gw.tools?.profile || 'full') === 'full' ? 'selected' : ''}" data-tools-profile="full">
             <input type="radio" name="gw-tools-profile" value="full" ${(gw.tools?.profile || 'full') === 'full' ? 'checked' : ''} hidden>
@@ -184,8 +183,8 @@ function renderConfig(page, state) {
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
             </div>
             <div class="gw-option-text">
-              <div class="gw-option-title">${t('gateway.toolsFull')}</div>
-              <div class="gw-option-desc">${t('gateway.toolsFullDesc')}</div>
+              <div class="gw-option-title">完整权限</div>
+              <div class="gw-option-desc">Agent 可使用所有工具（推荐）</div>
             </div>
           </label>
           <label class="gw-option-card ${gw.tools?.profile === 'limited' ? 'selected' : ''}" data-tools-profile="limited">
@@ -194,8 +193,8 @@ function renderConfig(page, state) {
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>
             </div>
             <div class="gw-option-text">
-              <div class="gw-option-title">${t('gateway.toolsLimited')}</div>
-              <div class="gw-option-desc">${t('gateway.toolsLimitedDesc')}</div>
+              <div class="gw-option-title">受限模式</div>
+              <div class="gw-option-desc">仅允许安全工具，禁用文件/命令操作</div>
             </div>
           </label>
           <label class="gw-option-card ${gw.tools?.profile === 'none' ? 'selected' : ''}" data-tools-profile="none">
@@ -204,37 +203,37 @@ function renderConfig(page, state) {
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
             </div>
             <div class="gw-option-text">
-              <div class="gw-option-title">${t('gateway.toolsNone')}</div>
-              <div class="gw-option-desc">${t('gateway.toolsNoneDesc')}</div>
+              <div class="gw-option-title">禁用工具</div>
+              <div class="gw-option-desc">Agent 只能对话，不能调用任何工具</div>
             </div>
           </label>
         </div>
       </div>
       <div class="form-group">
-        <label class="form-label">${t('gateway.sessionsLabel')}</label>
+        <label class="form-label">会话可见性</label>
         <select class="form-input" id="gw-sessions-visibility" style="width:auto;min-width:180px">
-          <option value="all" ${(gw.tools?.sessions?.visibility || 'all') === 'all' ? 'selected' : ''}>${t('gateway.sessionsAll')}</option>
-          <option value="own" ${gw.tools?.sessions?.visibility === 'own' ? 'selected' : ''}>${t('gateway.sessionsOwn')}</option>
-          <option value="none" ${gw.tools?.sessions?.visibility === 'none' ? 'selected' : ''}>${t('gateway.sessionsNone')}</option>
+          <option value="all" ${(gw.tools?.sessions?.visibility || 'all') === 'all' ? 'selected' : ''}>所有会话可见</option>
+          <option value="own" ${gw.tools?.sessions?.visibility === 'own' ? 'selected' : ''}>仅自己的会话</option>
+          <option value="none" ${gw.tools?.sessions?.visibility === 'none' ? 'selected' : ''}>不可见</option>
         </select>
-        <div class="form-hint">${t('gateway.sessionsHint')}</div>
+        <div class="form-hint">控制 Agent 是否能查看其他会话的上下文</div>
       </div>
     </div>
 
     <div class="gw-advanced-toggle" id="gw-advanced-toggle">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="6 9 12 15 18 9"/></svg>
-      ${t('gateway.advancedToggle')}
+      高级选项
     </div>
     <div class="gw-advanced-panel" id="gw-advanced-panel" style="display:none">
       <div class="config-section">
         <div class="config-section-title">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 11-7.778 7.778 5.5 5.5 0 017.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
-          ${t('gateway.tailscaleTitle')}
+          Tailscale 组网
         </div>
         <div class="form-group">
-          <label class="form-label">${t('gateway.tailscaleLabel')}</label>
-          <input class="form-input" id="gw-tailscale" value="${gw.tailscale?.address || ''}" placeholder="${t('gateway.tailscalePlaceholder')}">
-          <div class="form-hint">${t('gateway.tailscaleHint')}</div>
+          <label class="form-label">Tailscale 地址</label>
+          <input class="form-input" id="gw-tailscale" value="${gw.tailscale?.address || ''}" placeholder="例如 100.x.x.x:18789">
+          <div class="form-hint">如果你用 Tailscale 虚拟局域网，填上地址后远程设备就能通过它访问 Gateway。不用可以留空</div>
         </div>
       </div>
     </div>
@@ -252,10 +251,10 @@ function bindConfigEvents(el) {
       const input = el.querySelector('#' + inputId)
       if (input.type === 'password') {
         input.type = 'text'
-        btn.textContent = t('gateway.hide')
+        btn.textContent = '隐藏'
       } else {
         input.type = 'password'
-        btn.textContent = t('gateway.show')
+        btn.textContent = '显示'
       }
     }
   }
@@ -331,15 +330,15 @@ async function saveConfig(page, state) {
 
   try {
     await api.writeOpenclawConfig(state.config)
-    toast(t('gateway.configSaved'), 'info')
+    toast('配置已保存，正在重载 Gateway...', 'info')
     try {
       await api.reloadGateway()
-      toast(t('gateway.reloaded'), 'success')
+      toast('Gateway 已重载，新配置已生效', 'success')
       setTimeout(tryShowEngagement, 3000)
     } catch (e) {
-      toast(t('gateway.savedButReloadFailed') + ': ' + e, 'warning')
+      toast('配置已保存，但重载失败: ' + e, 'warning')
     }
   } catch (e) {
-    toast(t('gateway.saveFailed') + ': ' + e, 'error')
+    toast('保存失败: ' + e, 'error')
   }
 }

@@ -1,5 +1,6 @@
 /// 系统托盘模块
-/// Windows / macOS / Linux 通用，Tauri v2 内置跨平台支�?use tauri::{
+/// Windows / macOS / Linux 通用，Tauri v2 内置跨平台支持
+use tauri::{
     image::Image,
     menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem},
     tray::TrayIconBuilder,
@@ -7,13 +8,14 @@
 };
 
 pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
-    // 菜单�?    let show = MenuItemBuilder::with_id("show", "显示主窗�?).build(app)?;
+    // 菜单项
+    let show = MenuItemBuilder::with_id("show", "显示主窗口").build(app)?;
     let separator1 = PredefinedMenuItem::separator(app)?;
     let gateway_start = MenuItemBuilder::with_id("gateway_start", "启动 Gateway").build(app)?;
     let gateway_stop = MenuItemBuilder::with_id("gateway_stop", "停止 Gateway").build(app)?;
     let gateway_restart = MenuItemBuilder::with_id("gateway_restart", "重启 Gateway").build(app)?;
     let separator2 = PredefinedMenuItem::separator(app)?;
-    let quit = MenuItemBuilder::with_id("quit", "退�?DeerPanel").build(app)?;
+    let quit = MenuItemBuilder::with_id("quit", "退出 ClawPanel").build(app)?;
 
     let menu = MenuBuilder::new(app)
         .item(&show)
@@ -25,11 +27,12 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         .item(&quit)
         .build()?;
 
-    // 托盘图标（使用内�?32x32 PNG�?    let icon = Image::from_bytes(include_bytes!("../icons/32x32.png"))?;
+    // 托盘图标（使用内嵌 32x32 PNG）
+    let icon = Image::from_bytes(include_bytes!("../icons/32x32.png"))?;
 
     let _tray = TrayIconBuilder::new()
         .icon(icon)
-        .tooltip("DeerPanel")
+        .tooltip("ClawPanel")
         .menu(&menu)
         .on_menu_event(move |app, event| {
             handle_menu_event(app, event.id().as_ref());
@@ -58,17 +61,17 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
         }
         "gateway_start" => {
             std::mem::drop(crate::commands::service::start_service(
-                "ai.deerpanel.gateway".into(),
+                "ai.openclaw.gateway".into(),
             ));
         }
         "gateway_stop" => {
             std::mem::drop(crate::commands::service::stop_service(
-                "ai.deerpanel.gateway".into(),
+                "ai.openclaw.gateway".into(),
             ));
         }
         "gateway_restart" => {
             std::mem::drop(crate::commands::service::restart_service(
-                "ai.deerpanel.gateway".into(),
+                "ai.openclaw.gateway".into(),
             ));
         }
         "quit" => {

@@ -1,6 +1,6 @@
 /**
  * 服务管理页面
- * 服务启停 + 更新检�?+ 配置备份管理
+ * 服务启停 + 更新检测 + 配置备份管理
  */
 import { api } from '../lib/tauri-api.js'
 import { toast } from '../components/toast.js'
@@ -8,9 +8,8 @@ import { showConfirm, showUpgradeModal } from '../components/modal.js'
 import { isMacPlatform, isInDocker, setUpgrading, setUserStopped, resetAutoRestart } from '../lib/app-state.js'
 import { diagnoseInstallError } from '../lib/error-diagnosis.js'
 import { icon, statusIcon } from '../lib/icons.js'
-import { t } from '../lib/i18n.js'
 
-// HTML 转义，防�?XSS
+// HTML 转义，防止 XSS
 function escapeHtml(str) {
   if (!str) return ''
   return String(str)
@@ -26,27 +25,27 @@ export async function render() {
 
   page.innerHTML = `
     <div class="page-header">
-      <h1 class="page-title">${t('services.title')}</h1>
-      <p class="page-desc">${t('services.desc')}</p>
+      <h1 class="page-title">服务管理</h1>
+      <p class="page-desc">管理 OpenClaw 服务、检查更新、配置备份</p>
     </div>
     <div id="version-bar"><div class="stat-card loading-placeholder" style="height:80px;margin-bottom:var(--space-lg)"></div></div>
     <div id="services-list"><div class="stat-card loading-placeholder" style="height:64px"></div></div>
     <div class="config-section" id="config-editor-section" style="display:none">
-      <div class="config-section-title">${t('services.configEditor')}</div>
-      <div class="form-hint" style="margin-bottom:var(--space-sm)">${t('services.configEditorHint')}</div>
+      <div class="config-section-title">配置文件编辑</div>
+      <div class="form-hint" style="margin-bottom:var(--space-sm)">直接编辑 <code>openclaw.json</code> 主配置文件。保存前会自动创建备份，修改后可能需要重启 Gateway 生效。</div>
       <div style="display:flex;gap:8px;margin-bottom:var(--space-sm)">
-        <button class="btn btn-primary btn-sm" data-action="save-config" disabled>${t('services.saveAndRestart')}</button>
-        <button class="btn btn-secondary btn-sm" data-action="save-config-only" disabled>${t('services.saveOnly')}</button>
-        <button class="btn btn-secondary btn-sm" data-action="reload-config">${t('services.reloadConfig')}</button>
+        <button class="btn btn-primary btn-sm" data-action="save-config" disabled>保存并重启</button>
+        <button class="btn btn-secondary btn-sm" data-action="save-config-only" disabled>仅保存</button>
+        <button class="btn btn-secondary btn-sm" data-action="reload-config">重新加载</button>
       </div>
       <div id="config-editor-status" style="font-size:var(--font-size-xs);margin-bottom:6px;min-height:18px"></div>
       <textarea id="config-editor-area" class="form-input" style="font-family:var(--font-mono);font-size:12px;min-height:320px;resize:vertical;tab-size:2;white-space:pre;overflow-x:auto" spellcheck="false" disabled></textarea>
     </div>
     <div class="config-section" id="backup-section">
-      <div class="config-section-title">${t('services.configBackup')}</div>
-      <div class="form-hint" style="margin-bottom:var(--space-sm)">${t('services.configBackupHint')}</div>
+      <div class="config-section-title">配置备份</div>
+      <div class="form-hint" style="margin-bottom:var(--space-sm)">备份范围：openclaw.json 主配置文件（含模型、Provider、Gateway 设置）。Agent 数据和记忆文件不在此备份范围内。</div>
       <div id="backup-actions" style="margin-bottom:var(--space-md)">
-        <button class="btn btn-primary btn-sm" data-action="create-backup">${t('services.createBackup')}</button>
+        <button class="btn btn-primary btn-sm" data-action="create-backup">创建备份</button>
       </div>
       <div id="backup-list"><div class="stat-card loading-placeholder" style="height:48px"></div></div>
     </div>
@@ -62,7 +61,7 @@ async function loadAll(page) {
   await Promise.all(tasks)
 }
 
-// ===== 版本检�?=====
+// ===== 版本检测 =====
 
 // 后端检测到的当前安装源
 let detectedSource = 'chinese'
@@ -71,32 +70,32 @@ let lastVersionInfo = null
 async function loadVersion(page) {
   const bar = page.querySelector('#version-bar')
   try {
-    const info = await api.getVersionInfo()
+    const info = await api.systemVersion()
     lastVersionInfo = info
     detectedSource = info.source || 'chinese'
-    const ver = info.current || t('common.unknown')
+    const ver = info.current || '未知'
     const hasRecommended = !!info.recommended
     const aheadOfRecommended = !!info.current && hasRecommended && !!info.ahead_of_recommended
     const driftFromRecommended = !!info.current && hasRecommended && !info.is_recommended && !aheadOfRecommended
     const isChinese = detectedSource === 'chinese'
-    const sourceTag = isChinese ? t('services.chineseEdition') : t('services.officialEdition')
-    const switchLabel = isChinese ? t('services.switchToOfficial') : t('services.switchToChinese')
+    const sourceTag = isChinese ? '汉化优化版' : '官方原版'
+    const switchLabel = isChinese ? '切换到官方版' : '切换到汉化版'
     const switchTarget = isChinese ? 'official' : 'chinese'
     const policyNote = aheadOfRecommended
-      ? t('services.policyAhead', { ver, recommended: info.recommended })
-      : t('services.policyDefault')
+      ? `检测到当前本地版本 ${ver} 高于面板推荐稳定版 ${info.recommended}，继续使用可能存在兼容或稳定性风险，建议尽快回退到推荐版。`
+      : '默认只建议当前面板已验证的推荐稳定版。如需尝试其它版本或最新特性，请到「关于」页手动切换版本并自行验证兼容性；若希望面板优先适配最新版，欢迎提交 issue。'
 
     if (isInDocker()) {
       bar.innerHTML = `
         <div class="stat-cards" style="margin-bottom:var(--space-lg)">
           <div class="stat-card">
             <div class="stat-card-header">
-              <span class="stat-card-label">${t('services.currentVersion')} · <span style="color:var(--accent)">${t('services.dockerDeploy')}</span></span>
+              <span class="stat-card-label">当前版本 · <span style="color:var(--accent)">Docker 部署</span></span>
             </div>
             <div class="stat-card-value">${ver}</div>
-            <div class="stat-card-meta">${info.latest_update_available ? t('services.latestUpstream', { version: info.latest }) + '�? + t('services.pullNewImage') + '�? : t('services.currentImageVer')}</div>
+            <div class="stat-card-meta">${info.latest_update_available ? '最新上游: ' + info.latest + '（请拉取新镜像更新）' : '已是当前镜像版本'}</div>
             ${info.latest_update_available ? `<div style="margin-top:var(--space-sm)">
-              <code style="font-size:var(--font-size-xs);background:var(--bg-tertiary);padding:4px 8px;border-radius:4px;user-select:all">docker pull ghcr.io/qingchencloud/deerpanel:latest</code>
+              <code style="font-size:var(--font-size-xs);background:var(--bg-tertiary);padding:4px 8px;border-radius:4px;user-select:all">docker pull ghcr.io/qingchencloud/openclaw:latest</code>
             </div>` : ''}
           </div>
         </div>
@@ -106,17 +105,17 @@ async function loadVersion(page) {
         <div class="stat-cards" style="margin-bottom:var(--space-lg)">
           <div class="stat-card">
             <div class="stat-card-header">
-              <span class="stat-card-label">${t('services.currentVersion')} · <span style="color:var(--accent)">${sourceTag}</span></span>
+              <span class="stat-card-label">当前版本 · <span style="color:var(--accent)">${sourceTag}</span></span>
             </div>
             <div class="stat-card-value">${ver}</div>
             <div class="stat-card-meta">
               ${hasRecommended
-                ? (aheadOfRecommended ? t('services.aheadOfRecommended', { version: info.recommended }) : driftFromRecommended ? t('services.recommendedStable', { version: info.recommended }) : t('services.alignedRecommended', { version: info.recommended }))
-                : t('services.noRecommended')}
-              ${info.latest_update_available && info.latest ? ' · ' + t('services.latestUpstream', { version: info.latest }) : ''}
+                ? (aheadOfRecommended ? `当前版本高于推荐稳定版: ${info.recommended}` : driftFromRecommended ? `推荐稳定版: ${info.recommended}` : `已对齐推荐稳定版: ${info.recommended}`)
+                : '未获取到推荐稳定版'}
+              ${info.latest_update_available && info.latest ? ` · 最新上游: ${info.latest}` : ''}
             </div>
             <div style="display:flex;gap:var(--space-sm);margin-top:var(--space-sm);flex-wrap:wrap">
-              ${aheadOfRecommended ? `<button class="btn btn-primary btn-sm" data-action="upgrade">${t('services.rollbackToRecommended')}</button>` : driftFromRecommended ? `<button class="btn btn-primary btn-sm" data-action="upgrade">${t('services.switchToRecommended')}</button>` : ''}
+              ${aheadOfRecommended ? '<button class="btn btn-primary btn-sm" data-action="upgrade">回退到推荐版</button>' : driftFromRecommended ? '<button class="btn btn-primary btn-sm" data-action="upgrade">切换到推荐版</button>' : ''}
               <button class="btn btn-secondary btn-sm" data-action="switch-source" data-source="${switchTarget}">${switchLabel}</button>
             </div>
             <div style="margin-top:8px;font-size:var(--font-size-xs);color:var(--text-tertiary);line-height:1.6">
@@ -127,7 +126,7 @@ async function loadVersion(page) {
       `
     }
   } catch (e) {
-    bar.innerHTML = `<div class="stat-card" style="margin-bottom:var(--space-lg)"><div class="stat-card-label">${t('services.versionLoadFailed')}</div></div>`
+    bar.innerHTML = `<div class="stat-card" style="margin-bottom:var(--space-lg)"><div class="stat-card-label">版本信息加载失败</div></div>`
   }
 }
 
@@ -139,16 +138,16 @@ async function loadServices(page) {
     const services = await api.getServicesStatus()
     renderServices(container, services)
   } catch (e) {
-    container.innerHTML = `<div style="color:var(--error)">${t('services.serviceLoadFailed')}: ${escapeHtml(String(e))}</div>`
+    container.innerHTML = `<div style="color:var(--error)">加载服务列表失败: ${escapeHtml(String(e))}</div>`
   }
 }
 
 function renderServices(container, services) {
-  const gw = services.find(s => s.label === 'ai.deerpanel.gateway')
+  const gw = services.find(s => s.label === 'ai.openclaw.gateway')
 
   let html = ''
   if (gw) {
-    // 检�?CLI 是否安装
+    // 检测 CLI 是否安装
     const cliMissing = gw.cli_installed === false
 
     html += `
@@ -158,7 +157,7 @@ function renderServices(container, services) {
         <div>
           <div class="service-name">${gw.label}</div>
           <div class="service-desc">${cliMissing
-            ? t('services.cliNotInstalled')
+            ? 'OpenClaw CLI 未安装'
             : (gw.description || '') + (gw.pid ? ' (PID: ' + gw.pid + ')' : '')
           }</div>
         </div>
@@ -166,16 +165,16 @@ function renderServices(container, services) {
       <div class="service-actions">
         ${cliMissing
           ? `<div style="display:flex;flex-direction:column;gap:var(--space-xs);align-items:flex-end">
-               <div style="color:var(--text-tertiary);font-size:var(--font-size-xs)">${t('services.installCliHint')}</div>
-               <code style="font-size:var(--font-size-xs);background:var(--bg-tertiary);padding:2px 8px;border-radius:4px;user-select:all">npm install -g @qingchencloud/deerpanel-zh</code>
-               <button class="btn btn-secondary btn-sm" data-action="refresh-services" style="margin-top:4px">${t('services.refreshStatus')}</button>
+               <div style="color:var(--text-tertiary);font-size:var(--font-size-xs)">请先安装 OpenClaw CLI:</div>
+               <code style="font-size:var(--font-size-xs);background:var(--bg-tertiary);padding:2px 8px;border-radius:4px;user-select:all">npm install -g @qingchencloud/openclaw-zh</code>
+               <button class="btn btn-secondary btn-sm" data-action="refresh-services" style="margin-top:4px">刷新状态</button>
              </div>`
           : gw.running
-            ? `<button class="btn btn-secondary btn-sm" data-action="restart" data-label="${gw.label}">${t('services.restart')}</button>
-               <button class="btn btn-danger btn-sm" data-action="stop" data-label="${gw.label}">${t('services.stop')}</button>
-               ${isMacPlatform() ? `<button class="btn btn-danger btn-sm" data-action="uninstall-gateway">${t('services.uninstall')}</button>` : ''}`
-            : `<button class="btn btn-primary btn-sm" data-action="start" data-label="${gw.label}">${t('services.start')}</button>
-               ${isMacPlatform() ? `<button class="btn btn-primary btn-sm" data-action="install-gateway">${t('services.install')}</button><button class="btn btn-danger btn-sm" data-action="uninstall-gateway">${t('services.uninstall')}</button>` : ''}`
+            ? `<button class="btn btn-secondary btn-sm" data-action="restart" data-label="${gw.label}">重启</button>
+               <button class="btn btn-danger btn-sm" data-action="stop" data-label="${gw.label}">停止</button>
+               ${isMacPlatform() ? '<button class="btn btn-danger btn-sm" data-action="uninstall-gateway">卸载</button>' : ''}`
+            : `<button class="btn btn-primary btn-sm" data-action="start" data-label="${gw.label}">启动</button>
+               ${isMacPlatform() ? '<button class="btn btn-primary btn-sm" data-action="install-gateway">安装</button><button class="btn btn-danger btn-sm" data-action="uninstall-gateway">卸载</button>' : ''}`
         }
       </div>
     </div>`
@@ -185,12 +184,12 @@ function renderServices(container, services) {
       <div class="service-info">
         <span class="status-dot stopped"></span>
         <div>
-          <div class="service-name">ai.deerpanel.gateway</div>
-          <div class="service-desc">${t('services.gwNotInstalled')}</div>
+          <div class="service-name">ai.openclaw.gateway</div>
+          <div class="service-desc">Gateway 服务未安装</div>
         </div>
       </div>
       <div class="service-actions">
-        <button class="btn btn-primary btn-sm" data-action="install-gateway">${t('services.install')}</button>
+        <button class="btn btn-primary btn-sm" data-action="install-gateway">安装</button>
       </div>
     </div>`
   }
@@ -206,17 +205,17 @@ async function loadBackups(page) {
     const backups = await api.listBackups()
     renderBackups(list, backups)
   } catch (e) {
-    list.innerHTML = `<div style="color:var(--error)">${t('services.backupLoadFailed')}: ${e}</div>`
+    list.innerHTML = `<div style="color:var(--error)">加载备份列表失败: ${e}</div>`
   }
 }
 
 function renderBackups(container, backups) {
   if (!backups || !backups.length) {
-    container.innerHTML = `<div style="color:var(--text-tertiary);padding:var(--space-md) 0">${t('services.noBackup')}</div>`
+    container.innerHTML = '<div style="color:var(--text-tertiary);padding:var(--space-md) 0">暂无备份</div>'
     return
   }
   container.innerHTML = backups.map(b => {
-    const date = b.created_at ? new Date(b.created_at * 1000).toLocaleString() : t('common.unknown')
+    const date = b.created_at ? new Date(b.created_at * 1000).toLocaleString('zh-CN') : '未知'
     const size = b.size ? (b.size / 1024).toFixed(1) + ' KB' : ''
     return `
       <div class="service-card" data-backup="${b.name}">
@@ -227,8 +226,8 @@ function renderBackups(container, backups) {
           </div>
         </div>
         <div class="service-actions">
-          <button class="btn btn-primary btn-sm" data-action="restore-backup" data-name="${b.name}">${t('services.restore')}</button>
-          <button class="btn btn-danger btn-sm" data-action="delete-backup" data-name="${b.name}">${t('common.delete')}</button>
+          <button class="btn btn-primary btn-sm" data-action="restore-backup" data-name="${b.name}">恢复</button>
+          <button class="btn btn-danger btn-sm" data-action="delete-backup" data-name="${b.name}">删除</button>
         </div>
       </div>`
   }).join('')
@@ -294,19 +293,21 @@ function bindEvents(page) {
 
 // ===== 服务操作 =====
 
-const ACTION_LABELS = { start: t('services.start'), stop: t('services.stop'), restart: t('services.restart') }
+const ACTION_LABELS = { start: '启动', stop: '停止', restart: '重启' }
 const POLL_INTERVAL = 1500  // 轮询间隔 ms
-const POLL_TIMEOUT = 30000  // 最长等�?30s
+const POLL_TIMEOUT = 30000  // 最长等待 30s
 
 async function handleServiceAction(action, label, page) {
   const fn = { start: api.startService, stop: api.stopService, restart: api.restartService }[action]
   const actionLabel = ACTION_LABELS[action]
   const expectRunning = action !== 'stop'
 
-  // 通知守护模块：用户主动操�?  if (action === 'stop') setUserStopped(true)
+  // 通知守护模块：用户主动操作
+  if (action === 'stop') setUserStopped(true)
   if (action === 'start') resetAutoRestart()
 
-  // 找到触发按钮所在的 service-card，替换按钮区域为加载状�?  const card = page.querySelector(`.service-card[data-label="${label}"]`)
+  // 找到触发按钮所在的 service-card，替换按钮区域为加载状态
+  const card = page.querySelector(`.service-card[data-label="${label}"]`)
   const actionsEl = card?.querySelector('.service-actions')
   const origHtml = actionsEl?.innerHTML || ''
 
@@ -315,8 +316,8 @@ async function handleServiceAction(action, label, page) {
     actionsEl.innerHTML = `
       <div class="service-loading">
         <div class="service-spinner"></div>
-        <span class="service-loading-text">${t('services.actionProgress', { action: actionLabel })}</span>
-        <button class="btn btn-sm btn-ghost service-cancel-btn" style="display:none">${t('services.cancelWait')}</button>
+        <span class="service-loading-text">正在${actionLabel}...</span>
+        <button class="btn btn-sm btn-ghost service-cancel-btn" style="display:none">取消等待</button>
       </div>`
     const cancelBtn = actionsEl.querySelector('.service-cancel-btn')
     if (cancelBtn) {
@@ -331,13 +332,14 @@ async function handleServiceAction(action, label, page) {
   try {
     await fn(label)
   } catch (e) {
-    toast(t('services.actionCmdFailed', { action: actionLabel, error: e.message || e }), 'error')
+    toast(`${actionLabel}命令失败: ${e.message || e}`, 'error')
     if (actionsEl) actionsEl.innerHTML = origHtml
     if (dot) dot.className = 'status-dot stopped'
     return
   }
 
-  // 轮询等待实际状态变�?  const startTime = Date.now()
+  // 轮询等待实际状态变化
+  const startTime = Date.now()
   let showedCancel = false
   const loadingText = actionsEl?.querySelector('.service-loading-text')
   const cancelBtn = actionsEl?.querySelector('.service-cancel-btn')
@@ -354,20 +356,21 @@ async function handleServiceAction(action, label, page) {
     // 更新等待时间
     if (loadingText) {
       const sec = Math.floor(elapsed / 1000)
-      loadingText.textContent = t('services.actionProgressSec', { action: actionLabel, sec })
+      loadingText.textContent = `正在${actionLabel}... ${sec}s`
     }
 
     // 超时
     if (elapsed > POLL_TIMEOUT) {
-      toast(t('services.actionTimeout', { action: actionLabel }), 'warning')
+      toast(`${actionLabel}超时，Gateway 可能仍在启动中`, 'warning')
       break
     }
 
-    // 检查实际状�?    try {
+    // 检查实际状态
+    try {
       const services = await api.getServicesStatus()
       const svc = services?.find?.(s => s.label === label) || services?.[0]
       if (svc && svc.running === expectRunning) {
-        toast(t('services.actionDone', { label, action: actionLabel }) + (svc.pid ? ' (PID: ' + svc.pid + ')' : ''), 'success')
+        toast(`${label} 已${actionLabel}${svc.pid ? ' (PID: ' + svc.pid + ')' : ''}`, 'success')
         await loadServices(page)
         return
       }
@@ -377,7 +380,7 @@ async function handleServiceAction(action, label, page) {
   }
 
   if (cancelled) {
-    toast(t('services.cancelled'), 'info')
+    toast('已取消等待，可稍后刷新查看状态', 'info')
   }
   await loadServices(page)
 }
@@ -386,27 +389,27 @@ async function handleServiceAction(action, label, page) {
 
 async function handleCreateBackup(page) {
   const result = await api.createBackup()
-  toast(t('services.backupCreated', { name: result.name }), 'success')
+  toast(`备份已创建: ${result.name}`, 'success')
   await loadBackups(page)
 }
 
 async function handleRestoreBackup(name, page) {
-  const yes = await showConfirm(t('services.restoreConfirm', { name }))
+  const yes = await showConfirm(`确定要恢复备份 "${name}" 吗？\n当前配置将自动备份后再恢复。`)
   if (!yes) return
   await api.restoreBackup(name)
-  toast(t('services.restored'), 'success')
+  toast('配置已恢复', 'success')
   await loadBackups(page)
 }
 
 async function handleDeleteBackup(name, page) {
-  const yes = await showConfirm(t('services.deleteConfirm', { name }))
+  const yes = await showConfirm(`确定要删除备份 "${name}" 吗？此操作不可撤销。`)
   if (!yes) return
   await api.deleteBackup(name)
-  toast(t('services.backupDeleted'), 'success')
+  toast('备份已删除', 'success')
   await loadBackups(page)
 }
 
-// ===== 配置文件编辑�?=====
+// ===== 配置文件编辑器 =====
 
 let _configOriginal = ''
 
@@ -426,26 +429,27 @@ async function loadConfigEditor(page) {
     btnSave.disabled = false
     btnSaveOnly.disabled = false
     section.style.display = ''
-    status.innerHTML = `<span style="color:var(--text-tertiary)">${t('services.configLoaded')} · ${(json.length / 1024).toFixed(1)} KB</span>`
+    status.innerHTML = `<span style="color:var(--text-tertiary)">已加载 · ${(json.length / 1024).toFixed(1)} KB</span>`
 
-    // 实时检�?JSON 语法
+    // 实时检测 JSON 语法
     area.oninput = () => {
       try {
         JSON.parse(area.value)
         const changed = area.value !== _configOriginal
         status.innerHTML = changed
-          ? `<span style="color:var(--warning)">�?${t('services.configUnsaved')}</span>`
-          : `<span style="color:var(--text-tertiary)">${t('services.configNoChange')}</span>`
+          ? '<span style="color:var(--warning)">● 有未保存的修改</span>'
+          : '<span style="color:var(--text-tertiary)">无修改</span>'
         btnSave.disabled = !changed
         btnSaveOnly.disabled = !changed
       } catch (e) {
-        status.innerHTML = `<span style="color:var(--error)">${t('services.configJsonError')}: ${e.message.split(' at ')[0]}</span>`
+        status.innerHTML = `<span style="color:var(--error)">JSON 语法错误: ${e.message.split(' at ')[0]}</span>`
         btnSave.disabled = true
         btnSaveOnly.disabled = true
       }
     }
   } catch {
-    // deerpanel.json 不存在，隐藏编辑�?    section.style.display = 'none'
+    // openclaw.json 不存在，隐藏编辑器
+    section.style.display = 'none'
   }
 }
 
@@ -457,26 +461,27 @@ async function handleSaveConfig(page, restart) {
   try {
     config = JSON.parse(area.value)
   } catch (e) {
-    toast(t('services.configSaveJsonError'), 'error')
+    toast('JSON 格式错误，无法保存', 'error')
     return
   }
 
-  status.innerHTML = `<span style="color:var(--text-tertiary)">${t('services.autoBackingUp')}</span>`
+  status.innerHTML = '<span style="color:var(--text-tertiary)">自动备份中...</span>'
 
   try {
-    // 保存前自动备�?    await api.createBackup()
+    // 保存前自动备份
+    await api.createBackup()
   } catch (e) {
-    const yes = await showConfirm(t('services.autoBackupFailed') + ': ' + e + '\n\n' + t('services.continueWithoutBackup'))
+    const yes = await showConfirm('自动备份失败: ' + e + '\n\n是否仍然继续保存？')
     if (!yes) return
   }
 
-  status.innerHTML = `<span style="color:var(--text-tertiary)">${t('services.saving')}</span>`
+  status.innerHTML = '<span style="color:var(--text-tertiary)">保存中...</span>'
 
   try {
     await api.writeOpenclawConfig(config)
     _configOriginal = area.value
-    toast(restart ? t('services.configSavedRestarting') : t('services.configSaved'), 'success')
-    status.innerHTML = `<span style="color:var(--success)">${t('services.configSaved')}</span>`
+    toast('配置已保存' + (restart ? '，正在重启 Gateway...' : ''), 'success')
+    status.innerHTML = '<span style="color:var(--success)">已保存</span>'
 
     page.querySelector('[data-action="save-config"]').disabled = true
     page.querySelector('[data-action="save-config-only"]').disabled = true
@@ -484,28 +489,29 @@ async function handleSaveConfig(page, restart) {
     if (restart) {
       try {
         await api.restartGateway()
-        toast(t('services.gwRestarted'), 'success')
+        toast('Gateway 已重启', 'success')
       } catch (e) {
-        toast(t('services.configSavedGwFailed') + ': ' + e, 'warning')
+        toast('配置已保存，但 Gateway 重启失败: ' + e, 'warning')
       }
       await loadServices(page)
     }
 
     await loadBackups(page)
   } catch (e) {
-    toast(t('common.saveFailed') + ': ' + e, 'error')
-    status.innerHTML = `<span style="color:var(--error)">${t('common.saveFailed')}: ${e}</span>`
+    toast('保存失败: ' + e, 'error')
+    status.innerHTML = `<span style="color:var(--error)">保存失败: ${e}</span>`
   }
 }
 
 // ===== 升级操作 =====
 
 async function doUpgradeWithModal(source, page, version = null, method = 'auto') {
-  const modal = showUpgradeModal(t('services.upgradeTitle'))
+  const modal = showUpgradeModal('升级 / 切换版本')
   let unlistenLog, unlistenProgress, unlistenDone, unlistenError
   setUpgrading(true)
 
-  // 清理所有监�?  const cleanup = () => {
+  // 清理所有监听
+  const cleanup = () => {
     setUpgrading(false)
     unlistenLog?.()
     unlistenProgress?.()
@@ -522,14 +528,14 @@ async function doUpgradeWithModal(source, page, version = null, method = 'auto')
       // 后台任务完成事件
       unlistenDone = await listen('upgrade-done', (e) => {
         cleanup()
-        modal.setDone(typeof e.payload === 'string' ? e.payload : t('services.taskDone'))
+        modal.setDone(typeof e.payload === 'string' ? e.payload : '操作完成')
         loadVersion(page)
       })
 
       // 后台任务失败事件
       unlistenError = await listen('upgrade-error', (e) => {
         cleanup()
-        const errStr = String(e.payload || t('common.error'))
+        const errStr = String(e.payload || '未知错误')
         modal.appendLog(errStr)
         const fullLog = modal.getLogText() + '\n' + errStr
         const diagnosis = diagnoseInstallError(fullLog)
@@ -538,17 +544,18 @@ async function doUpgradeWithModal(source, page, version = null, method = 'auto')
         if (diagnosis.hint) modal.appendHtmlLog(`${statusIcon('info', 14)} ${diagnosis.hint}`)
         if (diagnosis.command) modal.appendHtmlLog(`${icon('clipboard', 14)} ${diagnosis.command}`)
         if (window.__openAIDrawerWithError) {
-          window.__openAIDrawerWithError({ title: diagnosis.title, error: fullLog, scene: t('services.upgradeScene'), hint: diagnosis.hint })
+          window.__openAIDrawerWithError({ title: diagnosis.title, error: fullLog, scene: '升级 OpenClaw', hint: diagnosis.hint })
         }
       })
 
       // 发起后台任务（立即返回）
       await api.upgradeOpenclaw(source, version, method)
-      modal.appendLog(t('services.taskStarted'))
+      modal.appendLog('后台任务已启动，请等待完成...')
     } else {
-      // Web 模式：仍然同步等待（dev-api 后端没有 spawn�?      modal.appendLog(t('services.webModeNoLog'))
+      // Web 模式：仍然同步等待（dev-api 后端没有 spawn）
+      modal.appendLog('Web 模式：升级过程日志不可用，请等待完成...')
       const msg = await api.upgradeOpenclaw(source, version, method)
-      modal.setDone(typeof msg === 'string' ? msg : (msg?.message || t('services.upgradeDone')))
+      modal.setDone(typeof msg === 'string' ? msg : (msg?.message || '升级完成'))
       await loadVersion(page)
       cleanup()
     }
@@ -563,19 +570,19 @@ async function doUpgradeWithModal(source, page, version = null, method = 'auto')
 }
 
 async function handleUpgrade(btn, page) {
-  const sourceLabel = detectedSource === 'official' ? t('services.officialEdition') : t('services.chineseEdition')
+  const sourceLabel = detectedSource === 'official' ? '官方原版' : '汉化优化版'
   const recommended = lastVersionInfo?.recommended
-  const yes = await showConfirm(t('services.upgradeConfirm', { source: sourceLabel, version: recommended ? `�?{recommended}）` : '' }))
+  const yes = await showConfirm(`确定要将 OpenClaw 切换到当前面板推荐的稳定${sourceLabel}${recommended ? `（${recommended}）` : ''}吗？\n切换过程中 Gateway 会短暂中断。\n如果你想尝试最新版，请到「关于」页手动切换版本并自测兼容性。`)
   if (!yes) return
   await doUpgradeWithModal(detectedSource, page, recommended || null)
 }
 
 async function handleSwitchSource(target, page) {
-  const targetLabel = target === 'official' ? t('services.officialEdition') : t('services.chineseEdition')
+  const targetLabel = target === 'official' ? '官方原版' : '汉化优化版'
   const recommended = target === 'official'
     ? (lastVersionInfo?.source === 'official' ? lastVersionInfo?.recommended : null)
     : (lastVersionInfo?.source === 'chinese' ? lastVersionInfo?.recommended : null)
-  const yes = await showConfirm(t('services.switchSourceConfirm', { target: targetLabel, version: recommended ? `�?{recommended}）` : '' }))
+  const yes = await showConfirm(`确定要切换到${targetLabel}${recommended ? `（推荐稳定版 ${recommended}）` : '（将自动选择该来源的推荐稳定版）'}吗？\n这会安装对应的 npm 包，配置数据不受影响。\n如需尝试最新版，请到「关于」页手动切换版本。`)
   if (!yes) return
   await doUpgradeWithModal(target, page, null)
 }
@@ -584,30 +591,30 @@ async function handleSwitchSource(target, page) {
 
 async function handleInstallGateway(btn, page) {
   btn.classList.add('btn-loading')
-  btn.textContent = t('services.installing')
+  btn.textContent = '安装中...'
   try {
     await api.installGateway()
-    toast(t('services.gwInstalled'), 'success')
+    toast('Gateway 服务已安装', 'success')
     await loadServices(page)
   } catch (e) {
-    toast(t('services.installFailed') + ': ' + e, 'error')
+    toast('安装失败: ' + e, 'error')
     btn.classList.remove('btn-loading')
-    btn.textContent = t('services.install')
+    btn.textContent = '安装'
   }
 }
 
 async function handleUninstallGateway(btn, page) {
-  const yes = await showConfirm(t('services.uninstallConfirm'))
+  const yes = await showConfirm('确定要卸载 Gateway 服务吗？\n这会停止服务并移除 LaunchAgent。')
   if (!yes) return
   btn.classList.add('btn-loading')
-  btn.textContent = t('services.uninstalling')
+  btn.textContent = '卸载中...'
   try {
     await api.uninstallGateway()
-    toast(t('services.gwUninstalled'), 'success')
+    toast('Gateway 服务已卸载', 'success')
     await loadServices(page)
   } catch (e) {
-    toast(t('services.uninstallFailed') + ': ' + e, 'error')
+    toast('卸载失败: ' + e, 'error')
     btn.classList.remove('btn-loading')
-    btn.textContent = t('services.uninstall')
+    btn.textContent = '卸载'
   }
 }

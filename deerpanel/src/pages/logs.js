@@ -3,14 +3,13 @@
  */
 import { api } from '../lib/tauri-api.js'
 import { toast } from '../components/toast.js'
-import { t } from '../lib/i18n.js'
 
 const LOG_TABS = [
-  { key: 'gateway', label: () => t('logs.tabGateway') },
-  { key: 'gateway-err', label: () => t('logs.tabGatewayErr') },
-  { key: 'guardian', label: () => t('logs.tabGuardian') },
-  { key: 'guardian-backup', label: () => t('logs.tabBackup') },
-  { key: 'config-audit', label: () => t('logs.tabAudit') },
+  { key: 'gateway', label: 'Gateway 日志' },
+  { key: 'gateway-err', label: 'Gateway 错误' },
+  { key: 'guardian', label: '守护进程' },
+  { key: 'guardian-backup', label: '备份日志' },
+  { key: 'config-audit', label: '审计日志' },
 ]
 
 let _searchTimer = null
@@ -21,17 +20,17 @@ export async function render() {
 
   page.innerHTML = `
     <div class="page-header">
-      <h1 class="page-title">${t('logs.title')}</h1>
-      <p class="page-desc">${t('logs.desc')}</p>
+      <h1 class="page-title">日志查看</h1>
+      <p class="page-desc">查看 OpenClaw 各服务日志</p>
     </div>
     <div class="tab-bar">
-      ${LOG_TABS.map((item, i) => `<div class="tab${i === 0 ? ' active' : ''}" data-tab="${item.key}">${item.label()}</div>`).join('')}
+      ${LOG_TABS.map((t, i) => `<div class="tab${i === 0 ? ' active' : ''}" data-tab="${t.key}">${t.label}</div>`).join('')}
     </div>
     <div class="log-toolbar">
-      <input type="text" class="form-input" id="log-search" placeholder="${t('logs.searchPlaceholder')}" style="max-width:300px">
-      <button class="btn btn-secondary btn-sm" id="btn-refresh">${t('logs.refresh')}</button>
+      <input type="text" class="form-input" id="log-search" placeholder="搜索日志..." style="max-width:300px">
+      <button class="btn btn-secondary btn-sm" id="btn-refresh">刷新</button>
       <label style="display:flex;align-items:center;gap:6px;font-size:var(--font-size-sm);color:var(--text-secondary)">
-        <input type="checkbox" id="log-autoscroll" checked> ${t('logs.autoScroll')}
+        <input type="checkbox" id="log-autoscroll" checked> 自动滚动
       </label>
     </div>
     <div class="log-viewer" id="log-content" style="height:calc(100vh - 280px)"><div class="stat-card loading-placeholder" style="height:16px;margin:8px 0"></div><div class="stat-card loading-placeholder" style="height:16px;margin:8px 0"></div><div class="stat-card loading-placeholder" style="height:16px;margin:8px 0"></div><div class="stat-card loading-placeholder" style="height:16px;margin:8px 0"></div></div>
@@ -42,7 +41,7 @@ export async function render() {
   // Tab 切换
   page.querySelectorAll('.tab').forEach(tab => {
     tab.onclick = () => {
-      page.querySelectorAll('.tab').forEach(el => el.classList.remove('active'))
+      page.querySelectorAll('.tab').forEach(t => t.classList.remove('active'))
       tab.classList.add('active')
       currentTab = tab.dataset.tab
       page.querySelector('#log-search').value = ''
@@ -78,12 +77,12 @@ async function loadLog(page, logName) {
   const el = page.querySelector('#log-content')
   const refreshBtn = page.querySelector('#btn-refresh')
   // 显示加载状态
-  el.innerHTML = '<div class="log-loading"><div class="service-spinner"></div><span style="color:var(--text-tertiary);margin-left:8px">' + t('logs.loading') + '</span></div>'
+  el.innerHTML = '<div class="log-loading"><div class="service-spinner"></div><span style="color:var(--text-tertiary);margin-left:8px">加载日志中...</span></div>'
   if (refreshBtn) { refreshBtn.classList.add('btn-loading'); refreshBtn.disabled = true }
   try {
     const content = await api.readLogTail(logName, 200)
     if (!content || !content.trim()) {
-      el.innerHTML = '<div style="color:var(--text-tertiary)">' + t('logs.empty') + '</div>'
+      el.innerHTML = '<div style="color:var(--text-tertiary)">暂无日志</div>'
       return
     }
     const lines = content.trim().split('\n')
@@ -92,8 +91,8 @@ async function loadLog(page, logName) {
       el.scrollTop = el.scrollHeight
     }
   } catch (e) {
-    el.innerHTML = '<div style="color:var(--error);padding:12px">' + t('logs.loadFailed') + ': ' + e + '</div>'
-    toast(t('logs.loadFailed') + ': ' + e, 'error')
+    el.innerHTML = '<div style="color:var(--error);padding:12px">加载日志失败: ' + e + '</div>'
+    toast('加载日志失败: ' + e, 'error')
   } finally {
     if (refreshBtn) { refreshBtn.classList.remove('btn-loading'); refreshBtn.disabled = false }
   }
@@ -104,13 +103,13 @@ async function searchLog(page, logName, query) {
   try {
     const results = await api.searchLog(logName, query)
     if (!results || !results.length) {
-      el.innerHTML = '<div style="color:var(--text-tertiary)">' + t('logs.noResults') + '</div>'
+      el.innerHTML = '<div style="color:var(--text-tertiary)">未找到匹配结果</div>'
       return
     }
     el.innerHTML = results.map(l => `<div class="log-line">${highlightMatch(escapeHtml(l), query)}</div>`).join('')
   } catch (e) {
-    el.innerHTML = '<div style="color:var(--error);padding:12px">' + t('logs.searchFailed') + ': ' + e + '</div>'
-    toast(t('logs.searchFailed') + ': ' + e, 'error')
+    el.innerHTML = '<div style="color:var(--error);padding:12px">搜索失败: ' + e + '</div>'
+    toast('搜索失败: ' + e, 'error')
   }
 }
 

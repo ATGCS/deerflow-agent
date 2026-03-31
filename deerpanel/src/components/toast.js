@@ -21,11 +21,7 @@ export function toast(message, type = 'info', options = {}) {
   el.className = `toast ${type}`
 
   const textSpan = document.createElement('span')
-  if (options.html) {
-    textSpan.innerHTML = message
-  } else {
-    textSpan.textContent = message
-  }
+  textSpan.textContent = message
   el.appendChild(textSpan)
 
   // 如果有操作按钮，添加到 toast 中

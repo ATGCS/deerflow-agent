@@ -1,15 +1,15 @@
 [package]
-name = "deerpanel"
-version = "0.10.0"
+name = "clawpanel"
+version = "0.9.6"
 edition = "2021"
-description = "DeerPanel - DeerPanel 可视化管理面�?
+description = "ClawPanel - OpenClaw 可视化管理面板"
 authors = ["qingchencloud"]
-repository = "https://github.com/qingchencloud/deerpanel"
-homepage = "https://github.com/qingchencloud/deerpanel"
+repository = "https://github.com/qingchencloud/clawpanel"
+homepage = "https://github.com/qingchencloud/clawpanel"
 license = "AGPL-3.0"
 
 [lib]
-name = "deerpanel_lib"
+name = "clawpanel_lib"
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [build-dependencies]
@@ -32,6 +32,3 @@ base64 = "0.22"
 urlencoding = "2"
 regex = "1"
 tokio = { version = "1", features = ["process", "time"] }
-
-[target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
-tauri-plugin-autostart = "2"

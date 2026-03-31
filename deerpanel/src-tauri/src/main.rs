@@ -1,6 +1,6 @@
-// DeerPanel 入口
+// ClawPanel 入口
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    deerpanel_lib::run()
+    clawpanel_lib::run()
 }

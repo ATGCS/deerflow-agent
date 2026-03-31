@@ -9,7 +9,6 @@ export const API_TYPES = [
   { value: 'anthropic-messages', label: 'Anthropic 原生' },
   { value: 'openai-responses', label: 'OpenAI Responses' },
   { value: 'google-generative-ai', label: 'Google Gemini' },
-  { value: 'ollama', label: 'Ollama 原生' },
 ]
 
 // 服务商快捷预设
@@ -20,7 +19,7 @@ export const PROVIDER_PRESETS = [
   { key: 'volcengine', label: '火山引擎', baseUrl: 'https://ark.cn-beijing.volces.com/api/v3', api: 'openai-completions', site: 'https://volcengine.com/L/Ph1OP5I3_GY', desc: '字节跳动旗下云平台，支持豆包等模型' },
   { key: 'aliyun', label: '阿里云百炼', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', api: 'openai-completions', site: 'https://www.aliyun.com/benefit/ai/aistar?userCode=keahn2zr&clubBiz=subTask..12435175..10263..', desc: '阿里云 AI 大模型平台，支持通义千问全系列' },
   { key: 'zhipu', label: '智谱 AI', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', api: 'openai-completions', site: 'https://www.bigmodel.cn/glm-coding?ic=3F6F9XYKTS', desc: '国产大模型领军企业，支持 GLM-4 全系列' },
-  { key: 'minimax', label: 'MiniMax', baseUrl: 'https://api.minimax.io/v1', api: 'openai-completions', site: 'https://platform.minimaxi.com/', desc: '国产多模态大模型，支持 MiniMax-M2.7 / M2.5 系列，兼容 OpenAI 接口' },
+  { key: 'minimax', label: 'MiniMax', baseUrl: 'https://api.minimax.chat/v1', api: 'openai-completions', site: 'https://platform.minimaxi.com/subscribe/coding-plan?code=7pUc5oLo4K&source=link', desc: '国产多模态大模型，支持 MiniMax-Text 系列' },
   { key: 'openai', label: 'OpenAI 官方', baseUrl: 'https://api.openai.com/v1', api: 'openai-completions' },
   { key: 'anthropic', label: 'Anthropic 官方', baseUrl: 'https://api.anthropic.com', api: 'anthropic-messages' },
   { key: 'deepseek', label: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', api: 'openai-completions' },
@@ -32,7 +31,7 @@ export const PROVIDER_PRESETS = [
 // 晴辰云配置
 export const QTCOOL = {
   baseUrl: 'https://gpt.qt.cool/v1',
-  defaultKey: '',
+  defaultKey: 'sk-0JDu7hyc51ZKD4iNebpFu07EUEhXmVVc',
   site: 'https://gpt.qt.cool/',
   checkinUrl: 'https://gpt.qt.cool/checkin',
   usageUrl: 'https://gpt.qt.cool/user?key=',
@@ -70,12 +69,6 @@ export const MODEL_PRESETS = {
     { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', contextWindow: 1000000, reasoning: true },
     { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', contextWindow: 1000000 },
   ],
-  minimax: [
-    { id: 'MiniMax-M2.7', name: 'MiniMax M2.7', contextWindow: 1000000 },
-    { id: 'MiniMax-M2.7-highspeed', name: 'MiniMax M2.7 Highspeed', contextWindow: 1000000 },
-    { id: 'MiniMax-M2.5', name: 'MiniMax M2.5', contextWindow: 204000 },
-    { id: 'MiniMax-M2.5-highspeed', name: 'MiniMax M2.5 Highspeed', contextWindow: 204000 },
-  ],
   ollama: [
     { id: 'qwen2.5:7b', name: 'Qwen 2.5 7B', contextWindow: 32768 },
     { id: 'llama3.2', name: 'Llama 3.2', contextWindow: 8192 },
@@ -85,23 +78,14 @@ export const MODEL_PRESETS = {
 
 /**
  * 动态获取 QTCOOL 模型列表
- * @param {string} [apiKey] - 自定义密钥；未传时尝试从已有配置读取
+ * @param {string} [apiKey] - 自定义密钥，不传则用默认密钥
  * @returns {Promise<Array<{id:string, name:string, contextWindow:number, reasoning?:boolean}>>}
  */
 export async function fetchQtcoolModels(apiKey) {
-  let key = apiKey || QTCOOL.defaultKey
-  // 没有 key 时尝试从已有的 qtcool provider 配置读取
-  if (!key) {
-    try {
-      const { api } = await import('../lib/tauri-api.js')
-      const cfg = await api.readOpenclawConfig()
-      key = cfg?.models?.providers?.qtcool?.apiKey || ''
-    } catch { /* ignore */ }
-  }
+  const key = apiKey || QTCOOL.defaultKey
   try {
-    const headers = key ? { 'Authorization': 'Bearer ' + key } : {}
     const resp = await fetch(QTCOOL.baseUrl + '/models', {
-      headers,
+      headers: { 'Authorization': 'Bearer ' + key },
       signal: AbortSignal.timeout(8000)
     })
     if (resp.ok) {

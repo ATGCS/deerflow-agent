@@ -4,7 +4,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::fs;
 
-const DEVICE_KEY_FILE: &str = "deerpanel-device-key.json";
+const DEVICE_KEY_FILE: &str = "clawpanel-device-key.json";
 const SCOPES: &[&str] = &[
     "operator.admin",
     "operator.approvals",
@@ -13,8 +13,9 @@ const SCOPES: &[&str] = &[
     "operator.write",
 ];
 
-/// 获取或生成设备密�?pub(crate) fn get_or_create_key() -> Result<(String, String, SigningKey), String> {
-    let dir = super::deerpanel_dir();
+/// 获取或生成设备密钥
+pub(crate) fn get_or_create_key() -> Result<(String, String, SigningKey), String> {
+    let dir = super::openclaw_dir();
     let path = dir.join(DEVICE_KEY_FILE);
 
     if path.exists() {
@@ -37,7 +38,8 @@ const SCOPES: &[&str] = &[
         return Ok((device_id, pub_b64, signing_key));
     }
 
-    // 生成新密�?    let mut rng = rand::thread_rng();
+    // 生成新密钥
+    let mut rng = rand::thread_rng();
     let signing_key = SigningKey::generate(&mut rng);
     let verifying_key: VerifyingKey = (&signing_key).into();
     let pub_bytes = verifying_key.to_bytes();
@@ -63,12 +65,14 @@ const SCOPES: &[&str] = &[
     Ok((device_id, pub_b64, signing_key))
 }
 
-/// base64url 编码（无 padding�?fn base64_url_encode(data: &[u8]) -> String {
+/// base64url 编码（无 padding）
+fn base64_url_encode(data: &[u8]) -> String {
     use base64::Engine;
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(data)
 }
 
-/// hex 编码（ed25519_dalek 不自�?hex�?mod hex {
+/// hex 编码（ed25519_dalek 不自带 hex）
+mod hex {
     pub fn encode(data: impl AsRef<[u8]>) -> String {
         data.as_ref().iter().map(|b| format!("{b:02x}")).collect()
     }
@@ -83,7 +87,8 @@ const SCOPES: &[&str] = &[
     }
 }
 
-/// 生成 Gateway connect 帧（�?Ed25519 签名�?#[tauri::command]
+/// 生成 Gateway connect 帧（含 Ed25519 签名）
+#[tauri::command]
 pub fn create_connect_frame(nonce: String, gateway_token: String) -> Result<Value, String> {
     let (device_id, pub_b64, signing_key) = get_or_create_key()?;
     let signed_at = std::time::SystemTime::now()
@@ -96,9 +101,10 @@ pub fn create_connect_frame(nonce: String, gateway_token: String) -> Result<Valu
 
     let scopes_str = SCOPES.join(",");
     // v3 格式：v3|deviceId|clientId|clientMode|role|scopes|signedAt|token|nonce|platform|deviceFamily
-    // 使用 deerpanel-control-ui + ui 模式，使 Gateway 识别�?Control UI 客户端，
-    // 本地连接时触发静默自动配对（shouldAllowSilentLocalPairing = true�?    let payload_str = format!(
-        "v3|{device_id}|deerpanel-control-ui|ui|operator|{scopes_str}|{signed_at}|{gateway_token}|{nonce}|{platform}|{device_family}"
+    // 使用 openclaw-control-ui + ui 模式，使 Gateway 识别为 Control UI 客户端，
+    // 本地连接时触发静默自动配对（shouldAllowSilentLocalPairing = true）
+    let payload_str = format!(
+        "v3|{device_id}|openclaw-control-ui|ui|operator|{scopes_str}|{signed_at}|{gateway_token}|{nonce}|{platform}|{device_family}"
     );
 
     let signature = signing_key.sign(payload_str.as_bytes());
@@ -112,7 +118,7 @@ pub fn create_connect_frame(nonce: String, gateway_token: String) -> Result<Valu
             "minProtocol": 3,
             "maxProtocol": 3,
             "client": {
-                "id": "deerpanel-control-ui",
+                "id": "openclaw-control-ui",
                 "version": env!("CARGO_PKG_VERSION"),
                 "platform": platform,
                 "deviceFamily": device_family,
@@ -130,7 +136,7 @@ pub fn create_connect_frame(nonce: String, gateway_token: String) -> Result<Valu
                 "signature": sig_b64,
             },
             "locale": "zh-CN",
-            "userAgent": format!("DeerPanel/{}", env!("CARGO_PKG_VERSION")),
+            "userAgent": format!("ClawPanel/{}", env!("CARGO_PKG_VERSION")),
         }
     });
 
