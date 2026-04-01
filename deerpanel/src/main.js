@@ -1,5 +1,5 @@
 /**
- * ClawPanel 入口
+ * DeerPanel 入口
  */
 import { registerRoute, initRouter, navigate } from './router.js'
 import { renderSidebar, openMobileSidebar } from './components/sidebar.js'
@@ -74,7 +74,7 @@ function showBackendDownOverlay() {
       ${_logoSvg}
       <div class="login-title" style="color:var(--error,#ef4444)">后端未启动</div>
       <div class="login-desc" style="line-height:1.8">
-        ClawPanel 后端服务未运行，无法获取真实数据。<br>
+        DeerPanel 后端服务未运行，无法获取真实数据。<br>
         <span style="font-size:12px;color:var(--text-tertiary)">请在服务器上启动后端服务后刷新页面。</span>
       </div>
       <div style="background:var(--bg-tertiary);border-radius:var(--radius-md,8px);padding:14px 18px;margin:16px 0;text-align:left;font-family:var(--font-mono,monospace);font-size:12px;line-height:1.8;user-select:all;color:var(--text-secondary)">
@@ -154,7 +154,7 @@ function showLoginOverlay(defaultPw) {
   overlay.innerHTML = `
     <div class="login-card">
       ${_logoSvg}
-      <div class="login-title">ClawPanel</div>
+      <div class="login-title">DeerPanel</div>
       <div class="login-desc">${hasDefault
         ? '首次使用，默认密码已自动填充<br><span style="font-size:12px;color:#6366f1;font-weight:600">登录后请前往「安全设置」修改密码</span>'
         : (isTauri ? '应用已锁定，请输入密码' : '请输入访问密码')}</div>
@@ -549,7 +549,7 @@ async function checkGlobalUpdate() {
       <div class="update-banner-content">
         <div class="update-banner-text">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-          <span class="update-banner-ver">ClawPanel v${ver} 可用</span>
+          <span class="update-banner-ver">DeerPanel v${ver} 可用</span>
           ${changelog ? `<span class="update-banner-changelog">· ${changelog}</span>` : ''}
         </div>
         ${isWeb
@@ -584,7 +584,7 @@ npm run build
 sudo systemctl restart clawpanel</pre>
             <p style="margin-top:12px;color:var(--text-tertiary);font-size:var(--font-size-xs)">
               如果 git pull 失败，可先执行 <code style="background:var(--bg-tertiary);padding:2px 6px;border-radius:4px">git checkout -- .</code> 丢弃本地修改。<br>
-              路径请替换为实际的 ClawPanel 安装目录。
+              路径请替换为实际的 DeerPanel 安装目录。
             </p>
           </div>
           <div class="modal-actions">
@@ -654,7 +654,7 @@ function startUpdateChecker() {
         <div style="font-size:18px;font-weight:600;margin-bottom:8px;color:#18181b">页面加载失败</div>
         <div style="font-size:13px;color:#71717a;max-width:400px;line-height:1.6;margin-bottom:16px">${String(bootErr?.message || bootErr).replace(/</g,'&lt;')}</div>
         <button onclick="location.reload()" style="padding:8px 20px;border-radius:8px;border:none;background:#6366f1;color:#fff;font-size:13px;cursor:pointer">刷新重试</button>
-        <div style="margin-top:24px;font-size:11px;color:#a1a1aa">如果问题持续出现，请尝试重新安装 ClawPanel<br>或在 <a href="https://github.com/qingchencloud/clawpanel/issues" target="_blank" style="color:#6366f1">GitHub Issues</a> 反馈</div>
+        <div style="margin-top:24px;font-size:11px;color:#a1a1aa">如果问题持续出现，请尝试重新安装 DeerPanel<br>或在 <a href="https://github.com/qingchencloud/clawpanel/issues" target="_blank" style="color:#6366f1">GitHub Issues</a> 反馈</div>
       </div>`
   }
   startUpdateChecker()

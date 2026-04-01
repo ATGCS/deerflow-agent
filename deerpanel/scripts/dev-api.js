@@ -6,11 +6,15 @@ import fs from 'fs'
 import path from 'path'
 import { homedir } from 'os'
 import crypto from 'crypto'
+import { exec as _exec } from 'child_process'
+import { promisify } from 'util'
 
 const OPENCLAW_DIR = path.join(homedir(), '.deerpanel')
 const CONFIG_PATH = path.join(OPENCLAW_DIR, 'deerpanel.json')
 const PANEL_CONFIG_PATH = path.join(OPENCLAW_DIR, 'deerpanel.json')
 const DEERFLOW_GATEWAY_URL = process.env.DEERFLOW_GATEWAY_URL || 'http://localhost:2026'
+const PROJECT_ROOT = process.env.DEERFLOW_PROJECT_ROOT || path.resolve(process.cwd(), '..')
+const exec = promisify(_exec)
 
 // 会话管理
 const _sessions = new Map()
@@ -60,6 +64,36 @@ async function callGateway(pathname, options = {}) {
     throw new Error(String(detail))
   }
   return data
+}
+
+function resolveLogPath(logName) {
+  const filename = ({
+    gateway: 'gateway.log',
+    'gateway-err': 'gateway.err.log',
+    guardian: 'guardian.log',
+    'guardian-backup': 'guardian-backup.log',
+    'config-audit': 'config-audit.jsonl',
+  })[String(logName || 'gateway')] || 'gateway.log'
+
+  const candidates = [
+    path.join(PROJECT_ROOT, 'logs', filename),                    // DeerFlow 脚本日志
+    path.join(homedir(), '.openclaw', 'logs', filename),          // Tauri Rust 日志路径
+    path.join(OPENCLAW_DIR, 'logs', filename),                    // 旧 dev-api 目录
+  ]
+  return candidates.find((p) => fs.existsSync(p)) || candidates[0]
+}
+
+function readTail(content, lines) {
+  const all = String(content || '').split(/\r?\n/)
+  const n = Math.max(1, Number(lines || 200))
+  return all.slice(-n).join('\n').trim()
+}
+
+function resolveLocalPath(inputPath = '') {
+  const raw = String(inputPath || '').trim()
+  if (!raw) throw new Error('path is required')
+  if (path.isAbsolute(raw)) return raw
+  return path.resolve(PROJECT_ROOT, raw)
 }
 
 // 处理器
@@ -190,11 +224,58 @@ const handlers = {
 
   async get_status_summary() {
     return {}
-  }
+  },
+
+  // 助手文件/命令能力（供服务管理页面等复用）
+  async assistant_read_file(args) {
+    const p = resolveLocalPath(args?.path)
+    return fs.readFileSync(p, 'utf8')
+  },
+
+  async assistant_write_file(args) {
+    const p = resolveLocalPath(args?.path)
+    const content = String(args?.content ?? '')
+    fs.mkdirSync(path.dirname(p), { recursive: true })
+    fs.writeFileSync(p, content, 'utf8')
+    return { success: true, path: p }
+  },
+
+  async assistant_exec(args) {
+    const command = String(args?.command || '').trim()
+    if (!command) throw new Error('command is required')
+    const cwd = args?.cwd ? resolveLocalPath(args.cwd) : PROJECT_ROOT
+    const { stdout, stderr } = await exec(command, {
+      cwd,
+      windowsHide: true,
+      timeout: 30_000,
+      maxBuffer: 1024 * 1024 * 8,
+      shell: true,
+    })
+    return `${stdout || ''}${stderr || ''}`.trim()
+  },
+
+  // 日志读取（对齐 Tauri 命令）
+  async read_log_tail(args) {
+    const p = resolveLogPath(args?.logName || args?.log_name || 'gateway')
+    if (!fs.existsSync(p)) return ''
+    const raw = fs.readFileSync(p, 'utf8')
+    return readTail(raw, args?.lines)
+  },
+
+  async search_log(args) {
+    const p = resolveLogPath(args?.logName || args?.log_name || 'gateway')
+    if (!fs.existsSync(p)) return []
+    const query = String(args?.query || '').trim().toLowerCase()
+    if (!query) return []
+    const maxResults = Math.max(1, Number(args?.maxResults || args?.max_results || 50))
+    const lines = fs.readFileSync(p, 'utf8').split(/\r?\n/)
+    const matched = lines.filter((l) => l.toLowerCase().includes(query))
+    return matched.slice(-maxResults)
+  },
 }
 
 // 不需要认证的命令
-const PUBLIC_CMDS = new Set(['health', 'auth_check', 'auth_login', 'auth_logout', 'list_agents', 'agents_list', 'agents_get', 'agents_create', 'agents_update', 'agents_delete', 'read_deerpanel_config', 'get_services_status', 'check_installation', 'get_version_info', 'get_status_summary'])
+const PUBLIC_CMDS = new Set(['health', 'auth_check', 'auth_login', 'auth_logout', 'list_agents', 'agents_list', 'agents_get', 'agents_create', 'agents_update', 'agents_delete', 'read_deerpanel_config', 'get_services_status', 'check_installation', 'get_version_info', 'get_status_summary', 'read_log_tail', 'search_log', 'assistant_read_file', 'assistant_write_file', 'assistant_exec'])
 
 // API 中间件
 async function _apiMiddleware(req, res, next) {

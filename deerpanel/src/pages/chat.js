@@ -16,6 +16,7 @@ const STORAGE_MODEL_KEY = 'clawpanel-chat-selected-model'
 const STORAGE_SIDEBAR_KEY = 'clawpanel-chat-sidebar-open'
 const STORAGE_SESSION_NAMES_KEY = 'clawpanel-chat-session-names'
 const STORAGE_SESSION_META_KEY = 'clawpanel-chat-session-meta'
+const STORAGE_SESSION_TOKEN_STATS_KEY = 'clawpanel-chat-session-token-stats'
 
 const COMMANDS = [
   { title: '会话', commands: [
@@ -88,6 +89,7 @@ let _availableModels = []
 let _primaryModel = ''
 let _selectedModel = ''
 let _isApplyingModel = false
+let _modelCapabilities = {}
 
 // ── 托管 Agent ──
 const HOSTED_STATUS = { IDLE: 'idle', RUNNING: 'running', WAITING: 'waiting_reply', PAUSED: 'paused', ERROR: 'error' }
@@ -145,23 +147,12 @@ export async function render() {
           <span class="chat-title" id="chat-title">聊天</span>
         </div>
         <div class="chat-header-actions">
+          <div class="chat-token-stats" id="chat-token-stats" title="当前会话累计 Token 消耗">↑0 ↓0 · Σ0</div>
           <div class="chat-model-group">
             <select class="form-input" id="chat-model-select" title="切换当前会话模型" style="width:200px;max-width:28vw;padding:6px 10px;font-size:var(--font-size-xs)">
               <option value="">加载模型中...</option>
             </select>
-            <button class="btn btn-sm btn-ghost" id="btn-refresh-models" title="刷新模型列表">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
-            </button>
           </div>
-          <button class="btn btn-sm btn-ghost" id="btn-cmd" title="快捷指令">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M18 3a3 3 0 00-3 3v12a3 3 0 003 3 3 3 0 003-3 3 3 0 00-3-3H6a3 3 0 00-3 3 3 3 0 003 3 3 3 0 003-3V6a3 3 0 00-3-3 3 3 0 00-3 3 3 3 0 003 3h12a3 3 0 003-3 3 3 0 00-3-3z"/></svg>
-          </button>
-          <button class="btn btn-sm btn-ghost" id="btn-reset-session" title="重置会话">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/></svg>
-          </button>
-          <button class="btn btn-sm btn-ghost" id="btn-reload-history" title="刷新历史">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M3 12a9 9 0 109-9"/><polyline points="3 4 3 12 11 12"/></svg>
-          </button>
         </div>
       </div>
       <div class="chat-messages" id="chat-messages">
@@ -310,6 +301,7 @@ export async function render() {
   // 非阻塞：先返回 DOM，后台连接 Gateway
   connectGateway()
   renderModeControl()
+  renderTokenStats()
   syncQuickPromptsVisibility()
   return page
 }
@@ -327,8 +319,7 @@ function showPageGuide(container) {
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="28" height="28"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
       </div>
       <div class="chat-guide-content">
-        <b>已连接项目 Agent</b>
-        <p style="opacity:0.7;font-size:11px">需要通用问答或代码助手时，可切换到左侧「AI 助手」。</p>
+        <b>需要通用问答或代码助手时，可切换到左侧「AI 助手」。</b>
       </div>
       <button class="chat-guide-close" title="知道了">&times;</button>
     </div>
@@ -348,6 +339,8 @@ function bindEvents(page) {
       _selectedModel = _modelSelectEl.value
       if (_selectedModel) localStorage.setItem(STORAGE_MODEL_KEY, _selectedModel)
       else localStorage.removeItem(STORAGE_MODEL_KEY)
+      renderModeControl()
+      renderReasoningControl()
       applySelectedModel()
     })
   }
@@ -396,16 +389,6 @@ function bindEvents(page) {
   page.querySelector('#btn-toggle-sidebar')?.addEventListener('click', toggleSidebar)
   page.querySelector('#btn-toggle-sidebar-main')?.addEventListener('click', toggleSidebar)
   page.querySelector('#btn-new-session').addEventListener('click', () => createNewSessionQuick())
-  page.querySelector('#btn-cmd').addEventListener('click', () => toggleCmdPanel())
-  page.querySelector('#btn-reset-session').addEventListener('click', () => resetCurrentSession())
-  page.querySelector('#btn-reload-history')?.addEventListener('click', async () => {
-    if (!_sessionKey) return
-    clearMessages()
-    _lastHistoryHash = ''
-    await loadHistory()
-    toast('历史已刷新', 'success')
-  })
-  page.querySelector('#btn-refresh-models')?.addEventListener('click', () => loadModelOptions(true))
   page.querySelector('#chat-quick-prompts')?.addEventListener('click', (e) => {
     const btn = e.target.closest('[data-prompt]')
     if (!btn) return
@@ -419,12 +402,48 @@ function bindEvents(page) {
     e.stopPropagation()
     toggleModeMenu()
   })
+  page.querySelector('#chat-mode-btn')?.addEventListener('keydown', (e) => {
+    if (!['Enter', ' ', 'ArrowDown'].includes(e.key)) return
+    e.preventDefault()
+    const menu = page.querySelector('#chat-mode-menu')
+    if (!menu) return
+    menu.hidden = false
+    const items = Array.from(menu.querySelectorAll('.chat-mode-item:not([hidden])'))
+    const active = menu.querySelector('.chat-mode-item.active:not([hidden])')
+    const target = active || items[0]
+    target?.focus()
+  })
   page.querySelector('#chat-mode-menu')?.addEventListener('click', (e) => {
     e.preventDefault()
     e.stopPropagation()
     const item = e.target.closest('[data-mode]')
     if (!item) return
     applyModeOption(item.dataset.mode)
+  })
+  page.querySelector('#chat-mode-menu')?.addEventListener('keydown', (e) => {
+    const menu = page.querySelector('#chat-mode-menu')
+    if (!menu || menu.hidden) return
+    const items = Array.from(menu.querySelectorAll('.chat-mode-item:not([hidden])'))
+    if (!items.length) return
+    const currentIndex = items.findIndex((it) => it === document.activeElement)
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      menu.hidden = true
+      page.querySelector('#chat-mode-btn')?.focus()
+      return
+    }
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault()
+      const delta = e.key === 'ArrowDown' ? 1 : -1
+      const nextIndex = currentIndex < 0 ? 0 : (currentIndex + delta + items.length) % items.length
+      items[nextIndex]?.focus()
+      return
+    }
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault()
+      const focused = document.activeElement?.closest?.('.chat-mode-item')
+      if (focused?.dataset?.mode) applyModeOption(focused.dataset.mode)
+    }
   })
   page.addEventListener('click', (e) => {
     const modeWrap = page.querySelector('.chat-mode-wrap')
@@ -476,38 +495,53 @@ async function loadModelOptions(showToast = false) {
   _modelSelectEl.innerHTML = '<option value="">加载模型中...</option>'
   _modelSelectEl.disabled = true
   try {
-    invalidate('read_openclaw_config')
-    const configPromise = api.readOpenclawConfig()
-    const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('读取超时(8s)，请检查配置文件')), 8000))
-    const config = await Promise.race([configPromise, timeoutPromise])
-    const providers = config?.models?.providers || {}
-    _primaryModel = config?.agents?.defaults?.model?.primary || ''
+    const modelsRespPromise = fetch('/api/models', { method: 'GET' })
+      .then(async (resp) => {
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+        return resp.json()
+      })
+    const data = await modelsRespPromise
+    const rows = Array.isArray(data?.models) ? data.models : []
     const models = []
+    const capabilities = {}
     const seen = new Set()
-    if (_primaryModel) {
-      seen.add(_primaryModel)
-      models.push(_primaryModel)
-    }
-    for (const [providerKey, provider] of Object.entries(providers)) {
-      for (const item of (provider?.models || [])) {
-        const modelId = typeof item === 'string' ? item : item?.id
-        if (!modelId) continue
-        const full = `${providerKey}/${modelId}`
-        if (seen.has(full)) continue
-        seen.add(full)
-        models.push(full)
+    for (const item of rows) {
+      const name = (item?.name && typeof item.name === 'string') ? item.name : ''
+      if (!name || seen.has(name)) continue
+      seen.add(name)
+      models.push(name)
+      capabilities[name] = {
+        supportsThinking: item?.supports_thinking !== false,
+        supportsReasoningEffort: item?.supports_reasoning_effort !== false,
       }
     }
-    _availableModels = models
+    _primaryModel = ''
+    // 老版本体验：优先用当前会话上下文模型
+    const ctxModel = wsClient.getSessionContext(_sessionKey)?.model_name
+    if (ctxModel && typeof ctxModel === 'string' && !seen.has(ctxModel)) {
+      seen.add(ctxModel)
+      models.unshift(ctxModel)
+    }
     const saved = localStorage.getItem(STORAGE_MODEL_KEY) || ''
-    _selectedModel = models.includes(saved) ? saved : (_primaryModel || models[0] || '')
+    if (saved && !seen.has(saved)) {
+      seen.add(saved)
+      models.push(saved)
+    }
+    _availableModels = models
+    _modelCapabilities = capabilities
+    _selectedModel = models.includes(ctxModel) ? ctxModel : (models.includes(saved) ? saved : (models[0] || ''))
     renderModelSelect()
+    renderModeControl()
+    renderReasoningControl()
     if (showToast) toast(`已刷新，共 ${models.length} 个模型`, 'success')
   } catch (e) {
     _availableModels = []
     _primaryModel = ''
     _selectedModel = ''
-    renderModelSelect(`加载失败: ${e.message || e}`)
+    _modelCapabilities = {}
+    renderModelSelect(`模型接口不可用: ${e.message || e}`)
+    renderModeControl()
+    renderReasoningControl()
     if (showToast) toast('加载模型失败: ' + (e.message || e), 'error')
   }
 }
@@ -515,9 +549,20 @@ async function loadModelOptions(showToast = false) {
 function renderModelSelect(errorText = '') {
   if (!_modelSelectEl) return
   if (!_availableModels.length) {
-    _modelSelectEl.innerHTML = `<option value="">${escapeAttr(errorText || '未配置模型')}</option>`
+    const ctxModel = wsClient.getSessionContext(_sessionKey)?.model_name
+    const fallback = (typeof ctxModel === 'string' && ctxModel.trim())
+      ? ctxModel.trim()
+      : (_selectedModel || '')
+    if (fallback) {
+      _selectedModel = fallback
+      _modelSelectEl.innerHTML = `<option value="${escapeAttr(fallback)}" selected>${escapeHtml(fallback)}（当前）</option>`
+      _modelSelectEl.disabled = false
+      _modelSelectEl.title = `切换当前会话模型：${fallback}`
+      return
+    }
+    _modelSelectEl.innerHTML = `<option value="">${escapeAttr(errorText || '模型读取中…')}</option>`
     _modelSelectEl.disabled = true
-    _modelSelectEl.title = errorText || '请先到模型配置页面添加模型'
+    _modelSelectEl.title = errorText || '模型列表暂不可用'
     return
   }
   _modelSelectEl.disabled = _isApplyingModel
@@ -579,6 +624,63 @@ function getSessionMode(key) {
   if (raw === 'think') return 'thinking'
   if (raw === 'deep') return 'ultra'
   return raw || 'pro'
+}
+
+function getTokenStatsMap() {
+  try { return JSON.parse(localStorage.getItem(STORAGE_SESSION_TOKEN_STATS_KEY) || '{}') } catch { return {} }
+}
+
+function getSessionTokenStats(key) {
+  if (!key) return null
+  const map = getTokenStatsMap()
+  const s = map[key]
+  if (!s || typeof s !== 'object') return null
+  return {
+    input: Number(s.input) || 0,
+    output: Number(s.output) || 0,
+    total: Number(s.total) || 0,
+  }
+}
+
+function setSessionTokenStats(key, stats) {
+  if (!key) return
+  const map = getTokenStatsMap()
+  if (!stats || !stats.total) {
+    delete map[key]
+  } else {
+    map[key] = {
+      input: Number(stats.input) || 0,
+      output: Number(stats.output) || 0,
+      total: Number(stats.total) || 0,
+    }
+  }
+  localStorage.setItem(STORAGE_SESSION_TOKEN_STATS_KEY, JSON.stringify(map))
+}
+
+function renderTokenStats() {
+  const el = _page?.querySelector('#chat-token-stats')
+  if (!el) return
+  const s = getSessionTokenStats(_sessionKey)
+  if (!s) {
+    el.textContent = '↑0 ↓0 · Σ0'
+    el.title = '当前会话累计 Token 消耗'
+    return
+  }
+  el.textContent = `↑${s.input} ↓${s.output} · Σ${s.total}`
+  el.title = `当前会话累计 Token 消耗（输入 ${s.input}，输出 ${s.output}）`
+}
+
+function getSelectedModelCapability() {
+  const cap = _modelCapabilities?.[_selectedModel]
+  return {
+    supportsThinking: cap?.supportsThinking !== false,
+    supportsReasoningEffort: cap?.supportsReasoningEffort !== false,
+  }
+}
+
+function getResolvedMode(mode, supportsThinking) {
+  if (!supportsThinking && mode !== 'flash') return 'flash'
+  return mode || (supportsThinking ? 'pro' : 'flash')
 }
 
 function setSessionThinkLevel(key, level) {
@@ -676,7 +778,13 @@ function renderThinkingMenu() {
 
 function renderModeControl() {
   if (!_page || !_sessionKey) return
-  const selectedMode = getSessionMode(_sessionKey)
+  const { supportsThinking } = getSelectedModelCapability()
+  const currentMode = getSessionMode(_sessionKey)
+  const selectedMode = getResolvedMode(currentMode, supportsThinking)
+  if (selectedMode !== currentMode) {
+    setSessionMode(_sessionKey, selectedMode)
+    applySessionModePreset(_sessionKey, selectedMode)
+  }
   const btn = _page.querySelector('#chat-mode-btn')
   const labelEl = _page.querySelector('#chat-mode-label')
   const menu = _page.querySelector('#chat-mode-menu')
@@ -686,6 +794,9 @@ function renderModeControl() {
   btn.classList.toggle('active', lv !== 'Pro')
   menu.querySelectorAll('.chat-mode-item').forEach((item) => {
     const mode = item.dataset.mode || 'pro'
+    const visible = supportsThinking || mode === 'flash'
+    item.hidden = !visible
+    item.tabIndex = visible ? 0 : -1
     const active = mode === selectedMode
     item.classList.toggle('active', active)
     item.setAttribute('aria-checked', active ? 'true' : 'false')
@@ -697,6 +808,12 @@ function renderReasoningControl() {
   const btn = _page.querySelector('#chat-reasoning-btn')
   const labelEl = _page.querySelector('#chat-reasoning-label')
   if (!btn || !labelEl) return
+  const { supportsReasoningEffort } = getSelectedModelCapability()
+  const mode = getSessionMode(_sessionKey)
+  const visible = !!supportsReasoningEffort && mode !== 'flash'
+  const wrap = btn.closest('.chat-reasoning-wrap')
+  if (wrap) wrap.hidden = !visible
+  if (!visible) return
   const selected = getSessionReasoningEffort(_sessionKey)
   const menu = _page.querySelector('#chat-reasoning-menu')
   const lv = reasoningLabelFromSessionMeta(_sessionKey)
@@ -767,10 +884,13 @@ function applyModeOption(mode) {
   if (!_sessionKey) return
   const menu = _page?.querySelector('#chat-mode-menu')
   if (menu) menu.hidden = true
+  const { supportsThinking } = getSelectedModelCapability()
   const nextMode = ['flash', 'thinking', 'pro', 'ultra'].includes(mode) ? mode : 'pro'
-  setSessionMode(_sessionKey, nextMode)
-  applySessionModePreset(_sessionKey, nextMode)
+  const resolvedMode = getResolvedMode(nextMode, supportsThinking)
+  setSessionMode(_sessionKey, resolvedMode)
+  applySessionModePreset(_sessionKey, resolvedMode)
   renderModeControl()
+  renderReasoningControl()
   toast(`已切换为：${modeLabelFromSessionMeta(_sessionKey)}`, 'success')
 }
 
@@ -1075,6 +1195,7 @@ async function switchSession(newKey) {
   resetStreamState()
   updateSessionTitle()
   renderModeControl()
+  renderTokenStats()
   clearMessages()
   hideFollowups()
   _suggestionRecent = []
@@ -1085,6 +1206,55 @@ async function switchSession(newKey) {
   } catch (e) {
     console.warn('[chat] switchSession:', e)
   }
+}
+
+function pickUsageObject(source) {
+  if (!source || typeof source !== 'object') return null
+  const candidates = [
+    source.usage,
+    source.usage_metadata,
+    source.token_usage,
+    source.response_metadata?.usage,
+    source.response_metadata?.usage_metadata,
+    source.response_metadata?.token_usage,
+    source.additional_kwargs?.usage,
+    source.additional_kwargs?.usage_metadata,
+    source.additional_kwargs?.token_usage,
+    source.message?.usage,
+    source.message?.usage_metadata,
+    source.message?.token_usage,
+    source.message?.response_metadata?.usage,
+    source.message?.response_metadata?.usage_metadata,
+    source.message?.response_metadata?.token_usage,
+  ]
+  return candidates.find(x => x && typeof x === 'object') || null
+}
+
+function parseUsageToStats(raw) {
+  const usage = pickUsageObject(raw) || raw
+  if (!usage || typeof usage !== 'object') return null
+  const input = Number(
+    usage.input_tokens ??
+    usage.prompt_tokens ??
+    usage.promptTokens ??
+    usage.inputTokenCount ??
+    0,
+  ) || 0
+  const output = Number(
+    usage.output_tokens ??
+    usage.completion_tokens ??
+    usage.completionTokens ??
+    usage.outputTokenCount ??
+    0,
+  ) || 0
+  const total = Number(
+    usage.total_tokens ??
+    usage.totalTokenCount ??
+    usage.totalTokens ??
+    (input + output),
+  ) || 0
+  if (!total) return null
+  return { input, output, total }
 }
 
 async function createNewSessionQuick() {
@@ -1788,15 +1958,22 @@ function handleChatEvent(payload) {
       }
       if (durStr) parts.push(`<span class="meta-sep">·</span><span class="msg-duration">⏱ ${durStr}</span>`)
       // token 消耗（从 payload.usage 或 payload.message.usage 提取）
-      const usage = payload.usage || payload.message?.usage || null
-      if (usage) {
-        const inp = usage.input_tokens || usage.prompt_tokens || 0
-        const out = usage.output_tokens || usage.completion_tokens || 0
-        const total = usage.total_tokens || (inp + out)
+      const usageStats = parseUsageToStats(payload)
+      if (usageStats) {
+        const inp = usageStats.input
+        const out = usageStats.output
+        const total = usageStats.total
         if (total > 0) {
           let tokenStr = `${total} tokens`
           if (inp && out) tokenStr = `↑${inp} ↓${out}`
           parts.push(`<span class="meta-sep">·</span><span class="msg-tokens">${tokenStr}</span>`)
+          const prev = getSessionTokenStats(_sessionKey) || { input: 0, output: 0, total: 0 }
+          setSessionTokenStats(_sessionKey, {
+            input: prev.input + inp,
+            output: prev.output + out,
+            total: prev.total + total,
+          })
+          renderTokenStats()
         }
       }
       meta.innerHTML = parts.join('')
@@ -2166,6 +2343,16 @@ async function loadHistory() {
       return
     }
     const deduped = dedupeHistory(result.messages)
+    const usageTotals = (result.messages || []).reduce((acc, m) => {
+      const u = parseUsageToStats(m)
+      if (!u) return acc
+      acc.input += u.input
+      acc.output += u.output
+      acc.total += u.total
+      return acc
+    }, { input: 0, output: 0, total: 0 })
+    setSessionTokenStats(key, usageTotals.total ? usageTotals : null)
+    renderTokenStats()
     _suggestionRecent = deduped
       .filter(m => m && (m.role === 'user' || m.role === 'assistant') && (m.text || '').trim())
       .map(m => ({ role: m.role, content: (m.text || '').trim() }))

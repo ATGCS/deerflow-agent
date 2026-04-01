@@ -1,6 +1,6 @@
 /**
  * 面板设置页面
- * 统一管理 ClawPanel 的网络代理、npm 源、模型代理等配置
+ * 统一管理 DeerPanel 的网络代理、npm 源、模型代理等配置
  */
 import { api } from '../lib/tauri-api.js'
 import { toast } from '../components/toast.js'
@@ -25,7 +25,7 @@ export async function render() {
   page.innerHTML = `
     <div class="page-header">
       <h1 class="page-title">面板设置</h1>
-      <p class="page-desc">管理 ClawPanel 的网络、代理和下载源配置</p>
+      <p class="page-desc">管理 DeerPanel 的网络、代理和下载源配置</p>
     </div>
 
     <div class="config-section" id="proxy-section">

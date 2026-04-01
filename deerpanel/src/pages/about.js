@@ -14,9 +14,9 @@ export async function render() {
 
   page.innerHTML = `
     <div class="page-header" style="display:flex;align-items:center;gap:16px">
-      <img src="/images/logo-brand.png" alt="ClawPanel" style="height:48px;width:auto">
+      <img src="/images/logo-brand.png" alt="DeerPanel" style="height:48px;width:auto">
       <div>
-        <h1 class="page-title" style="margin:0">ClawPanel</h1>
+        <h1 class="page-title" style="margin:0">DeerPanel</h1>
         <p class="page-desc" style="margin:0">OpenClaw 可视化管理面板 · <a href="https://claw.qt.cool" target="_blank" rel="noopener" style="color:var(--primary)">claw.qt.cool</a></p>
       </div>
     </div>
@@ -46,7 +46,7 @@ export async function render() {
       <div id="company-section"></div>
     </div>
     <div class="config-section" style="color:var(--text-tertiary);font-size:var(--font-size-xs)">
-      <p>ClawPanel 基于 Tauri v2 构建，前端 Vanilla JS + Vite，后端 Rust。</p>
+      <p>DeerPanel 基于 Tauri v2 构建，前端 Vanilla JS + Vite，后端 Rust。</p>
       <p style="margin-top:8px">MIT License &copy; 2026 武汉晴辰天下网络科技有限公司</p>
     </div>
   `
@@ -68,7 +68,7 @@ async function loadData(page) {
       api.systemInstallation(),
     ])
 
-    // 尝试从 Tauri API 获取 ClawPanel 自身版本号，失败则 fallback
+    // 尝试从 Tauri API 获取 DeerPanel 自身版本号，失败则 fallback
     let panelVersion = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.1.0'
     try {
       const { getVersion } = await import('@tauri-apps/api/app')
@@ -93,7 +93,7 @@ async function loadData(page) {
 
     cards.innerHTML = `
       <div class="stat-card">
-        <div class="stat-card-header"><span class="stat-card-label">ClawPanel</span></div>
+        <div class="stat-card-header"><span class="stat-card-label">DeerPanel</span></div>
         <div class="stat-card-value">${panelVersion}</div>
         <div class="stat-card-meta" id="panel-update-meta" style="display:flex;align-items:center;gap:8px">${panelUpdateHtml}</div>
       </div>
@@ -536,7 +536,7 @@ const PROJECTS = [
     url: 'https://github.com/1186258278/OpenClawChineseTranslation',
   },
   {
-    name: 'ClawPanel',
+    name: 'DeerPanel',
     desc: 'OpenClaw 可视化管理面板，Tauri v2 桌面应用',
     url: 'https://github.com/qingchencloud/clawpanel',
     gitee: 'https://gitee.com/QtCodeCreators/clawpanel',
@@ -582,7 +582,7 @@ function renderContribute(page) {
   const el = page.querySelector('#contribute-section')
   el.innerHTML = `
     <div style="font-size:var(--font-size-sm);color:var(--text-secondary);margin-bottom:12px">
-      ClawPanel 是开源项目，欢迎参与贡献！遇到问题请提 Issue，功能建议和代码改进欢迎提 PR。
+      DeerPanel 是开源项目，欢迎参与贡献！遇到问题请提 Issue，功能建议和代码改进欢迎提 PR。
     </div>
     <div style="display:flex;flex-wrap:wrap;gap:8px">
       <a class="btn btn-primary btn-sm" href="https://github.com/qingchencloud/clawpanel/issues/new" target="_blank" rel="noopener">提交 Issue</a>
@@ -633,7 +633,7 @@ function renderCompany(page) {
         </div>
       </div>
       <div style="font-size:var(--font-size-xs);color:var(--text-tertiary);line-height:1.6">
-        我们是 OpenClaw 汉化版（3000+ Star）和 ClawPanel 的作者团队。日常做 AI Agent 相关的产品和开源工具，也接企业私有化部署、定制开发之类的活儿。有事直接群里找我们就行。
+        我们是 OpenClaw 汉化版（3000+ Star）和 DeerPanel 的作者团队。日常做 AI Agent 相关的产品和开源工具，也接企业私有化部署、定制开发之类的活儿。有事直接群里找我们就行。
       </div>
     </div>
   `

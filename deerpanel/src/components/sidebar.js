@@ -337,7 +337,7 @@ async function _showAddInstanceDialog(sidebarEl) {
         <input class="form-input" id="inst-gw-port" type="number" value="18789" />
       </div>
       <div class="docker-dialog-hint">
-        远程服务器需要运行 ClawPanel (serve.js)。<br/>
+        远程服务器需要运行 DeerPanel (serve.js)。<br/>
         示例: <code>http://192.168.1.100:1420</code>
       </div>
       <div id="inst-add-error" style="color:var(--error);font-size:12px;margin-top:var(--space-sm)"></div>
