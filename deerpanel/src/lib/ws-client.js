@@ -642,6 +642,57 @@ export class WsClient {
     return { messages: result, valuesSnapshot: values }
   }
 
+  async chatSuggestions(sessionKey, n = 3, modelName = undefined, recentMessages = undefined) {
+    const key = sessionKey || MAIN_SESSION_KEY
+    const map = loadSessionMap()
+    const threadId = map[key]?.threadId
+    if (!threadId) return { suggestions: [] }
+
+    let recent = []
+    if (Array.isArray(recentMessages) && recentMessages.length) {
+      recent = recentMessages
+        .map(m => ({
+          role: m?.role === 'assistant' ? 'assistant' : 'user',
+          content: (typeof m?.content === 'string' ? m.content : '').trim(),
+        }))
+        .filter(x => x.content)
+        .slice(-6)
+    } else {
+      const state = await fetchJson(`/api/langgraph/threads/${encodeURIComponent(threadId)}/state`)
+      const values = state?.values && typeof state.values === 'object' ? state.values : null
+      const all = Array.isArray(values?.messages) ? values.messages : []
+      recent = all
+        .filter(m => isHumanMessage(m) || isAssistantMessage(m))
+        .map(m => {
+          const role = isHumanMessage(m) ? 'user' : 'assistant'
+          const content = (extractAssistantText(m) || '').trim()
+          return { role, content }
+        })
+        .filter(x => x.content)
+        .slice(-6)
+    }
+
+    if (!recent.length) return { suggestions: [] }
+
+    const data = await fetchJson(`/api/threads/${encodeURIComponent(threadId)}/suggestions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        messages: recent,
+        n: Math.max(1, Math.min(5, Number(n) || 3)),
+        model_name: modelName,
+      }),
+    })
+
+    const suggestions = Array.isArray(data?.suggestions) ? data.suggestions : []
+    return {
+      suggestions: suggestions
+        .map(s => (typeof s === 'string' ? s.trim() : ''))
+        .filter(Boolean)
+        .slice(0, 5),
+    }
+  }
+
   chatAbort(sessionKey, runId) {
     const key = sessionKey || MAIN_SESSION_KEY
     const targetRunId = runId || this._latestRunBySession.get(key)
@@ -830,7 +881,7 @@ export class WsClient {
   }
 }
 
-/** 供历史加载/外部同步：从 LangGraph checkpoint values 生成左栏状态 */
+/** 供历史加载/外部同步：从 LangGraph checkpoint values 生成输入区上方线程面板状态 */
 export function threadStatePayloadFromValues(sessionKey, values) {
   if (!values || typeof values !== 'object') return null
   const { messages, todos, title } = normalizeStreamValues(values)

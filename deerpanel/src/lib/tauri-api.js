@@ -271,6 +271,10 @@ export const api = {
     const { wsClient } = await import('./ws-client.js')
     return { context: wsClient.getSessionContext(sessionKey) }
   },
+  chatSuggestions: async (sessionKey, n = 3, modelName = undefined, recentMessages = undefined) => {
+    const { wsClient } = await import('./ws-client.js')
+    return wsClient.chatSuggestions(sessionKey, n, modelName, recentMessages)
+  },
 
   // 日志（短缓存）
   readLogTail: (logName, lines = 100) => cachedInvoke('read_log_tail', { logName, lines }, 5000),

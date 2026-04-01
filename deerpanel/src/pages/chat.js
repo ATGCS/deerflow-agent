@@ -67,6 +67,8 @@ let _sessionKey = null, _page = null, _messagesEl = null, _textarea = null
 let _sendBtn = null, _statusDot = null, _typingEl = null, _scrollBtn = null
 let _sessionListEl = null, _cmdPanelEl = null, _attachPreviewEl = null, _fileInputEl = null
 let _modelSelectEl = null
+let _followupsEl = null, _followupsAbort = null, _lastSuggestionRunId = null
+let _suggestionRecent = []
 let _currentAiBubble = null, _currentAiText = '', _currentAiImages = [], _currentAiVideos = [], _currentAiAudios = [], _currentAiFiles = [], _currentAiTools = [], _currentRunId = null
 let _isStreaming = false, _isSending = false, _messageQueue = [], _streamStartTime = 0
 let _lastRenderTime = 0, _renderPending = false, _lastHistoryHash = ''
@@ -132,25 +134,6 @@ export async function render() {
         </button>
         </div>
       </div>
-      <div class="chat-sidebar-thread" id="chat-sidebar-thread">
-        <div class="chat-sidebar-thread-title" id="chat-sidebar-title" hidden></div>
-        <div class="chat-sidebar-section">
-          <div class="chat-sidebar-section-label">进行状态</div>
-          <div class="chat-sidebar-activity" id="chat-sidebar-activity">—</div>
-        </div>
-        <div class="chat-sidebar-section" id="chat-sidebar-reasoning-wrap" hidden>
-          <div class="chat-sidebar-section-label">思考</div>
-          <pre class="chat-sidebar-reasoning" id="chat-sidebar-reasoning"></pre>
-        </div>
-        <div class="chat-sidebar-section" id="chat-sidebar-clarify-wrap" hidden>
-          <div class="chat-sidebar-section-label">待确认</div>
-          <div class="chat-sidebar-clarify" id="chat-sidebar-clarify"></div>
-        </div>
-        <div class="chat-sidebar-section" id="chat-sidebar-todos-wrap" hidden>
-          <div class="chat-sidebar-section-label">任务</div>
-          <ul class="chat-sidebar-todos" id="chat-sidebar-todos"></ul>
-        </div>
-      </div>
       <div class="chat-session-list" id="chat-session-list"></div>
     </div>
     <div class="chat-main">
@@ -187,13 +170,60 @@ export async function render() {
         </div>
       </div>
       <button class="chat-scroll-btn" id="chat-scroll-btn" style="display:none">↓</button>
+      <div class="chat-compose-stack">
+      <div class="chat-thread-panel" id="chat-thread-panel" hidden>
+        <div class="chat-sidebar-thread-title" id="chat-sidebar-title" hidden></div>
+        <div class="chat-sidebar-section">
+          <div class="chat-sidebar-section-label">进行状态</div>
+          <div class="chat-sidebar-activity" id="chat-sidebar-activity">—</div>
+        </div>
+        <div class="chat-sidebar-section" id="chat-sidebar-reasoning-wrap" hidden>
+          <div class="chat-sidebar-section-label">思考</div>
+          <pre class="chat-sidebar-reasoning" id="chat-sidebar-reasoning"></pre>
+        </div>
+        <div class="chat-sidebar-section" id="chat-sidebar-clarify-wrap" hidden>
+          <div class="chat-sidebar-section-label">待确认</div>
+          <div class="chat-sidebar-clarify" id="chat-sidebar-clarify"></div>
+        </div>
+        <div class="chat-sidebar-section" id="chat-sidebar-todos-wrap" hidden>
+          <div class="chat-sidebar-section-label">任务进度</div>
+          <ul class="chat-sidebar-todos" id="chat-sidebar-todos"></ul>
+        </div>
+      </div>
       <div class="chat-cmd-panel" id="chat-cmd-panel" style="display:none"></div>
+      <div class="chat-followups" id="chat-followups" hidden></div>
       <div class="chat-attachments-preview" id="chat-attachments-preview" style="display:none"></div>
       <div class="chat-input-area">
         <input type="file" id="chat-file-input" accept="image/*" multiple style="display:none">
         <button class="chat-attach-btn" id="chat-attach-btn" title="上传图片">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
         </button>
+        <div class="chat-think-wrap">
+          <button class="chat-think-btn" id="chat-think-btn" title="思考强度">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" aria-hidden="true"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 00-4 12.8c.5.4 1 1.1 1 1.8V17h6v-.4c0-.7.5-1.4 1-1.8A7 7 0 0012 2z"/></svg>
+            <span class="chat-think-label" id="chat-think-label">思考: 中</span>
+            <span class="chat-think-caret" aria-hidden="true">▾</span>
+          </button>
+          <div class="chat-think-menu" id="chat-think-menu" hidden>
+            <button class="chat-think-item" data-think="off">关闭</button>
+            <button class="chat-think-item" data-think="low">低</button>
+            <button class="chat-think-item" data-think="medium">中</button>
+            <button class="chat-think-item" data-think="high">高</button>
+          </div>
+        </div>
+        <div class="chat-mode-wrap">
+          <button class="chat-mode-btn" id="chat-mode-btn" title="会话模式">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" aria-hidden="true"><path d="M12 2l2.4 6.2L21 9l-5 4 1.6 6.8L12 16.8 6.4 19.8 8 13.1 3 9l6.6-.8L12 2z"/></svg>
+            <span class="chat-mode-label" id="chat-mode-label">模式: 普通</span>
+            <span class="chat-mode-caret" aria-hidden="true">▾</span>
+          </button>
+          <div class="chat-mode-menu" id="chat-mode-menu" hidden>
+            <button class="chat-mode-item" data-mode="normal">普通</button>
+            <button class="chat-mode-item" data-mode="fast">快速</button>
+            <button class="chat-mode-item" data-mode="think">深度思考</button>
+            <button class="chat-mode-item" data-mode="deep">深入研究</button>
+          </div>
+        </div>
         <div class="chat-input-wrapper">
           <textarea id="chat-input" rows="1" placeholder="输入消息，Enter 发送，/ 打开指令"></textarea>
         </div>
@@ -204,6 +234,7 @@ export async function render() {
           <span class="chat-hosted-label">⊕</span>
           <span class="chat-hosted-badge idle" id="chat-hosted-badge">托管</span>
         </button>
+      </div>
       </div>
       <div class="hosted-agent-panel" id="hosted-agent-panel" style="display:none">
         <div class="hosted-agent-header">
@@ -254,6 +285,7 @@ export async function render() {
   _scrollBtn = page.querySelector('#chat-scroll-btn')
   _sessionListEl = page.querySelector('#chat-session-list')
   _cmdPanelEl = page.querySelector('#chat-cmd-panel')
+  _followupsEl = page.querySelector('#chat-followups')
   _attachPreviewEl = page.querySelector('#chat-attachments-preview')
   _fileInputEl = page.querySelector('#chat-file-input')
   _modelSelectEl = page.querySelector('#chat-model-select')
@@ -278,6 +310,8 @@ export async function render() {
   loadModelOptions()
   // 非阻塞：先返回 DOM，后台连接 Gateway
   connectGateway()
+  renderThinkingControl()
+  renderModeControl()
   return page
 }
 
@@ -374,6 +408,37 @@ function bindEvents(page) {
     toast('历史已刷新', 'success')
   })
   page.querySelector('#btn-refresh-models')?.addEventListener('click', () => loadModelOptions(true))
+  page.querySelector('#chat-think-btn')?.addEventListener('click', (e) => {
+    e.stopPropagation()
+    toggleThinkingMenu()
+  })
+  page.querySelector('#chat-think-menu')?.addEventListener('click', (e) => {
+    e.preventDefault()
+    e.stopPropagation()
+    const item = e.target.closest('[data-think]')
+    if (!item) return
+    applyThinkingLevel(item.dataset.think)
+  })
+  page.querySelector('#chat-mode-btn')?.addEventListener('click', (e) => {
+    e.stopPropagation()
+    toggleModeMenu()
+  })
+  page.querySelector('#chat-mode-menu')?.addEventListener('click', (e) => {
+    e.preventDefault()
+    e.stopPropagation()
+    const item = e.target.closest('[data-mode]')
+    if (!item) return
+    applyModeOption(item.dataset.mode)
+  })
+  page.addEventListener('click', (e) => {
+    const thinkWrap = page.querySelector('.chat-think-wrap')
+    const modeWrap = page.querySelector('.chat-mode-wrap')
+    if ((thinkWrap && thinkWrap.contains(e.target)) || (modeWrap && modeWrap.contains(e.target))) return
+    const thinkMenu = page.querySelector('#chat-think-menu')
+    if (thinkMenu) thinkMenu.hidden = true
+    const modeMenu = page.querySelector('#chat-mode-menu')
+    if (modeMenu) modeMenu.hidden = true
+  })
 
   // 文件上传
   page.querySelector('#chat-attach-btn').addEventListener('click', () => _fileInputEl.click())
@@ -498,12 +563,132 @@ function getSessionMode(key) {
   return getSessionMetaMap()[key]?.mode || 'normal'
 }
 
+function setSessionThinkLevel(key, level) {
+  if (!key) return
+  const map = getSessionMetaMap()
+  const cur = map[key] || {}
+  if (level && level !== 'medium') {
+    map[key] = { ...cur, thinkLevel: level }
+  } else {
+    // 'medium' 作为默认值，不落库
+    const next = { ...cur }
+    delete next.thinkLevel
+    if (Object.keys(next).length) map[key] = next
+    else delete map[key]
+  }
+  localStorage.setItem(STORAGE_SESSION_META_KEY, JSON.stringify(map))
+}
+
+function getSessionThinkLevel(key) {
+  return getSessionMetaMap()[key]?.thinkLevel || 'medium'
+}
+
 function getSidebarOpen() {
   return localStorage.getItem(STORAGE_SIDEBAR_KEY) === '1'
 }
 
 function setSidebarOpen(open) {
   localStorage.setItem(STORAGE_SIDEBAR_KEY, open ? '1' : '0')
+}
+
+function thinkingLabelFromContext(ctx) {
+  if (!ctx?.thinking_enabled) return '关'
+  return '中'
+}
+
+function modeLabelFromSessionMeta(sessionKey) {
+  const v = getSessionMode(sessionKey)
+  if (v === 'fast') return '快速'
+  if (v === 'think') return '深度思考'
+  if (v === 'deep') return '深入研究'
+  return '普通'
+}
+
+function renderThinkingControl() {
+  if (!_page || !_sessionKey) return
+  const btn = _page.querySelector('#chat-think-btn')
+  const labelEl = _page.querySelector('#chat-think-label')
+  if (!btn || !labelEl) return
+  const ctx = wsClient.getSessionContext(_sessionKey)
+  const selected = getSessionThinkLevel(_sessionKey)
+  const map = { off: '关', low: '低', medium: '中', high: '高' }
+  const lv = map[selected] || thinkingLabelFromContext(ctx)
+  labelEl.textContent = `思考: ${lv}`
+  btn.classList.toggle('active', lv !== '关')
+}
+
+function renderModeControl() {
+  if (!_page || !_sessionKey) return
+  const btn = _page.querySelector('#chat-mode-btn')
+  const labelEl = _page.querySelector('#chat-mode-label')
+  if (!btn || !labelEl) return
+  const selectedMode = getSessionMode(_sessionKey)
+  const menu = _page.querySelector('#chat-mode-menu')
+  const lv = modeLabelFromSessionMeta(_sessionKey)
+  labelEl.textContent = `模式: ${lv}`
+  btn.classList.toggle('active', lv !== '普通')
+  if (menu) {
+    menu.querySelectorAll('.chat-mode-item').forEach((item) => {
+      const mode = item.dataset.mode || 'normal'
+      const active = mode === selectedMode
+      item.classList.toggle('active', active)
+      item.setAttribute('aria-checked', active ? 'true' : 'false')
+    })
+  }
+}
+
+function toggleThinkingMenu() {
+  if (!_page) return
+  const menu = _page.querySelector('#chat-think-menu')
+  if (!menu) return
+  menu.hidden = !menu.hidden
+}
+
+function toggleModeMenu() {
+  if (!_page) return
+  const menu = _page.querySelector('#chat-mode-menu')
+  if (!menu) return
+  menu.hidden = !menu.hidden
+}
+
+function applyThinkingLevel(level) {
+  if (!_sessionKey) return
+  const menu = _page?.querySelector('#chat-think-menu')
+  if (menu) menu.hidden = true
+  let contextUpdate = null
+  let tip = ''
+  if (level === 'off') {
+    contextUpdate = { thinking_enabled: false }
+    tip = '已关闭思考'
+    setSessionThinkLevel(_sessionKey, 'off')
+  } else if (level === 'low') {
+    contextUpdate = { thinking_enabled: true }
+    tip = '已设置为低思考'
+    setSessionThinkLevel(_sessionKey, 'low')
+  } else if (level === 'medium') {
+    contextUpdate = { thinking_enabled: true }
+    tip = '已设置为中思考'
+    setSessionThinkLevel(_sessionKey, 'medium')
+  } else if (level === 'high') {
+    contextUpdate = { thinking_enabled: true }
+    tip = '已设置为高思考'
+    setSessionThinkLevel(_sessionKey, 'high')
+  }
+  if (!contextUpdate) return
+  api.chatUpdateContext(_sessionKey, contextUpdate)
+  renderThinkingControl()
+  toast(tip, 'success')
+}
+
+function applyModeOption(mode) {
+  if (!_sessionKey) return
+  const menu = _page?.querySelector('#chat-mode-menu')
+  if (menu) menu.hidden = true
+  const nextMode = ['normal', 'fast', 'think', 'deep'].includes(mode) ? mode : 'normal'
+  setSessionMode(_sessionKey, nextMode)
+  // 模式用于“会话类型”的单选 UI（对齐 Web），不强制改动“思考强度”开关，避免两个控件互相影响
+  renderModeControl()
+  toast(`已切换为：${modeLabelFromSessionMeta(_sessionKey)}`, 'success')
 }
 
 async function applySelectedModel() {
@@ -641,6 +826,8 @@ async function connectGateway() {
         _sessionKey = saved || sessionKey
         updateSessionTitle()
       }
+      renderThinkingControl()
+      renderModeControl()
       // 先与 Web 端一致从 LangGraph threads/search 拉回映射，再加载历史，避免刷新后本地映射空导致列表/消息全丢
       await refreshSessionList()
       loadHistory()
@@ -658,6 +845,8 @@ async function connectGateway() {
       updateStatusDot('ready')
       showTyping(false)  // 确保关闭加载动画
       updateSessionTitle()
+      renderThinkingControl()
+      renderModeControl()
       await refreshSessionList()
       loadHistory()
       return
@@ -792,7 +981,10 @@ async function switchSession(newKey) {
   _lastHistoryHash = ''
   resetStreamState()
   updateSessionTitle()
+  renderThinkingControl()
   clearMessages()
+  hideFollowups()
+  _suggestionRecent = []
   clearThreadSidebar()
   try {
     await refreshSessionList()
@@ -917,6 +1109,7 @@ async function applySessionModePreset(sessionKey, mode) {
     if (contextUpdate) {
       api.chatUpdateContext(sessionKey, contextUpdate)
       if (sessionKey === _sessionKey) {
+        renderThinkingControl()
         appendSystemMessage(`已应用会话类型：${preset.label}`)
       }
     }
@@ -1033,6 +1226,82 @@ function hideCmdPanel() {
   if (_cmdPanelEl) _cmdPanelEl.style.display = 'none'
 }
 
+function hideFollowups() {
+  if (_followupsAbort) {
+    try { _followupsAbort.abort() } catch {}
+    _followupsAbort = null
+  }
+  if (_followupsEl) {
+    _followupsEl.hidden = true
+    _followupsEl.innerHTML = ''
+    _followupsEl.onclick = null
+  }
+}
+
+function pushSuggestionRecent(role, content) {
+  const text = (content || '').trim()
+  if (!text) return
+  _suggestionRecent.push({ role: role === 'assistant' ? 'assistant' : 'user', content: text })
+  if (_suggestionRecent.length > 12) _suggestionRecent = _suggestionRecent.slice(-12)
+}
+
+async function fetchFollowups(runId) {
+  if (!_followupsEl || !_sessionKey) return
+  if (_lastSuggestionRunId === runId) return
+  _lastSuggestionRunId = runId
+  hideFollowups()
+  const controller = new AbortController()
+  _followupsAbort = controller
+  // 后台静默生成：请求进行中不展示任何占位
+  _followupsEl.hidden = true
+  _followupsEl.innerHTML = ''
+  try {
+    const ctx = wsClient.getSessionContext(_sessionKey)
+    // 与 Web 对齐：仅传 thread context 的 model_name，避免面板选择值与后端模型名格式不一致导致 suggestions 为空
+    const modelName = ctx?.model_name || undefined
+    const recent = _suggestionRecent.slice(-6)
+    const res = await Promise.race([
+      api.chatSuggestions(_sessionKey, 3, modelName, recent),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 120000)),
+    ])
+    if (controller.signal.aborted) return
+    const suggestions = Array.isArray(res?.suggestions) ? res.suggestions : []
+    if (!suggestions.length) {
+      // 为空时保持隐藏，不打扰输入区
+      _followupsEl.hidden = true
+      _followupsEl.innerHTML = ''
+      _followupsEl.onclick = null
+      return
+    }
+    _followupsEl.innerHTML = suggestions.map((s, i) =>
+      `<button class="chat-followup-chip" data-sidx="${i}" title="${escapeAttr(s)}">${escapeHtml(s)}</button>`
+    ).join('')
+    _followupsEl.hidden = false
+    _followupsEl.onclick = (e) => {
+      const btn = e.target.closest('[data-sidx]')
+      if (!btn) return
+      const idx = parseInt(btn.dataset.sidx, 10)
+      const text = suggestions[idx] || ''
+      if (!text) return
+      _textarea.value = text
+      _textarea.style.height = 'auto'
+      _textarea.style.height = Math.min(_textarea.scrollHeight, 150) + 'px'
+      updateSendState()
+      sendMessage()
+    }
+  } catch {
+    _followupsEl.hidden = false
+    _followupsEl.innerHTML = '<span class="chat-followup-loading">后续问题生成失败</span><button class="chat-followup-retry" data-retry="1">重试</button>'
+    _followupsEl.onclick = (e) => {
+      const btn = e.target.closest('[data-retry]')
+      if (!btn) return
+      fetchFollowups(runId)
+    }
+  } finally {
+    if (_followupsAbort === controller) _followupsAbort = null
+  }
+}
+
 function toggleCmdPanel() {
   if (_cmdPanelEl?.style.display === 'block') hideCmdPanel()
   else { _textarea.value = '/'; showCmdPanel(); _textarea.focus() }
@@ -1050,6 +1319,7 @@ function sendMessage() {
     return
   }
   hideCmdPanel()
+  hideFollowups()
   _textarea.value = ''
   _textarea.style.height = 'auto'
   updateSendState()
@@ -1075,15 +1345,19 @@ function handleCommand(text) {
     if (level === 'off') {
       contextUpdate = { thinking_enabled: false }
       message = '已关闭深度思考'
+      setSessionThinkLevel(_sessionKey, 'off')
     } else if (level === 'low') {
       contextUpdate = { thinking_enabled: true }
       message = '已设置为轻度思考'
+      setSessionThinkLevel(_sessionKey, 'low')
     } else if (level === 'medium') {
       contextUpdate = { thinking_enabled: true }
       message = '已设置为中度思考'
+      setSessionThinkLevel(_sessionKey, 'medium')
     } else if (level === 'high') {
       contextUpdate = { thinking_enabled: true }
       message = '已设置为深度思考'
+      setSessionThinkLevel(_sessionKey, 'high')
     }
   } else if (trimmed.startsWith('/reasoning ')) {
     const level = trimmed.split(' ')[1]
@@ -1138,6 +1412,7 @@ function handleCommand(text) {
 
   if (contextUpdate) {
     api.chatUpdateContext(_sessionKey, contextUpdate)
+    renderThinkingControl()
     appendSystemMessage(message)
     toast(message, 'success')
     return true
@@ -1148,6 +1423,7 @@ function handleCommand(text) {
 
 async function doSend(text, attachments = []) {
   if (!_sessionKey) _sessionKey = localStorage.getItem(STORAGE_SESSION_KEY) || 'agent:main:main'
+  pushSuggestionRecent('user', text)
   appendUserMessage(text, attachments)
   saveMessage({
     id: uuid(), sessionKey: _sessionKey, role: 'user', content: text, timestamp: Date.now(),
@@ -1177,7 +1453,26 @@ function stopGeneration() {
   if (_currentRunId) api.chatAbort(_sessionKey, _currentRunId).catch(() => {})
 }
 
-// ── 左侧线程状态（对齐 Web 版 values / 澄清 / todos） ──
+// ── 底部输入框上方的线程状态（对齐 Web：TodoList 叠在 InputBox 上） ──
+
+function syncThreadPanelVisibility() {
+  if (!_page) return
+  const panel = _page.querySelector('#chat-thread-panel')
+  if (!panel) return
+  const titleEl = _page.querySelector('#chat-sidebar-title')
+  const hasTitle = !!(titleEl && !titleEl.hidden && (titleEl.textContent || '').trim())
+  const reasoningWrap = _page.querySelector('#chat-sidebar-reasoning-wrap')
+  const clarifyWrap = _page.querySelector('#chat-sidebar-clarify-wrap')
+  const todosWrap = _page.querySelector('#chat-sidebar-todos-wrap')
+  const hasExtra =
+    !!(reasoningWrap && !reasoningWrap.hidden) ||
+    !!(clarifyWrap && !clarifyWrap.hidden) ||
+    !!(todosWrap && !todosWrap.hidden)
+  const activityEl = _page.querySelector('#chat-sidebar-activity')
+  const raw = (activityEl?.textContent || '').trim()
+  const hasBusyActivity = raw.length > 0 && raw !== '—'
+  panel.hidden = !hasTitle && !hasExtra && !hasBusyActivity
+}
 
 function clearThreadSidebar() {
   if (!_page) return
@@ -1200,6 +1495,8 @@ function clearThreadSidebar() {
   if (clarifyEl) clarifyEl.textContent = ''
   if (todosWrap) todosWrap.hidden = true
   if (todosEl) todosEl.innerHTML = ''
+  const panel = _page.querySelector('#chat-thread-panel')
+  if (panel) panel.hidden = true
 }
 
 function handleThreadState(payload) {
@@ -1220,6 +1517,7 @@ function handleThreadState(payload) {
       clarifyWrap.hidden = false
       clarifyEl.textContent = payload.clarification.preview
     }
+    syncThreadPanelVisibility()
     return
   }
 
@@ -1279,6 +1577,8 @@ function handleThreadState(payload) {
       todosWrap.hidden = true
     }
   }
+
+  syncThreadPanelVisibility()
 }
 
 // ── 事件处理（参照 clawapp 实现） ──
@@ -1459,6 +1759,7 @@ function handleChatEvent(payload) {
         attachments: _currentAiImages.map(i => ({ category: 'image', mimeType: i.mediaType || 'image/png', url: i.url, content: i.data })).filter(a => a.url || a.content)
       })
     }
+    pushSuggestionRecent('assistant', finalText || _currentAiText || '')
     // 托管 Agent：捕获 AI 回复，检测停止信号，决定是否继续
     if (shouldCaptureHostedTarget(payload)) {
       const capturedText = finalText || _currentAiText || ''
@@ -1473,6 +1774,7 @@ function handleChatEvent(payload) {
       }
     }
     resetStreamState()
+    fetchFollowups(runId)
     if (!_isSending) {
       processMessageQueue()
     }
@@ -1808,6 +2110,10 @@ async function loadHistory() {
       return
     }
     const deduped = dedupeHistory(result.messages)
+    _suggestionRecent = deduped
+      .filter(m => m && (m.role === 'user' || m.role === 'assistant') && (m.text || '').trim())
+      .map(m => ({ role: m.role, content: (m.text || '').trim() }))
+      .slice(-12)
     const hash = deduped.map(m => `${m.role}:${(m.text || '').length}`).join('|')
     if (hash === _lastHistoryHash && hasExisting) return
     _lastHistoryHash = hash
