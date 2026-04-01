@@ -36,6 +36,10 @@ export default defineConfig({
     port: 1420,
     strictPort: true,
     proxy: {
+      '/api': {
+        target: process.env.DEERFLOW_GATEWAY_URL || 'http://localhost:2026',
+        changeOrigin: true,
+      },
       '/ws': {
         target: `ws://127.0.0.1:${gatewayPort}`,
         ws: true,

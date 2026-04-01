@@ -1,10 +1,10 @@
 /**
- * 聊天页面 - 完整版，对接 OpenClaw Gateway
+ * 聊天页面 - 完整版，对接 DeerFlow 对话服务
  * 支持：流式响应、Markdown 渲染、会话管理、Agent 选择、快捷指令
  */
 import { api, invalidate } from '../lib/tauri-api.js'
 import { navigate } from '../router.js'
-import { wsClient, uuid } from '../lib/ws-client.js'
+import { wsClient, uuid, threadStatePayloadFromValues } from '../lib/ws-client.js'
 import { renderMarkdown } from '../lib/markdown.js'
 import { saveMessage, saveMessages, getLocalMessages, isStorageAvailable } from '../lib/message-db.js'
 import { toast } from '../components/toast.js'
@@ -90,10 +90,10 @@ let _isApplyingModel = false
 // ── 托管 Agent ──
 const HOSTED_STATUS = { IDLE: 'idle', RUNNING: 'running', WAITING: 'waiting_reply', PAUSED: 'paused', ERROR: 'error' }
 const HOSTED_SESSIONS_KEY = 'clawpanel-hosted-agent-sessions'
-const HOSTED_SYSTEM_PROMPT = `你是一个托管调度 Agent。你的职责是：根据用户设定的目标，持续引导 OpenClaw AI Agent 完成任务。
+const HOSTED_SYSTEM_PROMPT = `你是一个托管调度 Agent。你的职责是：根据用户设定的目标，持续引导 DeerFlow AI Agent 完成任务。
 规则：
-1. 你每一轮只输出一条简洁的指令（1-3 句话），发给 OpenClaw 执行
-2. 根据 OpenClaw 的回复评估进展，决定下一步指令
+1. 你每一轮只输出一条简洁的指令（1-3 句话），发给 DeerFlow 执行
+2. 根据 DeerFlow 的回复评估进展，决定下一步指令
 3. 如果任务已完成或无法继续，回复包含"完成"或"停止"来结束循环
 4. 不要重复相同的指令，不要输出解释性文字，只输出下一步要执行的指令`
 const HOSTED_DEFAULTS = { enabled: false, prompt: '', autoRunAfterTarget: true, stopPolicy: 'self', maxSteps: 50, stepDelayMs: 1200, retryLimit: 2, autoStopMinutes: 0 }
@@ -130,6 +130,25 @@ export async function render() {
           <button class="chat-sidebar-btn" id="btn-new-session" title="新建会话">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
         </button>
+        </div>
+      </div>
+      <div class="chat-sidebar-thread" id="chat-sidebar-thread">
+        <div class="chat-sidebar-thread-title" id="chat-sidebar-title" hidden></div>
+        <div class="chat-sidebar-section">
+          <div class="chat-sidebar-section-label">进行状态</div>
+          <div class="chat-sidebar-activity" id="chat-sidebar-activity">—</div>
+        </div>
+        <div class="chat-sidebar-section" id="chat-sidebar-reasoning-wrap" hidden>
+          <div class="chat-sidebar-section-label">思考</div>
+          <pre class="chat-sidebar-reasoning" id="chat-sidebar-reasoning"></pre>
+        </div>
+        <div class="chat-sidebar-section" id="chat-sidebar-clarify-wrap" hidden>
+          <div class="chat-sidebar-section-label">待确认</div>
+          <div class="chat-sidebar-clarify" id="chat-sidebar-clarify"></div>
+        </div>
+        <div class="chat-sidebar-section" id="chat-sidebar-todos-wrap" hidden>
+          <div class="chat-sidebar-section-label">任务</div>
+          <ul class="chat-sidebar-todos" id="chat-sidebar-todos"></ul>
         </div>
       </div>
       <div class="chat-session-list" id="chat-session-list"></div>
@@ -195,7 +214,7 @@ export async function render() {
           <div class="form-group">
             <label class="form-label" style="color:var(--accent);font-weight:600">任务目标</label>
             <textarea class="form-input hosted-agent-prompt" id="hosted-agent-prompt" rows="3" placeholder="例如：持续优化此仓库代码质量，直到没有可改进的地方"></textarea>
-            <div class="form-hint">托管 Agent 会持续引导 OpenClaw 完成此目标。模型使用 <a href="#/assistant" class="hosted-agent-link">AI 助手</a> 的配置。</div>
+            <div class="form-hint">托管 Agent 会持续引导 DeerFlow 完成此目标。模型使用 <a href="#/assistant" class="hosted-agent-link">AI 助手</a> 的配置。</div>
           </div>
           <div class="ha-slider-group">
             <div class="ha-slider-label">最大回复次数 <span class="ha-slider-val" id="ha-steps-val">50</span></div>
@@ -254,7 +273,8 @@ export async function render() {
   // 首次使用引导提示
   showPageGuide(_messagesEl)
 
-  loadHostedDefaults().then(() => { loadHostedSessionConfig(); renderHostedPanel(); updateHostedBadge() })
+  const initHosted = (window.__TAURI_INTERNALS__ ? loadHostedDefaults() : Promise.resolve())
+  initHosted.then(() => { loadHostedSessionConfig(); renderHostedPanel(); updateHostedBadge() })
   loadModelOptions()
   // 非阻塞：先返回 DOM，后台连接 Gateway
   connectGateway()
@@ -275,8 +295,8 @@ function showPageGuide(container) {
       </div>
       <div class="chat-guide-content">
         <b>你正在使用「实时聊天」</b>
-        <p>此页面通过 <b>Gateway</b> 连接 OpenClaw 的 AI Agent，对话由你部署的 OpenClaw 服务处理。</p>
-        <p style="opacity:0.7;font-size:11px">如需使用 ClawPanel 内置 AI 助手（独立于 OpenClaw），请前往左侧菜单「AI 助手」页面。</p>
+        <p>此页面通过 <b>Gateway</b> 连接本项目的 AI Agent，对话由你部署的本项目后端服务处理。</p>
+        <p style="opacity:0.7;font-size:11px">如需使用 ClawPanel 内置 AI 助手（独立于本项目 Agent），请前往左侧菜单「AI 助手」页面。</p>
       </div>
       <button class="chat-guide-close" title="知道了">&times;</button>
     </div>
@@ -495,7 +515,7 @@ async function applySelectedModel() {
   _isApplyingModel = true
   renderModelSelect()
   try {
-    await wsClient.chatSend(_sessionKey, `/model ${_selectedModel}`)
+    await api.chatSend(_sessionKey, `/model ${_selectedModel}`)
     toast(`已切换当前会话模型为 ${_selectedModel}`, 'success')
   } catch (e) {
     toast('切换模型失败: ' + (e.message || e), 'error')
@@ -607,26 +627,23 @@ async function connectGateway() {
       updateStatusDot(status)
       if (status === 'ready' || status === 'connected') {
         _hasEverConnected = true
-        // WS 已连接，主动刷新 Gateway 状态以消除顶部横条延迟
-        import('../lib/app-state.js').then(m => m.refreshGatewayStatus()).catch(() => {})
       }
     })
 
-    _unsubReady = wsClient.onReady((hello, sessionKey, err) => {
+    _unsubReady = wsClient.onReady(async (hello, sessionKey, err) => {
       if (!_pageActive) return
       if (err?.error) {
         return
       }
       showTyping(false)  // Gateway 就绪后关闭加载动画
-      // 重连后恢复：保留当前 sessionKey，不重复加载历史
       if (!_sessionKey) {
         const saved = localStorage.getItem(STORAGE_SESSION_KEY)
         _sessionKey = saved || sessionKey
         updateSessionTitle()
-        loadHistory()
       }
-      // 始终刷新会话列表（无论是否有 sessionKey）
-      refreshSessionList()
+      // 先与 Web 端一致从 LangGraph threads/search 拉回映射，再加载历史，避免刷新后本地映射空导致列表/消息全丢
+      await refreshSessionList()
+      loadHistory()
     })
 
     _unsubEvent = wsClient.onEvent((msg) => {
@@ -641,31 +658,27 @@ async function connectGateway() {
       updateStatusDot('ready')
       showTyping(false)  // 确保关闭加载动画
       updateSessionTitle()
+      await refreshSessionList()
       loadHistory()
-      refreshSessionList()
       return
     }
 
     // 如果正在连接中（重连等），等待 onReady 回调即可
     if (wsClient.connected || wsClient.connecting || wsClient.gatewayReady) return
 
-    // 未连接，发起新连接
-    const config = await api.readOpenclawConfig()
-    const gw = config?.gateway || {}
-    const host = window.__TAURI_INTERNALS__ ? `127.0.0.1:${gw.port || 18789}` : location.host
-    const token = gw.auth?.token || gw.authToken || ''
-    wsClient.connect(host, token)
+    // 未连接，直接按当前站点地址发起连接（deerflow 模式）
+    wsClient.connect(location.host, '')
   } catch (e) {
-    toast('读取配置失败: ' + e.message, 'error')
+    console.warn('[chat] connectGateway failed:', e)
   }
 }
 
 // ── 会话管理 ──
 
 async function refreshSessionList() {
-  if (!_sessionListEl || !wsClient.gatewayReady) return
+  if (!_sessionListEl) return
   try {
-    const result = await wsClient.sessionsList(50)
+    const result = await api.chatSessionsList(50)
     const sessions = result?.sessions || result || []
     renderSessionList(sessions)
   } catch (e) {
@@ -679,8 +692,16 @@ function renderSessionList(sessions) {
     _sessionListEl.innerHTML = '<div class="chat-session-empty">暂无会话</div>'
     return
   }
-  sessions.sort((a, b) => (b.updatedAt || b.lastActivity || 0) - (a.updatedAt || a.lastActivity || 0))
-  _sessionListEl.innerHTML = sessions.map(s => {
+  const prevScroll = _sessionListEl.scrollTop
+  const prevSig = sessions.map(s => String(s.sessionKey || s.key || '')).sort().join('|')
+  const sorted = [...sessions].sort((a, b) => {
+    const da = (b.updatedAt || b.lastActivity || 0) - (a.updatedAt || a.lastActivity || 0)
+    if (da !== 0) return da
+    const ka = String(a.sessionKey || a.key || '')
+    const kb = String(b.sessionKey || b.key || '')
+    return ka < kb ? -1 : ka > kb ? 1 : 0
+  })
+  _sessionListEl.innerHTML = sorted.map(s => {
     const key = s.sessionKey || s.key || ''
     const active = key === _sessionKey ? ' active' : ''
     const label = parseSessionLabel(key)
@@ -719,6 +740,16 @@ function renderSessionList(sessions) {
     e.stopPropagation()
     renameSession(card.dataset.key, labelEl)
   }
+
+  const nextSig = sorted.map(s => String(s.sessionKey || s.key || '')).sort().join('|')
+  requestAnimationFrame(() => {
+    if (nextSig === prevSig) {
+      const max = Math.max(0, _sessionListEl.scrollHeight - _sessionListEl.clientHeight)
+      _sessionListEl.scrollTop = Math.min(prevScroll, max)
+    }
+    const activeEl = _sessionListEl.querySelector('.chat-session-card.active')
+    if (activeEl) activeEl.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  })
 }
 
 function formatSessionTime(ts) {
@@ -739,7 +770,13 @@ function parseSessionAgent(key) {
 }
 
 function parseSessionLabel(key) {
-  const parts = (key || '').split(':')
+  const k = key || ''
+  if (k.startsWith('thread:')) {
+    const id = k.slice(7)
+    if (!id) return '会话'
+    return id.length <= 14 ? `会话 · ${id}` : `会话 · ${id.slice(0, 12)}…`
+  }
+  const parts = k.split(':')
   if (parts.length < 3) return key || '未知'
   const agent = parts[1] || 'main'
   const channel = parts.slice(2).join(':')
@@ -748,7 +785,7 @@ function parseSessionLabel(key) {
   return `${agent} / ${channel}`
 }
 
-function switchSession(newKey) {
+async function switchSession(newKey) {
   if (newKey === _sessionKey) return
   _sessionKey = newKey
   localStorage.setItem(STORAGE_SESSION_KEY, newKey)
@@ -756,8 +793,13 @@ function switchSession(newKey) {
   resetStreamState()
   updateSessionTitle()
   clearMessages()
-  loadHistory()
-  refreshSessionList()
+  clearThreadSidebar()
+  try {
+    await refreshSessionList()
+    await loadHistory()
+  } catch (e) {
+    console.warn('[chat] switchSession:', e)
+  }
 }
 
 async function showNewSessionDialog() {
@@ -805,12 +847,32 @@ async function showNewSessionDialog() {
     agentOptions.push({ value: '__new__', label: '+ 新建 Agent' })
 
     // 更新弹窗中的下拉框选项
-    const selectEl = document.querySelector('.modal-overlay [data-name="agent"]')
+    const modalEl = document.querySelector('.modal-overlay')
+    if (!modalEl) return
+    const selectEl = modalEl.querySelector('[data-name="agent"]')
     if (selectEl) {
       const currentValue = selectEl.value
       selectEl.innerHTML = agentOptions.map(o =>
         `<option value="${o.value}" ${o.value === currentValue ? 'selected' : ''}>${o.label}</option>`
       ).join('')
+    }
+    // 重新添加会话类型下拉框确保它存在
+    const fieldsEl = modalEl.querySelector('.modal-fields')
+    if (fieldsEl) {
+      const modeFieldEl = fieldsEl.querySelector('[data-name="mode"]')
+      if (!modeFieldEl) {
+        const modeSelectHtml = `
+          <div class="modal-field">
+            <label>
+              <span class="field-label">会话类型</span>
+              <select data-name="mode">
+                ${SESSION_MODES.map(m => `<option value="${m.value}">${m.label}</option>`).join('')}
+              </select>
+            </label>
+          </div>
+        `
+        fieldsEl.insertAdjacentHTML('beforeend', modeSelectHtml)
+      }
     }
   } catch (e) {
     console.warn('[chat] 加载 Agent 列表失败:', e)
@@ -820,11 +882,43 @@ async function showNewSessionDialog() {
 async function applySessionModePreset(sessionKey, mode) {
   const preset = SESSION_MODES.find(m => m.value === mode)
   if (!preset?.command) return
-  if (!wsClient.gatewayReady || !sessionKey) return
+  if (!sessionKey) return
   try {
-    await wsClient.chatSend(sessionKey, preset.command)
-    if (sessionKey === _sessionKey) {
-      appendSystemMessage(`已应用会话类型：${preset.label}`)
+    let contextUpdate = null
+    if (mode === 'deep') {
+      contextUpdate = {
+        thinking_enabled: true,
+        reasoning_effort: 'high',
+        is_plan_mode: false,
+        subagent_enabled: false,
+      }
+    } else if (mode === 'think') {
+      contextUpdate = {
+        thinking_enabled: true,
+        reasoning_effort: undefined,
+        is_plan_mode: false,
+        subagent_enabled: false,
+      }
+    } else if (mode === 'fast') {
+      contextUpdate = {
+        thinking_enabled: false,
+        reasoning_effort: 'minimal',
+        is_plan_mode: false,
+        subagent_enabled: false,
+      }
+    } else if (mode === 'normal') {
+      contextUpdate = {
+        thinking_enabled: true,
+        reasoning_effort: undefined,
+        is_plan_mode: false,
+        subagent_enabled: false,
+      }
+    }
+    if (contextUpdate) {
+      api.chatUpdateContext(sessionKey, contextUpdate)
+      if (sessionKey === _sessionKey) {
+        appendSystemMessage(`已应用会话类型：${preset.label}`)
+      }
     }
   } catch (e) {
     console.warn('[chat] applySessionModePreset failed:', e)
@@ -838,7 +932,7 @@ async function deleteSession(key) {
   const yes = await showConfirm(`确定删除会话「${label}」？`)
   if (!yes) return
   try {
-    await wsClient.sessionsDelete(key)
+    await api.chatSessionsDelete(key)
     toast('会话已删除', 'success')
     if (key === _sessionKey) switchSession(mainKey)
     else refreshSessionList()
@@ -853,8 +947,9 @@ async function resetCurrentSession() {
   const yes = await showConfirm(`确定要重置会话「${label}」吗？\n\n重置后将清空该会话的所有聊天记录，此操作不可撤销。`)
   if (!yes) return
   try {
-    await wsClient.sessionsReset(_sessionKey)
+    await api.chatSessionsReset(_sessionKey)
     clearMessages()
+    clearThreadSidebar()
     _lastHistoryHash = ''
     appendSystemMessage('会话已重置')
     toast('会话已重置', 'success')
@@ -948,13 +1043,21 @@ function toggleCmdPanel() {
 function sendMessage() {
   const text = _textarea.value.trim()
   if (!text && !_attachments.length) return
-  if (!wsClient.gatewayReady || !_sessionKey) {
+  if (!_sessionKey) _sessionKey = localStorage.getItem(STORAGE_SESSION_KEY) || 'agent:main:main'
+  if (!wsClient.connected || !wsClient.gatewayReady) {
+    connectGateway()
+    toast('正在连接对话服务，请稍后重试', 'warning')
     return
   }
   hideCmdPanel()
   _textarea.value = ''
   _textarea.style.height = 'auto'
   updateSendState()
+
+  if (handleCommand(text)) {
+    return
+  }
+
   const attachments = [..._attachments]
   _attachments = []
   renderAttachments()
@@ -962,10 +1065,89 @@ function sendMessage() {
   doSend(text, attachments)
 }
 
-async function doSend(text, attachments = []) {
-  if (!wsClient.gatewayReady || !_sessionKey) {
-    return
+function handleCommand(text) {
+  const trimmed = text.trim().toLowerCase()
+  let contextUpdate = null
+  let message = ''
+
+  if (trimmed.startsWith('/think ')) {
+    const level = trimmed.split(' ')[1]
+    if (level === 'off') {
+      contextUpdate = { thinking_enabled: false }
+      message = '已关闭深度思考'
+    } else if (level === 'low') {
+      contextUpdate = { thinking_enabled: true }
+      message = '已设置为轻度思考'
+    } else if (level === 'medium') {
+      contextUpdate = { thinking_enabled: true }
+      message = '已设置为中度思考'
+    } else if (level === 'high') {
+      contextUpdate = { thinking_enabled: true }
+      message = '已设置为深度思考'
+    }
+  } else if (trimmed.startsWith('/reasoning ')) {
+    const level = trimmed.split(' ')[1]
+    if (level === 'off') {
+      contextUpdate = { reasoning_effort: undefined }
+      message = '已关闭推理模式'
+    } else if (level === 'low') {
+      contextUpdate = { reasoning_effort: 'low' }
+      message = '已设置为轻度推理'
+    } else if (level === 'medium') {
+      contextUpdate = { reasoning_effort: 'medium' }
+      message = '已设置为中度推理'
+    } else if (level === 'high') {
+      contextUpdate = { reasoning_effort: 'high' }
+      message = '已设置为深度推理'
+    }
+  } else if (trimmed === '/fast' || trimmed === '/fast on' || trimmed === '/fast off') {
+    if (trimmed === '/fast') {
+      const current = wsClient.getSessionContext(_sessionKey)
+      const fastEnabled = !(current.thinking_enabled && current.reasoning_effort !== 'minimal')
+      contextUpdate = {
+        thinking_enabled: !fastEnabled,
+        reasoning_effort: fastEnabled ? undefined : 'minimal',
+      }
+      message = fastEnabled ? '已开启快速模式' : '已关闭快速模式'
+    } else if (trimmed === '/fast on') {
+      contextUpdate = {
+        thinking_enabled: false,
+        reasoning_effort: 'minimal',
+      }
+      message = '已开启快速模式'
+    } else if (trimmed === '/fast off') {
+      contextUpdate = {
+        thinking_enabled: true,
+        reasoning_effort: undefined,
+      }
+      message = '已关闭快速模式'
+    }
   }
+
+  if (trimmed === '/context') {
+    const current = wsClient.getSessionContext(_sessionKey)
+    let info = '当前会话上下文配置:\n'
+    info += `- thinking_enabled: ${current.thinking_enabled}\n`
+    info += `- is_plan_mode: ${current.is_plan_mode}\n`
+    info += `- subagent_enabled: ${current.subagent_enabled}\n`
+    info += `- reasoning_effort: ${current.reasoning_effort || 'default'}`
+    appendSystemMessage(info)
+    toast('已显示上下文配置', 'success')
+    return true
+  }
+
+  if (contextUpdate) {
+    api.chatUpdateContext(_sessionKey, contextUpdate)
+    appendSystemMessage(message)
+    toast(message, 'success')
+    return true
+  }
+
+  return false
+}
+
+async function doSend(text, attachments = []) {
+  if (!_sessionKey) _sessionKey = localStorage.getItem(STORAGE_SESSION_KEY) || 'agent:main:main'
   appendUserMessage(text, attachments)
   saveMessage({
     id: uuid(), sessionKey: _sessionKey, role: 'user', content: text, timestamp: Date.now(),
@@ -974,7 +1156,7 @@ async function doSend(text, attachments = []) {
   showTyping(true)
   _isSending = true
   try {
-    await wsClient.chatSend(_sessionKey, text, attachments.length ? attachments : undefined)
+    await api.chatSend(_sessionKey, text, attachments.length ? attachments : undefined)
   } catch (err) {
     showTyping(false)
     appendSystemMessage('发送失败: ' + err.message)
@@ -992,13 +1174,121 @@ function processMessageQueue() {
 }
 
 function stopGeneration() {
-  if (_currentRunId) wsClient.chatAbort(_sessionKey, _currentRunId).catch(() => {})
+  if (_currentRunId) api.chatAbort(_sessionKey, _currentRunId).catch(() => {})
+}
+
+// ── 左侧线程状态（对齐 Web 版 values / 澄清 / todos） ──
+
+function clearThreadSidebar() {
+  if (!_page) return
+  const titleEl = _page.querySelector('#chat-sidebar-title')
+  const activityEl = _page.querySelector('#chat-sidebar-activity')
+  const reasoningWrap = _page.querySelector('#chat-sidebar-reasoning-wrap')
+  const reasoningEl = _page.querySelector('#chat-sidebar-reasoning')
+  const clarifyWrap = _page.querySelector('#chat-sidebar-clarify-wrap')
+  const clarifyEl = _page.querySelector('#chat-sidebar-clarify')
+  const todosWrap = _page.querySelector('#chat-sidebar-todos-wrap')
+  const todosEl = _page.querySelector('#chat-sidebar-todos')
+  if (titleEl) { titleEl.textContent = ''; titleEl.hidden = true }
+  if (activityEl) {
+    activityEl.replaceChildren()
+    activityEl.textContent = '—'
+  }
+  if (reasoningWrap) reasoningWrap.hidden = true
+  if (reasoningEl) reasoningEl.textContent = ''
+  if (clarifyWrap) clarifyWrap.hidden = true
+  if (clarifyEl) clarifyEl.textContent = ''
+  if (todosWrap) todosWrap.hidden = true
+  if (todosEl) todosEl.innerHTML = ''
+}
+
+function handleThreadState(payload) {
+  if (!_pageActive || !payload || typeof payload !== 'object') return
+  if (payload.sessionKey && payload.sessionKey !== _sessionKey && _sessionKey) return
+
+  const titleEl = _page.querySelector('#chat-sidebar-title')
+  const activityEl = _page.querySelector('#chat-sidebar-activity')
+  const reasoningWrap = _page.querySelector('#chat-sidebar-reasoning-wrap')
+  const reasoningEl = _page.querySelector('#chat-sidebar-reasoning')
+  const clarifyWrap = _page.querySelector('#chat-sidebar-clarify-wrap')
+  const clarifyEl = _page.querySelector('#chat-sidebar-clarify')
+  const todosWrap = _page.querySelector('#chat-sidebar-todos-wrap')
+  const todosEl = _page.querySelector('#chat-sidebar-todos')
+
+  if (payload.partial) {
+    if (payload.clarification?.preview != null && clarifyWrap && clarifyEl) {
+      clarifyWrap.hidden = false
+      clarifyEl.textContent = payload.clarification.preview
+    }
+    return
+  }
+
+  if (titleEl) {
+    if (payload.title) {
+      titleEl.textContent = payload.title
+      titleEl.hidden = false
+    } else {
+      titleEl.textContent = ''
+      titleEl.hidden = true
+    }
+  }
+
+  if (activityEl) {
+    const kind = payload.activityKind || 'idle'
+    const icons = { idle: '—', thinking: '💭', tools: '🔧', clarification: '❓' }
+    activityEl.replaceChildren()
+    const span = document.createElement('span')
+    span.className = 'chat-sidebar-act-icon'
+    span.textContent = icons[kind] || '—'
+    activityEl.appendChild(span)
+    activityEl.appendChild(document.createTextNode(` ${payload.activityDetail || ''}`))
+  }
+
+  if (reasoningWrap && reasoningEl) {
+    if (payload.reasoningPreview) {
+      reasoningEl.textContent = payload.reasoningPreview
+      reasoningWrap.hidden = false
+    } else {
+      reasoningEl.textContent = ''
+      reasoningWrap.hidden = true
+    }
+  }
+
+  if (clarifyWrap && clarifyEl) {
+    if (payload.clarification?.preview) {
+      clarifyEl.textContent = payload.clarification.preview
+      clarifyWrap.hidden = false
+    } else {
+      clarifyEl.textContent = ''
+      clarifyWrap.hidden = true
+    }
+  }
+
+  if (todosWrap && todosEl) {
+    const todos = Array.isArray(payload.todos) ? payload.todos : []
+    if (todos.length) {
+      todosEl.innerHTML = todos.map(todo => {
+        const c = escapeHtml((todo && todo.content) ? String(todo.content) : '')
+        const st = (todo && todo.status) ? todo.status : 'pending'
+        const mark = st === 'completed' ? '✓' : st === 'in_progress' ? '▶' : '○'
+        return `<li class="chat-sidebar-todo chat-sidebar-todo--${st}"><span class="chat-sidebar-todo-mark">${mark}</span><span>${c}</span></li>`
+      }).join('')
+      todosWrap.hidden = false
+    } else {
+      todosEl.innerHTML = ''
+      todosWrap.hidden = true
+    }
+  }
 }
 
 // ── 事件处理（参照 clawapp 实现） ──
 
 function handleEvent(msg) {
   const { event, payload } = msg
+  if (event === 'thread_state') {
+    handleThreadState(payload)
+    return
+  }
   if (!payload) return
 
   if (event === 'agent' && payload?.stream === 'tool' && payload?.data?.toolCallId) {
@@ -1058,7 +1348,7 @@ function handleChatEvent(payload) {
     if (c?.audios?.length) _currentAiAudios = c.audios
     if (c?.files?.length) _currentAiFiles = c.files
     if (c?.tools?.length) _currentAiTools = c.tools
-    if (c?.text && c.text.length > _currentAiText.length) {
+    if (c?.text && c.text.length >= _currentAiText.length) {
       showTyping(false)
       if (!_currentAiBubble) {
         _currentAiBubble = createStreamBubble()
@@ -1104,8 +1394,13 @@ function handleChatEvent(payload) {
     if (finalFiles.length) _currentAiFiles = finalFiles
     if (finalTools.length) _currentAiTools = finalTools
     const hasContent = finalText || _currentAiImages.length || _currentAiVideos.length || _currentAiAudios.length || _currentAiFiles.length || _currentAiTools.length
-    // 忽略空 final（Gateway 会为一条消息触发多个 run，部分是空 final）
-    if (!_currentAiBubble && !hasContent) return
+    // 忽略空 final（Gateway 会偶发空结束帧）；必须结束加载态，否则转圈不停
+    if (!_currentAiBubble && !hasContent) {
+      showTyping(false)
+      resetStreamState()
+      if (!_isSending) processMessageQueue()
+      return
+    }
     // 标记 runId 为已处理，防止重复
     if (runId) {
       _seenRunIds.add(runId)
@@ -1170,7 +1465,7 @@ function handleChatEvent(payload) {
       if (capturedText) {
         appendHostedTarget(capturedText)
         if (detectStopFromText(capturedText)) {
-          appendHostedOutput('OpenClaw 回复包含完成信号，自动停止')
+          appendHostedOutput('DeerFlow 回复包含完成信号，自动停止')
           stopHostedAgent()
         } else {
           maybeTriggerHostedRun()
@@ -1178,7 +1473,9 @@ function handleChatEvent(payload) {
       }
     }
     resetStreamState()
-    processMessageQueue()
+    if (!_isSending) {
+      processMessageQueue()
+    }
     return
   }
 
@@ -1463,30 +1760,50 @@ function resetStreamState() {
 
 // ── 历史消息加载 ──
 
+/** LangGraph checkpoint 常为 type: human/ai，无 role；未归一则渲染阶段会跳过，出现「闪一下再空白」 */
+function normalizeHistoryRole(msg) {
+  if (!msg || typeof msg !== 'object') return 'assistant'
+  if (msg.role === 'tool' || msg.role === 'toolResult') return 'assistant'
+  if (msg.role === 'user' || msg.role === 'assistant') return msg.role
+  const t = msg.type
+  if (t === 'human' || t === 'user') return 'user'
+  if (t === 'ai' || t === 'AIMessage' || t === 'AIMessageChunk' || t === 'assistant') return 'assistant'
+  if (t === 'tool' || t === 'tool_message') return 'assistant'
+  if (t === 'system') return 'assistant'
+  return 'assistant'
+}
+
 async function loadHistory() {
-  if (!_sessionKey || !_messagesEl) return
+  const key = _sessionKey
+  if (!key || !_messagesEl) return
   _isLoadingHistory = true
   const hasExisting = _messagesEl.querySelector('.msg')
-  if (!hasExisting && isStorageAvailable()) {
-    const local = await getLocalMessages(_sessionKey, 200)
-    if (local.length) {
-      clearMessages()
-      local.forEach(msg => {
-        if (!msg.content && !msg.attachments?.length) return
-        const msgTime = msg.timestamp ? new Date(msg.timestamp) : new Date()
-        if (msg.role === 'user') appendUserMessage(msg.content || '', msg.attachments || null, msgTime)
-        else if (msg.role === 'assistant') {
-          const images = (msg.attachments || []).filter(a => a.category === 'image').map(a => ({ mediaType: a.mimeType, data: a.content, url: a.url }))
-          appendAiMessage(msg.content || '', msgTime, images, [], [], [], [])
-        }
-      })
-      scrollToBottom()
-    }
-  }
-  if (!wsClient.gatewayReady) { _isLoadingHistory = false; return }
   try {
-    const result = await wsClient.chatHistory(_sessionKey, 200)
+    if (!hasExisting && isStorageAvailable()) {
+      const local = await getLocalMessages(key, 200)
+      if (key !== _sessionKey) return
+      if (local.length) {
+        clearMessages()
+        local.forEach(msg => {
+          if (!msg.content && !msg.attachments?.length) return
+          const msgTime = msg.timestamp ? new Date(msg.timestamp) : new Date()
+          if (msg.role === 'user') appendUserMessage(msg.content || '', msg.attachments || null, msgTime)
+          else if (msg.role === 'assistant') {
+            const images = (msg.attachments || []).filter(a => a.category === 'image').map(a => ({ mediaType: a.mimeType, data: a.content, url: a.url }))
+            appendAiMessage(msg.content || '', msgTime, images, [], [], [], [])
+          }
+        })
+        scrollToBottom()
+      }
+    }
+    if (!wsClient.gatewayReady) return
+    const result = await api.chatHistory(key, 200)
+    if (key !== _sessionKey) return
     if (!result?.messages?.length) {
+      if (result.valuesSnapshot) {
+        const p = threadStatePayloadFromValues(key, result.valuesSnapshot)
+        if (p) handleThreadState(p)
+      }
       if (_messagesEl && !_messagesEl.querySelector('.msg')) appendSystemMessage('还没有消息，开始聊天吧')
       return
     }
@@ -1499,10 +1816,13 @@ async function loadHistory() {
     if (hasExisting && (_isSending || _isStreaming || _messageQueue.length > 0)) {
       saveMessages(result.messages.map(m => {
         const c = extractContent(m)
-        const role = (m.role === 'tool' || m.role === 'toolResult') ? 'assistant' : m.role
-        return { id: m.id || uuid(), sessionKey: _sessionKey, role, content: c?.text || '', timestamp: m.timestamp || Date.now() }
+        const role = normalizeHistoryRole(m)
+        return { id: m.id || uuid(), sessionKey: key, role, content: c?.text || '', timestamp: m.timestamp || Date.now() }
       }))
-      _isLoadingHistory = false
+      if (result.valuesSnapshot) {
+        const p = threadStatePayloadFromValues(key, result.valuesSnapshot)
+        if (p) handleThreadState(p)
+      }
       return
     }
 
@@ -1528,10 +1848,14 @@ async function loadHistory() {
     }
     saveMessages(result.messages.map(m => {
       const c = extractContent(m)
-      const role = (m.role === 'tool' || m.role === 'toolResult') ? 'assistant' : m.role
-      return { id: m.id || uuid(), sessionKey: _sessionKey, role, content: c?.text || '', timestamp: m.timestamp || Date.now() }
+      const role = normalizeHistoryRole(m)
+      return { id: m.id || uuid(), sessionKey: key, role, content: c?.text || '', timestamp: m.timestamp || Date.now() }
     }))
     scrollToBottom()
+    if (result.valuesSnapshot) {
+      const p = threadStatePayloadFromValues(key, result.valuesSnapshot)
+      if (p) handleThreadState(p)
+    }
   } catch (e) {
     console.error('[chat] loadHistory error:', e)
     if (_messagesEl && !_messagesEl.querySelector('.msg')) appendSystemMessage('加载历史失败: ' + e.message)
@@ -1543,7 +1867,7 @@ async function loadHistory() {
 function dedupeHistory(messages) {
   const deduped = []
   for (const msg of messages) {
-    const role = (msg.role === 'tool' || msg.role === 'toolResult') ? 'assistant' : msg.role
+    const role = normalizeHistoryRole(msg)
     const c = extractContent(msg)
     if (!c.text && !c.images.length && !c.videos.length && !c.audios.length && !c.files.length && !c.tools.length) continue
     const tools = (c.tools || []).map(t => {
@@ -2305,7 +2629,7 @@ async function runHostedAgentStep() {
       _hostedRuntime.pending = false
       persistHostedRuntime(); updateHostedBadge()
       // 将指令发给 Gateway Agent
-      try { await wsClient.chatSend(_sessionKey, instruction) } catch {}
+      try { await api.chatSend(_sessionKey, instruction) } catch {}
     } else {
       _hostedRuntime.status = HOSTED_STATUS.IDLE
       _hostedRuntime.pending = false

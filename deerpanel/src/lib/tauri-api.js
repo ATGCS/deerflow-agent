@@ -7,9 +7,7 @@ const isTauri = !!window.__TAURI_INTERNALS__
 
 // 仅在 Node.js 后端实现的命令（Tauri Rust 不处理），强制走 webInvoke
 const WEB_ONLY_CMDS = new Set([
-  'instance_list', 'instance_add', 'instance_remove', 'instance_set_active',
-  'instance_health_check', 'instance_health_all',
-  'get_deploy_mode',
+  'agents_list', 'agents_get', 'agents_create', 'agents_update', 'agents_delete',
 ])
 
 // 预加载 Tauri invoke，避免每次 API 调用都做动态 import
@@ -125,15 +123,11 @@ async function webInvoke(cmd, args) {
 }
 
 function normalizeAgentToWebShape(agent) {
-  const name = String(agent?.name || agent?.id || '').trim()
+  const name = String(agent?.name || '').trim()
   const model = (typeof agent?.model === 'string')
     ? agent.model
     : (agent?.model?.primary || agent?.model?.id || null)
-  const description = String(
-    agent?.description
-    || agent?.identityName
-    || ''
-  ).trim()
+  const description = String(agent?.description || '').trim()
   return {
     name,
     description,
@@ -141,7 +135,6 @@ function normalizeAgentToWebShape(agent) {
     tool_groups: Array.isArray(agent?.tool_groups) ? agent.tool_groups : null,
     soul: typeof agent?.soul === 'string' ? agent.soul : null,
     isDefault: !!agent?.isDefault || name === 'main',
-    workspace: agent?.workspace || null,
   }
 }
 
@@ -194,13 +187,11 @@ export const api = {
   guardianStatus: () => invoke('guardian_status'),
 
   // 配置（读缓存，写清缓存）
-  getVersionInfo: () => cachedInvoke('get_version_info', {}, 30000),
-  getStatusSummary: () => cachedInvoke('get_status_summary', {}, 60000),
   // 状态检查（统一语义）
   systemVersion: () => cachedInvoke('get_version_info', {}, 30000),
   systemStatusSummary: () => cachedInvoke('get_status_summary', {}, 60000),
   systemInstallation: () => cachedInvoke('check_installation', {}, 60000),
-  readOpenclawConfig: () => cachedInvoke('read_openclaw_config'),
+  readOpenclawConfig: () => (isTauri ? cachedInvoke('read_openclaw_config') : Promise.resolve({})),
   writeOpenclawConfig: (config) => { invalidate('read_openclaw_config'); return invoke('write_openclaw_config', { config }).then(r => { _debouncedReloadGateway(); return r }) },
   readMcpConfig: () => cachedInvoke('read_mcp_config'),
   writeMcpConfig: (config) => { invalidate('read_mcp_config'); return invoke('write_mcp_config', { config }) },
@@ -216,24 +207,13 @@ export const api = {
   testModel: (baseUrl, apiKey, modelId, apiType = null) => invoke('test_model', { baseUrl, apiKey, modelId, apiType }),
   listRemoteModels: (baseUrl, apiKey, apiType = null) => invoke('list_remote_models', { baseUrl, apiKey, apiType }),
 
-  // Agent 管理
-  listAgents: () => cachedInvoke('list_agents'),
-  addAgent: (name, model, workspace) => { invalidate('list_agents'); return invoke('add_agent', { name, model, workspace: workspace || null }) },
-  deleteAgent: (id) => { invalidate('list_agents'); return invoke('delete_agent', { id }) },
-  updateAgentIdentity: (id, name, emoji) => { invalidate('list_agents'); return invoke('update_agent_identity', { id, name, emoji }) },
-  updateAgentModel: (id, model) => { invalidate('list_agents'); return invoke('update_agent_model', { id, model }) },
+  // Agent 扩展能力（非 Gateway 标准协议）
   backupAgent: (id) => invoke('backup_agent', { id }),
   // Agent 管理（Web 接口语义）
   agentsList: async () => {
-    // dev-api 若已实现 agents_list，优先走它；否则回退旧命令
-    try {
-      const data = await invoke('agents_list')
-      const agents = Array.isArray(data?.agents) ? data.agents : (Array.isArray(data) ? data : [])
-      return { agents: agents.map(normalizeAgentToWebShape) }
-    } catch {
-      const list = await cachedInvoke('list_agents')
-      return { agents: (Array.isArray(list) ? list : []).map(normalizeAgentToWebShape) }
-    }
+    const data = await invoke('agents_list')
+    const agents = Array.isArray(data?.agents) ? data.agents : (Array.isArray(data) ? data : [])
+    return { agents: agents.map(normalizeAgentToWebShape) }
   },
   agentsGet: async (name) => {
     const data = await api.agentsList()
@@ -242,37 +222,54 @@ export const api = {
     return found
   },
   agentsCreate: async ({ name, description = '', model = null, tool_groups = null, soul = '' }) => {
-    try {
-      const res = await invoke('agents_create', { name, description, model, tool_groups, soul })
-      invalidate('list_agents')
-      return normalizeAgentToWebShape(res)
-    } catch {
-      await api.addAgent(name, model || '', null)
-      if (description) await api.updateAgentIdentity(name, description, null)
-      invalidate('list_agents')
-      return api.agentsGet(name)
-    }
+    const res = await invoke('agents_create', { name, description, model, tool_groups, soul })
+    invalidate('agents_list')
+    return normalizeAgentToWebShape(res)
   },
   agentsUpdate: async (name, { description = null, model = null, tool_groups = null, soul = null }) => {
-    try {
-      const res = await invoke('agents_update', { name, description, model, tool_groups, soul })
-      invalidate('list_agents')
-      return normalizeAgentToWebShape(res)
-    } catch {
-      if (description !== null) await api.updateAgentIdentity(name, description, null)
-      if (model !== null) await api.updateAgentModel(name, model)
-      invalidate('list_agents')
-      return api.agentsGet(name)
-    }
+    const res = await invoke('agents_update', { name, description, model, tool_groups, soul })
+    invalidate('agents_list')
+    return normalizeAgentToWebShape(res)
   },
   agentsDelete: async (name) => {
-    try {
-      await invoke('agents_delete', { name })
-    } catch {
-      await api.deleteAgent(name)
-    }
-    invalidate('list_agents')
+    await invoke('agents_delete', { name })
+    invalidate('agents_list')
     return { success: true }
+  },
+
+  // 聊天会话（统一接口入口，底层走 DeerFlow HTTP/SSE 客户端）
+  chatSessionsList: async (limit = 50) => {
+    const { wsClient } = await import('./ws-client.js')
+    return wsClient.sessionsList(limit)
+  },
+  chatSessionsDelete: async (sessionKey) => {
+    const { wsClient } = await import('./ws-client.js')
+    return wsClient.sessionsDelete(sessionKey)
+  },
+  chatSessionsReset: async (sessionKey) => {
+    const { wsClient } = await import('./ws-client.js')
+    return wsClient.sessionsReset(sessionKey)
+  },
+  chatHistory: async (sessionKey, limit = 200) => {
+    const { wsClient } = await import('./ws-client.js')
+    return wsClient.chatHistory(sessionKey, limit)
+  },
+  chatSend: async (sessionKey, message, attachments = undefined) => {
+    const { wsClient } = await import('./ws-client.js')
+    return wsClient.chatSend(sessionKey, message, attachments)
+  },
+  chatAbort: async (sessionKey, runId = undefined) => {
+    const { wsClient } = await import('./ws-client.js')
+    return wsClient.chatAbort(sessionKey, runId)
+  },
+  chatUpdateContext: async (sessionKey, context) => {
+    const { wsClient } = await import('./ws-client.js')
+    wsClient.updateSessionContext(sessionKey, context)
+    return { ok: true }
+  },
+  chatGetContext: async (sessionKey) => {
+    const { wsClient } = await import('./ws-client.js')
+    return { context: wsClient.getSessionContext(sessionKey) }
   },
 
   // 日志（短缓存）
@@ -298,12 +295,11 @@ export const api = {
   installChannelPlugin: (packageName, pluginId) => invoke('install_channel_plugin', { packageName, pluginId }),
 
   // 面板配置 (clawpanel.json)
-  readPanelConfig: () => invoke('read_panel_config'),
+  readPanelConfig: () => (isTauri ? invoke('read_panel_config') : Promise.resolve({})),
   writePanelConfig: (config) => invoke('write_panel_config', { config }),
   testProxy: (url) => invoke('test_proxy', { url: url || null }),
 
   // 安装/部署
-  checkInstallation: () => cachedInvoke('check_installation', {}, 60000),
   initOpenclawConfig: () => { invalidate('check_installation'); return invoke('init_openclaw_config') },
   checkNode: () => cachedInvoke('check_node', {}, 60000),
   checkNodeAtPath: (nodeDir) => invoke('check_node_at_path', { nodeDir }),
@@ -325,7 +321,17 @@ export const api = {
   deleteBackup: (name) => { invalidate('list_backups'); return invoke('delete_backup', { name }) },
 
   // 设备密钥 + Gateway 握手
-  createConnectFrame: (nonce, gatewayToken) => invoke('create_connect_frame', { nonce, gatewayToken }),
+  createConnectFrame: (nonce, gatewayToken) => {
+    if (!isTauri) {
+      return Promise.resolve({
+        type: 'req',
+        id: `connect-${Date.now()}`,
+        method: 'connect',
+        params: { nonce: nonce || '', token: gatewayToken || '' },
+      })
+    }
+    return invoke('create_connect_frame', { nonce, gatewayToken })
+  },
 
   // 设备配对
   autoPairDevice: () => invoke('auto_pair_device'),
@@ -344,10 +350,6 @@ export const api = {
   assistantWebSearch: (query, maxResults) => invoke('assistant_web_search', { query, max_results: maxResults || 5 }),
   assistantFetchUrl: (url) => invoke('assistant_fetch_url', { url }),
 
-  // Skills 管理（openclaw skills CLI）
-  skillsList: () => invoke('skills_list'),
-  skillsInfo: (name) => invoke('skills_info', { name }),
-  skillsCheck: () => invoke('skills_check'),
   // 技能接口（统一语义）
   skillsCatalog: () => invoke('skills_list'),
   skillsDetail: (name) => invoke('skills_info', { name }),
@@ -362,16 +364,18 @@ export const api = {
   skillsUninstall: (name) => invoke('skills_uninstall', { name }),
 
   // 实例管理
-  instanceList: () => cachedInvoke('instance_list', {}, 10000),
-  instanceAdd: (instance) => { invalidate('instance_list'); return invoke('instance_add', instance) },
-  instanceRemove: (id) => { invalidate('instance_list'); return invoke('instance_remove', { id }) },
-  instanceSetActive: (id) => { invalidate('instance_list'); _cache.clear(); return invoke('instance_set_active', { id }) },
-  instanceHealthCheck: (id) => invoke('instance_health_check', { id }),
-  instanceHealthAll: () => invoke('instance_health_all'),
+  instanceList: () => (isTauri
+    ? cachedInvoke('instance_list', {}, 10000)
+    : Promise.resolve({ activeId: 'local', instances: [{ id: 'local', name: '本机', type: 'local' }] })),
+  instanceAdd: (instance) => { if (!isTauri) return Promise.reject(new Error('Web 模式不支持实例管理')); invalidate('instance_list'); return invoke('instance_add', instance) },
+  instanceRemove: (id) => { if (!isTauri) return Promise.reject(new Error('Web 模式不支持实例管理')); invalidate('instance_list'); return invoke('instance_remove', { id }) },
+  instanceSetActive: (id) => { if (!isTauri) return Promise.resolve({ success: true, id: id || 'local' }); invalidate('instance_list'); _cache.clear(); return invoke('instance_set_active', { id }) },
+  instanceHealthCheck: (id) => (isTauri ? invoke('instance_health_check', { id }) : Promise.resolve({ id, online: true })),
+  instanceHealthAll: () => (isTauri ? invoke('instance_health_all') : Promise.resolve([{ id: 'local', online: true }])),
 
 
   // 前端热更新
-  checkFrontendUpdate: () => invoke('check_frontend_update'),
+  checkFrontendUpdate: () => (isTauri ? invoke('check_frontend_update') : Promise.resolve({ hasUpdate: false })),
   downloadFrontendUpdate: (url, expectedHash) => invoke('download_frontend_update', { url, expectedHash: expectedHash || '' }),
   rollbackFrontendUpdate: () => invoke('rollback_frontend_update'),
   getUpdateStatus: () => invoke('get_update_status'),

@@ -82,7 +82,7 @@ async function loadDashboardData(page, fullRefresh = false) {
     api.agentsList(),
     api.readMcpConfig(),
     api.listBackups(),
-    // getStatusSummary 是最重的调用（spawn openclaw status --json），只在首次加载时调用
+    // systemStatusSummary 是最重的调用（spawn openclaw status --json），只在首次加载时调用
     (!_dashboardInitialized || fullRefresh) ? api.systemStatusSummary() : Promise.resolve(null),
   ]), 15000).catch(() => [{ status: 'rejected' }, { status: 'rejected' }, { status: 'rejected' }, { status: 'rejected' }])
   const logsP = api.readLogTail('gateway', 20).catch(() => '')
@@ -282,7 +282,7 @@ function renderOverview(page, services, mcpConfig, backups, config, agents, stat
           <div class="overview-card-body">
             <div class="overview-card-title">Agent 舰队</div>
             <div class="overview-card-value">${agents.length} 个</div>
-            <div class="overview-card-meta">${agents.filter(a => a.workspace).length} 个独立工作区</div>
+            <div class="overview-card-meta">${agents.filter(a => (a.tool_groups || []).length > 0).length} 个已配置工具组</div>
           </div>
         </div>
 

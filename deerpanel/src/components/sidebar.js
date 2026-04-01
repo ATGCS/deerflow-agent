@@ -7,6 +7,7 @@ import { getActiveInstance, switchInstance, onInstanceChange } from '../lib/app-
 import { api } from '../lib/tauri-api.js'
 import { toast } from './toast.js'
 import { version as APP_VERSION } from '../../package.json'
+const isTauri = !!window.__TAURI_INTERNALS__
 
 const NAV_ITEMS_FULL = [
   {
@@ -81,6 +82,7 @@ let _hasMultipleInstances = false
 
 // 异步检测是否有多实例（首次渲染后触发，有多实例时重渲染）
 function _checkMultiInstances(el) {
+  if (!isTauri) return
   api.instanceList().then(data => {
     const has = data.instances && data.instances.length > 1
     if (has !== _hasMultipleInstances) {
@@ -280,6 +282,7 @@ function _closeInstanceDropdown() {
 }
 
 async function _toggleInstanceDropdown(sidebarEl) {
+  if (!isTauri) return
   const dd = document.getElementById('instance-dropdown')
   if (!dd) return
   if (dd.classList.contains('open')) { dd.classList.remove('open'); return }

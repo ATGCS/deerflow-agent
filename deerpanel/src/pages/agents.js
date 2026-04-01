@@ -14,7 +14,7 @@ export async function render() {
     <div class="page-header">
       <div>
         <h1 class="page-title">Agent 管理</h1>
-        <p class="page-desc">创建和管理 OpenClaw Agent，配置身份、模型和工作区</p>
+        <p class="page-desc">创建和管理 OpenClaw Agent，配置描述、模型与工具组</p>
       </div>
       <div class="page-actions">
         <button class="btn btn-secondary" id="btn-refresh-agents">刷新</button>
@@ -36,7 +36,7 @@ export async function render() {
 
   page.querySelector('#btn-add-agent').addEventListener('click', () => showAddAgentDialog(page, state))
   page.querySelector('#btn-refresh-agents').addEventListener('click', async () => {
-    invalidate('list_agents', 'agents_list')
+    invalidate('agents_list')
     await loadAgents(page, state)
     toast('Agent 列表已刷新', 'success')
   })
@@ -95,7 +95,7 @@ function renderAgents(page, state) {
   const list = state.agents.filter((a) => {
     if (!state.filter) return true
     const text = [
-      a.id,
+      a.name,
       a.description,
       parseModelValue(a),
       a.tool_groups?.join(','),
@@ -211,7 +211,7 @@ async function showAddAgentDialog(page, state) {
         toast('Agent 已创建', 'success')
 
         // 强制清除缓存并重新加载
-        invalidate('list_agents', 'agents_list')
+        invalidate('agents_list')
         await loadAgents(page, state)
       } catch (e) {
         toast('创建失败: ' + e, 'error')

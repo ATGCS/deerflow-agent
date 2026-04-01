@@ -4,7 +4,7 @@
 import { registerRoute, initRouter, navigate } from './router.js'
 import { renderSidebar, openMobileSidebar } from './components/sidebar.js'
 import { initTheme } from './lib/theme.js'
-import { detectOpenclawStatus, isOpenclawReady, isGatewayRunning, onGatewayChange, startGatewayPoll, onGuardianGiveUp, resetAutoRestart, loadActiveInstance, getActiveInstance, onInstanceChange } from './lib/app-state.js'
+import { onGuardianGiveUp, resetAutoRestart, loadActiveInstance, getActiveInstance, onInstanceChange } from './lib/app-state.js'
 import { wsClient } from './lib/ws-client.js'
 import { api, checkBackendHealth, isBackendOnline, onBackendStatusChange } from './lib/tauri-api.js'
 import { version as APP_VERSION } from '../package.json'
@@ -357,29 +357,11 @@ async function boot() {
       }).catch(() => {})
     : Promise.resolve()
 
-  ensureWebSession.then(() => loadActiveInstance()).then(() => detectOpenclawStatus()).then(() => {
-    // 重新渲染侧边栏（检测完成后 isOpenclawReady 状态已更新）
+  ensureWebSession.then(() => loadActiveInstance()).then(() => {
+    // deerflaw 前端不做 openclaw/gateway 就绪检查，直接渲染业务菜单
     renderSidebar(sidebar)
     if (window.location.hash === '#/setup') navigate('/dashboard')
-    // 实时聊天不展示 Gateway 检查提示（减少干扰）
-    if (!(window.location.hash || '').startsWith('#/chat')) setupGatewayBanner()
-    startGatewayPoll()
-
-    // 自动连接 WebSocket（如果 Gateway 正在运行）
-    if (isGatewayRunning()) {
-      autoConnectWebSocket()
-    }
-
-    // 监听 Gateway 状态变化，自动连接/断开 WebSocket
-    onGatewayChange((running) => {
-      if (running) {
-        autoConnectWebSocket()
-        // 正向时机：Gateway 启动成功，延迟弹社区引导
-        setTimeout(tryShowEngagement, 5000)
-      } else {
-        wsClient.disconnect()
-      }
-    })
+    // deerflaw 前端不再执行 openclaw/gateway 状态检查与自动连接逻辑
 
     // 守护放弃时，弹出恢复选项
     if (window.__TAURI_INTERNALS__) {
@@ -400,8 +382,7 @@ async function boot() {
     // 实例切换时，重连 WebSocket + 重新检测状态
     onInstanceChange(async () => {
       wsClient.disconnect()
-      await detectOpenclawStatus()
-      if (isGatewayRunning()) autoConnectWebSocket()
+      autoConnectWebSocket()
     })
 
     // 全局监听后台任务完成/失败事件，自动刷新安装状态和侧边栏
@@ -410,8 +391,7 @@ async function boot() {
         const refreshAfterTask = async () => {
           // 清除 API 缓存，确保拿到最新状态
           const { invalidate } = await import('./lib/tauri-api.js')
-          invalidate('check_installation', 'get_services_status', 'get_version_info')
-          await detectOpenclawStatus()
+          invalidate('get_version_info')
           renderSidebar(sidebar)
           // setup 页面已停用：若仍停留其路由，统一跳回仪表盘
           if (window.location.hash === '#/setup') {
@@ -426,67 +406,7 @@ async function boot() {
 }
 
 async function autoConnectWebSocket() {
-  try {
-    const inst = getActiveInstance()
-    console.log(`[main] 自动连接 WebSocket (实例: ${inst.name})...`)
-    const config = await api.readOpenclawConfig()
-    const port = config?.gateway?.port || 18789
-    const rawToken = config?.gateway?.auth?.token
-    const token = (typeof rawToken === 'string') ? rawToken : ''
-
-    // 启动前先确保设备已配对 + allowedOrigins 已写入，无需用户手动操作
-    let needReload = false
-    try {
-      const pairResult = await api.autoPairDevice()
-      console.log('[main] 设备配对 + origins 已就绪:', pairResult)
-      // 仅在配置实际变更时才需要 reload（dev-api 返回 {changed}，Tauri 返回字符串）
-      if (typeof pairResult === 'object' && pairResult.changed) {
-        needReload = true
-      } else if (typeof pairResult === 'string' && pairResult !== '设备已配对') {
-        needReload = true
-      }
-    } catch (pairErr) {
-      console.warn('[main] autoPairDevice 失败（非致命）:', pairErr)
-    }
-
-    // 确保模型配置包含 vision 支持（input: ["text", "image"]）
-    try {
-      const patched = await api.patchModelVision()
-      if (patched) {
-        console.log('[main] 已为模型添加 vision 支持')
-        needReload = true
-      }
-    } catch (visionErr) {
-      console.warn('[main] patchModelVision 失败（非致命）:', visionErr)
-    }
-
-    // 统一 reload Gateway（配对 origins + vision patch 合并为一次 reload）
-    if (needReload) {
-      try {
-        await api.reloadGateway()
-        console.log('[main] Gateway 已重载')
-      } catch (reloadErr) {
-        console.warn('[main] reloadGateway 失败（非致命）:', reloadErr)
-      }
-    }
-
-    let host
-    const inst2 = getActiveInstance()
-    if (inst2.type !== 'local' && inst2.endpoint) {
-      try {
-        const url = new URL(inst2.endpoint)
-        host = `${url.hostname}:${inst2.gatewayPort || port}`
-      } catch {
-        host = window.__TAURI_INTERNALS__ ? `127.0.0.1:${port}` : location.host
-      }
-    } else {
-      host = window.__TAURI_INTERNALS__ ? `127.0.0.1:${port}` : location.host
-    }
-    wsClient.connect(host, token)
-    console.log(`[main] WebSocket 连接已启动 -> ${host}`)
-  } catch (e) {
-    console.error('[main] 自动连接 WebSocket 失败:', e)
-  }
+  // 旧项目的 Gateway WebSocket 自动连接逻辑已停用（避免硬编码 127.0.0.1:18789 等约定）
 }
 
 function setupGatewayBanner() {
@@ -702,6 +622,7 @@ sudo systemctl restart clawpanel</pre>
 }
 
 function startUpdateChecker() {
+  if (!window.__TAURI_INTERNALS__) return
   // 启动后 5 秒检查一次
   setTimeout(checkGlobalUpdate, 5000)
   // 之后每 30 分钟检查一次
@@ -757,7 +678,7 @@ function startUpdateChecker() {
         lines.push(`- Node.js: ${node?.version || '未知'}`)
       } catch {}
       try {
-        const ver = await api.getVersionInfo()
+        const ver = await api.systemVersion()
         lines.push(`- 版本: 当前 ${ver?.current || '?'} / 推荐 ${ver?.recommended || '?'} / 最新 ${ver?.latest || '?'}${ver?.ahead_of_recommended ? ' / 当前版本高于推荐版' : ''}`)
       } catch {}
       return { detail: lines.join('\n') }
