@@ -119,9 +119,9 @@ export function renderSidebar(el) {
   let html = `
     <div class="sidebar-header">
       <div class="sidebar-logo">
-        <img src="/images/logo.png" alt="ClawPanel">
+        <img src="/images/logo.png" alt="DeerPanel">
       </div>
-      <span class="sidebar-title">ClawPanel</span>
+      <span class="sidebar-title">DeerPanel</span>
       <button class="sidebar-collapse-btn" id="btn-sidebar-collapse" title="折叠/展开">${collapsed ? '»' : '«'}</button>
       <button class="sidebar-close-btn" id="btn-sidebar-close" title="关闭菜单">&times;</button>
     </div>

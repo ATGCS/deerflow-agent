@@ -3,12 +3,11 @@
  * 支持：流式响应、Markdown 渲染、会话管理、Agent 选择、快捷指令
  */
 import { api, invalidate } from '../lib/tauri-api.js'
-import { navigate } from '../router.js'
 import { wsClient, uuid, threadStatePayloadFromValues } from '../lib/ws-client.js'
 import { renderMarkdown } from '../lib/markdown.js'
 import { saveMessage, saveMessages, getLocalMessages, isStorageAvailable } from '../lib/message-db.js'
 import { toast } from '../components/toast.js'
-import { showModal, showConfirm } from '../components/modal.js'
+import { showConfirm } from '../components/modal.js'
 import { icon as svgIcon } from '../lib/icons.js'
 
 const RENDER_THROTTLE = 30
@@ -57,10 +56,10 @@ const COMMANDS = [
 ]
 
 const SESSION_MODES = [
-  { value: 'normal', label: '普通对话', command: '' },
-  { value: 'deep', label: '深入研究', command: '/reasoning high' },
-  { value: 'think', label: '深度思考', command: '/think high' },
-  { value: 'fast', label: '快速模式', command: '/fast on' },
+  { value: 'flash', label: '闪速', command: '/fast on' },
+  { value: 'thinking', label: '思考', command: '/think low' },
+  { value: 'pro', label: 'Pro', command: '/think medium' },
+  { value: 'ultra', label: 'Ultra', command: '/think high' },
 ]
 
 let _sessionKey = null, _page = null, _messagesEl = null, _textarea = null
@@ -69,6 +68,7 @@ let _sessionListEl = null, _cmdPanelEl = null, _attachPreviewEl = null, _fileInp
 let _modelSelectEl = null
 let _followupsEl = null, _followupsAbort = null, _lastSuggestionRunId = null
 let _suggestionRecent = []
+let _quickPromptsEl = null
 let _currentAiBubble = null, _currentAiText = '', _currentAiImages = [], _currentAiVideos = [], _currentAiAudios = [], _currentAiFiles = [], _currentAiTools = [], _currentRunId = null
 let _isStreaming = false, _isSending = false, _messageQueue = [], _streamStartTime = 0
 let _lastRenderTime = 0, _renderPending = false, _lastHistoryHash = ''
@@ -192,36 +192,34 @@ export async function render() {
       </div>
       <div class="chat-cmd-panel" id="chat-cmd-panel" style="display:none"></div>
       <div class="chat-followups" id="chat-followups" hidden></div>
+      <div class="chat-quick-prompts" id="chat-quick-prompts">
+        <div class="chat-quick-prompts-title">快捷开始</div>
+        <div class="chat-quick-prompts-row">
+          <button class="chat-quick-prompt" data-prompt="给我一个小惊喜吧">小惊喜</button>
+          <button class="chat-quick-prompt" data-prompt="撰写一篇关于[主题]的博客文章">写作</button>
+          <button class="chat-quick-prompt" data-prompt="深入浅出的研究一下[主题]，并总结发现。">研究</button>
+          <button class="chat-quick-prompt" data-prompt="从[来源]收集数据并创建报告。">收集</button>
+          <button class="chat-quick-prompt" data-prompt="帮我学习[主题]：先给学习路线，再出练习题并批改。">学习</button>
+          <button class="chat-quick-prompt" data-prompt="创建一个[类型]的作品：给方案、步骤和可交付物。">创建</button>
+        </div>
+      </div>
       <div class="chat-attachments-preview" id="chat-attachments-preview" style="display:none"></div>
       <div class="chat-input-area">
         <input type="file" id="chat-file-input" accept="image/*" multiple style="display:none">
         <button class="chat-attach-btn" id="chat-attach-btn" title="上传图片">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
         </button>
-        <div class="chat-think-wrap">
-          <button class="chat-think-btn" id="chat-think-btn" title="思考强度">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" aria-hidden="true"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 00-4 12.8c.5.4 1 1.1 1 1.8V17h6v-.4c0-.7.5-1.4 1-1.8A7 7 0 0012 2z"/></svg>
-            <span class="chat-think-label" id="chat-think-label">思考: 中</span>
-            <span class="chat-think-caret" aria-hidden="true">▾</span>
-          </button>
-          <div class="chat-think-menu" id="chat-think-menu" hidden>
-            <button class="chat-think-item" data-think="off">关闭</button>
-            <button class="chat-think-item" data-think="low">低</button>
-            <button class="chat-think-item" data-think="medium">中</button>
-            <button class="chat-think-item" data-think="high">高</button>
-          </div>
-        </div>
         <div class="chat-mode-wrap">
-          <button class="chat-mode-btn" id="chat-mode-btn" title="会话模式">
+          <button class="chat-mode-btn" id="chat-mode-btn" title="模式">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" aria-hidden="true"><path d="M12 2l2.4 6.2L21 9l-5 4 1.6 6.8L12 16.8 6.4 19.8 8 13.1 3 9l6.6-.8L12 2z"/></svg>
-            <span class="chat-mode-label" id="chat-mode-label">模式: 普通</span>
+            <span class="chat-mode-label" id="chat-mode-label">模式: Pro</span>
             <span class="chat-mode-caret" aria-hidden="true">▾</span>
           </button>
           <div class="chat-mode-menu" id="chat-mode-menu" hidden>
-            <button class="chat-mode-item" data-mode="normal">普通</button>
-            <button class="chat-mode-item" data-mode="fast">快速</button>
-            <button class="chat-mode-item" data-mode="think">深度思考</button>
-            <button class="chat-mode-item" data-mode="deep">深入研究</button>
+            <button class="chat-mode-item" data-mode="flash">闪速</button>
+            <button class="chat-mode-item" data-mode="thinking">思考</button>
+            <button class="chat-mode-item" data-mode="pro">Pro</button>
+            <button class="chat-mode-item" data-mode="ultra">Ultra</button>
           </div>
         </div>
         <div class="chat-input-wrapper">
@@ -286,6 +284,7 @@ export async function render() {
   _sessionListEl = page.querySelector('#chat-session-list')
   _cmdPanelEl = page.querySelector('#chat-cmd-panel')
   _followupsEl = page.querySelector('#chat-followups')
+  _quickPromptsEl = page.querySelector('#chat-quick-prompts')
   _attachPreviewEl = page.querySelector('#chat-attachments-preview')
   _fileInputEl = page.querySelector('#chat-file-input')
   _modelSelectEl = page.querySelector('#chat-model-select')
@@ -310,8 +309,8 @@ export async function render() {
   loadModelOptions()
   // 非阻塞：先返回 DOM，后台连接 Gateway
   connectGateway()
-  renderThinkingControl()
   renderModeControl()
+  syncQuickPromptsVisibility()
   return page
 }
 
@@ -328,9 +327,8 @@ function showPageGuide(container) {
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="28" height="28"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
       </div>
       <div class="chat-guide-content">
-        <b>你正在使用「实时聊天」</b>
-        <p>此页面通过 <b>Gateway</b> 连接本项目的 AI Agent，对话由你部署的本项目后端服务处理。</p>
-        <p style="opacity:0.7;font-size:11px">如需使用 ClawPanel 内置 AI 助手（独立于本项目 Agent），请前往左侧菜单「AI 助手」页面。</p>
+        <b>已连接项目 Agent</b>
+        <p style="opacity:0.7;font-size:11px">需要通用问答或代码助手时，可切换到左侧「AI 助手」。</p>
       </div>
       <button class="chat-guide-close" title="知道了">&times;</button>
     </div>
@@ -397,7 +395,7 @@ function bindEvents(page) {
   }
   page.querySelector('#btn-toggle-sidebar')?.addEventListener('click', toggleSidebar)
   page.querySelector('#btn-toggle-sidebar-main')?.addEventListener('click', toggleSidebar)
-  page.querySelector('#btn-new-session').addEventListener('click', () => showNewSessionDialog())
+  page.querySelector('#btn-new-session').addEventListener('click', () => createNewSessionQuick())
   page.querySelector('#btn-cmd').addEventListener('click', () => toggleCmdPanel())
   page.querySelector('#btn-reset-session').addEventListener('click', () => resetCurrentSession())
   page.querySelector('#btn-reload-history')?.addEventListener('click', async () => {
@@ -408,16 +406,14 @@ function bindEvents(page) {
     toast('历史已刷新', 'success')
   })
   page.querySelector('#btn-refresh-models')?.addEventListener('click', () => loadModelOptions(true))
-  page.querySelector('#chat-think-btn')?.addEventListener('click', (e) => {
-    e.stopPropagation()
-    toggleThinkingMenu()
-  })
-  page.querySelector('#chat-think-menu')?.addEventListener('click', (e) => {
-    e.preventDefault()
-    e.stopPropagation()
-    const item = e.target.closest('[data-think]')
-    if (!item) return
-    applyThinkingLevel(item.dataset.think)
+  page.querySelector('#chat-quick-prompts')?.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-prompt]')
+    if (!btn) return
+    const p = (btn.dataset.prompt || '').trim()
+    if (!p) return
+    _textarea.value = p
+    _textarea.focus()
+    _textarea.dispatchEvent(new Event('input'))
   })
   page.querySelector('#chat-mode-btn')?.addEventListener('click', (e) => {
     e.stopPropagation()
@@ -431,11 +427,8 @@ function bindEvents(page) {
     applyModeOption(item.dataset.mode)
   })
   page.addEventListener('click', (e) => {
-    const thinkWrap = page.querySelector('.chat-think-wrap')
     const modeWrap = page.querySelector('.chat-mode-wrap')
-    if ((thinkWrap && thinkWrap.contains(e.target)) || (modeWrap && modeWrap.contains(e.target))) return
-    const thinkMenu = page.querySelector('#chat-think-menu')
-    if (thinkMenu) thinkMenu.hidden = true
+    if (modeWrap && modeWrap.contains(e.target)) return
     const modeMenu = page.querySelector('#chat-mode-menu')
     if (modeMenu) modeMenu.hidden = true
   })
@@ -468,6 +461,13 @@ function bindEvents(page) {
     scrollToBottom(true)
   })
   _messagesEl.addEventListener('click', () => hideCmdPanel())
+}
+
+function syncQuickPromptsVisibility() {
+  if (!_quickPromptsEl || !_messagesEl) return
+  // 仅当出现真实对话（user/assistant）时隐藏；系统提示/压缩提示不影响“新对话快捷开始”
+  const hasMsg = !!_messagesEl.querySelector('.msg-user, .msg-ai')
+  _quickPromptsEl.hidden = hasMsg
 }
 
 async function loadModelOptions(showToast = false) {
@@ -547,6 +547,12 @@ function getDisplayLabel(key) {
   return custom || parseSessionLabel(key)
 }
 
+function titleFromFirstUserInput(text) {
+  const t = (text || '').trim().replace(/\s+/g, ' ')
+  if (!t) return ''
+  return t.length > 18 ? `${t.slice(0, 18)}…` : t
+}
+
 function getSessionMetaMap() {
   try { return JSON.parse(localStorage.getItem(STORAGE_SESSION_META_KEY) || '{}') } catch { return {} }
 }
@@ -554,13 +560,25 @@ function getSessionMetaMap() {
 function setSessionMode(key, mode) {
   if (!key) return
   const map = getSessionMetaMap()
-  if (mode && mode !== 'normal') map[key] = { ...(map[key] || {}), mode }
-  else delete map[key]
+  const cur = map[key] || {}
+  if (mode && mode !== 'pro') {
+    map[key] = { ...cur, mode }
+  } else {
+    const next = { ...cur }
+    delete next.mode
+    if (Object.keys(next).length) map[key] = next
+    else delete map[key]
+  }
   localStorage.setItem(STORAGE_SESSION_META_KEY, JSON.stringify(map))
 }
 
 function getSessionMode(key) {
-  return getSessionMetaMap()[key]?.mode || 'normal'
+  const raw = getSessionMetaMap()[key]?.mode
+  if (raw === 'normal') return 'pro'
+  if (raw === 'fast') return 'flash'
+  if (raw === 'think') return 'thinking'
+  if (raw === 'deep') return 'ultra'
+  return raw || 'pro'
 }
 
 function setSessionThinkLevel(key, level) {
@@ -583,6 +601,26 @@ function getSessionThinkLevel(key) {
   return getSessionMetaMap()[key]?.thinkLevel || 'medium'
 }
 
+function setSessionReasoningEffort(key, effort) {
+  if (!key) return
+  const map = getSessionMetaMap()
+  const cur = map[key] || {}
+  if (effort && effort !== 'off') {
+    map[key] = { ...cur, reasoningEffort: effort }
+  } else {
+    // 'off' 作为默认值，不落库
+    const next = { ...cur }
+    delete next.reasoningEffort
+    if (Object.keys(next).length) map[key] = next
+    else delete map[key]
+  }
+  localStorage.setItem(STORAGE_SESSION_META_KEY, JSON.stringify(map))
+}
+
+function getSessionReasoningEffort(key) {
+  return getSessionMetaMap()[key]?.reasoningEffort || 'off'
+}
+
 function getSidebarOpen() {
   return localStorage.getItem(STORAGE_SIDEBAR_KEY) === '1'
 }
@@ -596,12 +634,17 @@ function thinkingLabelFromContext(ctx) {
   return '中'
 }
 
+function reasoningLabelFromSessionMeta(sessionKey) {
+  const v = getSessionReasoningEffort(sessionKey)
+  return v === 'off' ? '关' : '开'
+}
+
 function modeLabelFromSessionMeta(sessionKey) {
   const v = getSessionMode(sessionKey)
-  if (v === 'fast') return '快速'
-  if (v === 'think') return '深度思考'
-  if (v === 'deep') return '深入研究'
-  return '普通'
+  if (v === 'flash') return '闪速'
+  if (v === 'thinking') return '思考'
+  if (v === 'ultra') return 'Ultra'
+  return 'Pro'
 }
 
 function renderThinkingControl() {
@@ -615,22 +658,54 @@ function renderThinkingControl() {
   const lv = map[selected] || thinkingLabelFromContext(ctx)
   labelEl.textContent = `思考: ${lv}`
   btn.classList.toggle('active', lv !== '关')
+  renderThinkingMenu()
+}
+
+function renderThinkingMenu() {
+  if (!_page || !_sessionKey) return
+  const menu = _page.querySelector('#chat-think-menu')
+  if (!menu) return
+  const selected = getSessionThinkLevel(_sessionKey)
+  menu.querySelectorAll('[data-think]').forEach((item) => {
+    const v = item.dataset.think || 'medium'
+    const active = v === selected
+    item.classList.toggle('active', active)
+    item.setAttribute('aria-checked', active ? 'true' : 'false')
+  })
 }
 
 function renderModeControl() {
   if (!_page || !_sessionKey) return
+  const selectedMode = getSessionMode(_sessionKey)
   const btn = _page.querySelector('#chat-mode-btn')
   const labelEl = _page.querySelector('#chat-mode-label')
-  if (!btn || !labelEl) return
-  const selectedMode = getSessionMode(_sessionKey)
   const menu = _page.querySelector('#chat-mode-menu')
+  if (!btn || !labelEl || !menu) return
   const lv = modeLabelFromSessionMeta(_sessionKey)
   labelEl.textContent = `模式: ${lv}`
-  btn.classList.toggle('active', lv !== '普通')
+  btn.classList.toggle('active', lv !== 'Pro')
+  menu.querySelectorAll('.chat-mode-item').forEach((item) => {
+    const mode = item.dataset.mode || 'pro'
+    const active = mode === selectedMode
+    item.classList.toggle('active', active)
+    item.setAttribute('aria-checked', active ? 'true' : 'false')
+  })
+}
+
+function renderReasoningControl() {
+  if (!_page || !_sessionKey) return
+  const btn = _page.querySelector('#chat-reasoning-btn')
+  const labelEl = _page.querySelector('#chat-reasoning-label')
+  if (!btn || !labelEl) return
+  const selected = getSessionReasoningEffort(_sessionKey)
+  const menu = _page.querySelector('#chat-reasoning-menu')
+  const lv = reasoningLabelFromSessionMeta(_sessionKey)
+  labelEl.textContent = `推理: ${lv}`
+  btn.classList.toggle('active', lv !== '关')
   if (menu) {
-    menu.querySelectorAll('.chat-mode-item').forEach((item) => {
-      const mode = item.dataset.mode || 'normal'
-      const active = mode === selectedMode
+    menu.querySelectorAll('.chat-reasoning-item[data-reasoning]').forEach((item) => {
+      const v = item.dataset.reasoning || 'off'
+      const active = v === selected
       item.classList.toggle('active', active)
       item.setAttribute('aria-checked', active ? 'true' : 'false')
     })
@@ -647,6 +722,13 @@ function toggleThinkingMenu() {
 function toggleModeMenu() {
   if (!_page) return
   const menu = _page.querySelector('#chat-mode-menu')
+  if (!menu) return
+  menu.hidden = !menu.hidden
+}
+
+function toggleReasoningMenu() {
+  if (!_page) return
+  const menu = _page.querySelector('#chat-reasoning-menu')
   if (!menu) return
   menu.hidden = !menu.hidden
 }
@@ -677,6 +759,7 @@ function applyThinkingLevel(level) {
   if (!contextUpdate) return
   api.chatUpdateContext(_sessionKey, contextUpdate)
   renderThinkingControl()
+  renderThinkingMenu()
   toast(tip, 'success')
 }
 
@@ -684,11 +767,23 @@ function applyModeOption(mode) {
   if (!_sessionKey) return
   const menu = _page?.querySelector('#chat-mode-menu')
   if (menu) menu.hidden = true
-  const nextMode = ['normal', 'fast', 'think', 'deep'].includes(mode) ? mode : 'normal'
+  const nextMode = ['flash', 'thinking', 'pro', 'ultra'].includes(mode) ? mode : 'pro'
   setSessionMode(_sessionKey, nextMode)
-  // 模式用于“会话类型”的单选 UI（对齐 Web），不强制改动“思考强度”开关，避免两个控件互相影响
+  applySessionModePreset(_sessionKey, nextMode)
   renderModeControl()
   toast(`已切换为：${modeLabelFromSessionMeta(_sessionKey)}`, 'success')
+}
+
+function applyReasoningOption(level) {
+  if (!_sessionKey) return
+  const menu = _page?.querySelector('#chat-reasoning-menu')
+  if (menu) menu.hidden = true
+  const next = ['off', 'medium'].includes(level) ? level : 'off'
+  setSessionReasoningEffort(_sessionKey, next)
+  const contextUpdate = (next === 'off') ? { reasoning_effort: undefined } : { reasoning_effort: next }
+  api.chatUpdateContext(_sessionKey, contextUpdate)
+  renderReasoningControl()
+  toast(`已设置推理：${reasoningLabelFromSessionMeta(_sessionKey)}`, 'success')
 }
 
 async function applySelectedModel() {
@@ -826,7 +921,6 @@ async function connectGateway() {
         _sessionKey = saved || sessionKey
         updateSessionTitle()
       }
-      renderThinkingControl()
       renderModeControl()
       // 先与 Web 端一致从 LangGraph threads/search 拉回映射，再加载历史，避免刷新后本地映射空导致列表/消息全丢
       await refreshSessionList()
@@ -845,7 +939,6 @@ async function connectGateway() {
       updateStatusDot('ready')
       showTyping(false)  // 确保关闭加载动画
       updateSessionTitle()
-      renderThinkingControl()
       renderModeControl()
       await refreshSessionList()
       loadHistory()
@@ -981,7 +1074,7 @@ async function switchSession(newKey) {
   _lastHistoryHash = ''
   resetStreamState()
   updateSessionTitle()
-  renderThinkingControl()
+  renderModeControl()
   clearMessages()
   hideFollowups()
   _suggestionRecent = []
@@ -994,114 +1087,49 @@ async function switchSession(newKey) {
   }
 }
 
-async function showNewSessionDialog() {
+async function createNewSessionQuick() {
   const defaultAgent = wsClient.snapshot?.sessionDefaults?.defaultAgentId || 'main'
-
-  // 先用默认选项立即显示弹窗
-  const initialOptions = [
-    { value: 'main', label: 'main (默认)' },
-    { value: '__new__', label: '+ 新建 Agent' }
-  ]
-
-  showModal({
-    title: '新建会话',
-    fields: [
-      { name: 'name', label: '会话名称', value: '', placeholder: '例如：翻译助手' },
-      { name: 'agent', label: 'Agent', type: 'select', value: defaultAgent, options: initialOptions },
-      { name: 'mode', label: '会话类型', type: 'select', value: 'normal', options: SESSION_MODES.map(m => ({ value: m.value, label: m.label })) },
-    ],
-    onConfirm: async (result) => {
-      const name = (result.name || '').trim()
-      if (!name) { toast('请输入会话名称', 'warning'); return }
-      const agent = result.agent || defaultAgent
-      const mode = result.mode || 'normal'
-      if (agent === '__new__') {
-        navigate('/agents')
-        toast('请在 Agent 管理页面创建新 Agent', 'info')
-        return
-      }
-      const newKey = `agent:${agent}:${name}`
-      setSessionMode(newKey, mode)
-      switchSession(newKey)
-      await applySessionModePreset(newKey, mode)
-      toast('会话已创建', 'success')
-    }
-  })
-
-  // 异步加载完整 Agent 列表并更新下拉框
-  try {
-    const agentsResp = await api.agentsList()
-    const agents = Array.isArray(agentsResp?.agents) ? agentsResp.agents : []
-    const agentOptions = agents.map(a => ({
-      value: a.name,
-      label: `${a.name}${a.isDefault ? ' (默认)' : ''}${a.description ? ' — ' + a.description : ''}`
-    }))
-    agentOptions.push({ value: '__new__', label: '+ 新建 Agent' })
-
-    // 更新弹窗中的下拉框选项
-    const modalEl = document.querySelector('.modal-overlay')
-    if (!modalEl) return
-    const selectEl = modalEl.querySelector('[data-name="agent"]')
-    if (selectEl) {
-      const currentValue = selectEl.value
-      selectEl.innerHTML = agentOptions.map(o =>
-        `<option value="${o.value}" ${o.value === currentValue ? 'selected' : ''}>${o.label}</option>`
-      ).join('')
-    }
-    // 重新添加会话类型下拉框确保它存在
-    const fieldsEl = modalEl.querySelector('.modal-fields')
-    if (fieldsEl) {
-      const modeFieldEl = fieldsEl.querySelector('[data-name="mode"]')
-      if (!modeFieldEl) {
-        const modeSelectHtml = `
-          <div class="modal-field">
-            <label>
-              <span class="field-label">会话类型</span>
-              <select data-name="mode">
-                ${SESSION_MODES.map(m => `<option value="${m.value}">${m.label}</option>`).join('')}
-              </select>
-            </label>
-          </div>
-        `
-        fieldsEl.insertAdjacentHTML('beforeend', modeSelectHtml)
-      }
-    }
-  } catch (e) {
-    console.warn('[chat] 加载 Agent 列表失败:', e)
-  }
+  const keyTail = `new-${Date.now().toString(36)}`
+  const newKey = `agent:${defaultAgent}:${keyTail}`
+  const currentMode = getSessionMode(_sessionKey)
+  setSessionMode(newKey, currentMode || 'pro')
+  setSessionName(newKey, '')
+  await switchSession(newKey)
+  await applySessionModePreset(newKey, currentMode || 'pro')
+  appendSystemMessage('已创建新对话，开始输入吧')
 }
 
 async function applySessionModePreset(sessionKey, mode) {
   const preset = SESSION_MODES.find(m => m.value === mode)
-  if (!preset?.command) return
+  if (!preset) return
   if (!sessionKey) return
   try {
     let contextUpdate = null
-    if (mode === 'deep') {
+    if (mode === 'ultra') {
       contextUpdate = {
         thinking_enabled: true,
         reasoning_effort: 'high',
-        is_plan_mode: false,
-        subagent_enabled: false,
+        is_plan_mode: true,
+        subagent_enabled: true,
       }
-    } else if (mode === 'think') {
+    } else if (mode === 'pro') {
       contextUpdate = {
         thinking_enabled: true,
-        reasoning_effort: undefined,
+        reasoning_effort: 'medium',
+        is_plan_mode: true,
+        subagent_enabled: false,
+      }
+    } else if (mode === 'thinking') {
+      contextUpdate = {
+        thinking_enabled: true,
+        reasoning_effort: 'low',
         is_plan_mode: false,
         subagent_enabled: false,
       }
-    } else if (mode === 'fast') {
+    } else if (mode === 'flash') {
       contextUpdate = {
         thinking_enabled: false,
         reasoning_effort: 'minimal',
-        is_plan_mode: false,
-        subagent_enabled: false,
-      }
-    } else if (mode === 'normal') {
-      contextUpdate = {
-        thinking_enabled: true,
-        reasoning_effort: undefined,
         is_plan_mode: false,
         subagent_enabled: false,
       }
@@ -1109,7 +1137,6 @@ async function applySessionModePreset(sessionKey, mode) {
     if (contextUpdate) {
       api.chatUpdateContext(sessionKey, contextUpdate)
       if (sessionKey === _sessionKey) {
-        renderThinkingControl()
         appendSystemMessage(`已应用会话类型：${preset.label}`)
       }
     }
@@ -1265,7 +1292,14 @@ async function fetchFollowups(runId) {
       new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 120000)),
     ])
     if (controller.signal.aborted) return
-    const suggestions = Array.isArray(res?.suggestions) ? res.suggestions : []
+    const raw = Array.isArray(res?.suggestions) ? res.suggestions : []
+    const suggestions = raw
+      .map(s => (typeof s === 'string' ? s.trim() : ''))
+      .filter(Boolean)
+      // 过滤“标签/分类词”类建议（如：小惊喜/写作/研究…），只保留更像问题的条目
+      .filter(s => s.length >= 6 || /[?？]/.test(s))
+      .slice(0, 6)
+
     if (!suggestions.length) {
       // 为空时保持隐藏，不打扰输入区
       _followupsEl.hidden = true
@@ -1423,8 +1457,18 @@ function handleCommand(text) {
 
 async function doSend(text, attachments = []) {
   if (!_sessionKey) _sessionKey = localStorage.getItem(STORAGE_SESSION_KEY) || 'agent:main:main'
+  const names = getSessionNames()
+  if (!names[_sessionKey]) {
+    const autoTitle = titleFromFirstUserInput(text)
+    if (autoTitle) {
+      setSessionName(_sessionKey, autoTitle)
+      updateSessionTitle()
+      refreshSessionList()
+    }
+  }
   pushSuggestionRecent('user', text)
   appendUserMessage(text, attachments)
+  syncQuickPromptsVisibility()
   saveMessage({
     id: uuid(), sessionKey: _sessionKey, role: 'user', content: text, timestamp: Date.now(),
     attachments: attachments?.length ? attachments.map(a => ({ category: a.category || 'image', mimeType: a.mimeType || '', content: a.content || '', url: a.url || '' })) : undefined
@@ -1525,6 +1569,12 @@ function handleThreadState(payload) {
     if (payload.title) {
       titleEl.textContent = payload.title
       titleEl.hidden = false
+      const names = getSessionNames()
+      if (_sessionKey && !names[_sessionKey]) {
+        setSessionName(_sessionKey, payload.title)
+        updateSessionTitle()
+        refreshSessionList()
+      }
     } else {
       titleEl.textContent = ''
       titleEl.hidden = true
@@ -1648,7 +1698,7 @@ function handleChatEvent(payload) {
     if (c?.audios?.length) _currentAiAudios = c.audios
     if (c?.files?.length) _currentAiFiles = c.files
     if (c?.tools?.length) _currentAiTools = c.tools
-    if (c?.text && c.text.length >= _currentAiText.length) {
+    if ((c?.text && c.text.length >= _currentAiText.length) || c?.tools?.length) {
       showTyping(false)
       if (!_currentAiBubble) {
         _currentAiBubble = createStreamBubble()
@@ -1657,7 +1707,7 @@ function handleChatEvent(payload) {
         _streamStartTime = Date.now()
         updateSendState()
       }
-      _currentAiText = c.text
+      if (c?.text && c.text.length >= _currentAiText.length) _currentAiText = c.text
       // 每次收到 delta 重置安全超时（90s 无新 delta 则强制结束）
       clearTimeout(_streamSafetyTimer)
       _streamSafetyTimer = setTimeout(() => {
@@ -2024,10 +2074,16 @@ function throttledRender() {
 
 function doRender() {
   _lastRenderTime = performance.now()
-  if (_currentAiBubble && _currentAiText) {
-    _currentAiBubble.innerHTML = renderMarkdown(_currentAiText)
-    scrollToBottom()
+  if (!_currentAiBubble) return
+  _currentAiBubble.innerHTML = _currentAiText ? renderMarkdown(_currentAiText) : ''
+  appendToolsToEl(_currentAiBubble, _currentAiTools)
+  if (!_currentAiText && _currentAiTools.length) {
+    const tip = document.createElement('div')
+    tip.className = 'msg-tool-stream-tip'
+    tip.textContent = '正在调用工具...'
+    _currentAiBubble.appendChild(tip)
   }
+  scrollToBottom()
 }
 
 // ensureAiBubble 已被 createStreamBubble 替代
@@ -2480,9 +2536,9 @@ function upsertTool(tools, entry) {
   if (!target && entry.name) target = tools.find(t => t.name === entry.name && !t.output)
   if (target) {
     if (entry.input != null && target.input == null) target.input = entry.input
-    if (entry.output != null && target.output == null) target.output = entry.output
-    if (entry.status && target.status == null) target.status = entry.status
-    if (entry.time && target.time == null) target.time = entry.time
+    if (entry.output != null) target.output = entry.output
+    if (entry.status) target.status = entry.status
+    if (entry.time) target.time = entry.time
     return
   }
   tools.push(mergeToolEventData(entry))
@@ -2502,7 +2558,7 @@ function collectToolsFromMessage(message, tools) {
         name: name || '工具',
         input,
         output: null,
-        status: call.status || 'ok',
+        status: call.status || 'running',
         time: resolveToolTime(callId, message?.timestamp),
       })
     })
@@ -2537,10 +2593,16 @@ function appendToolsToEl(el, tools) {
     const details = document.createElement('details')
     details.className = 'msg-tool-item'
     const summary = document.createElement('summary')
-    const status = tool.status === 'error' ? '失败' : '成功'
+    const running = isToolRunning(tool)
+    const status = running ? '进行中' : (tool.status === 'error' ? '失败' : '完成')
+    const statusCls = running ? 'running' : (tool.status === 'error' ? 'error' : 'ok')
     const timeValue = getToolTime(tool) || resolveToolTime(tool.id || tool.tool_call_id, tool.messageTimestamp)
     const timeText = timeValue ? formatTime(new Date(timeValue)) : ''
-    summary.innerHTML = `${escapeHtml(tool.name || '工具')} · ${status}${timeText ? ' · ' + timeText : ''}`
+    summary.innerHTML =
+      `<span class="msg-tool-name">${escapeHtml(toolLabel(tool))}</span>` +
+      `<span class="msg-tool-status msg-tool-status--${statusCls}">${status}</span>` +
+      (timeText ? `<span class="msg-tool-time">${timeText}</span>` : '')
+    if (running) details.open = true
     const body = document.createElement('div')
     body.className = 'msg-tool-body'
     const inputJson = stripAnsi(safeStringify(tool.input))
@@ -2553,6 +2615,25 @@ function appendToolsToEl(el, tools) {
   })
   if (existing) existing.remove()
   el.insertBefore(container, el.firstChild)
+}
+
+function isToolRunning(tool) {
+  if (!tool) return false
+  if (tool.status === 'running' || tool.status === 'in_progress') return true
+  return tool.output == null || tool.output === ''
+}
+
+function toolLabel(tool) {
+  const name = String(tool?.name || 'tool')
+  const args = tool?.input && typeof tool.input === 'object' ? tool.input : null
+  if (name === 'web_search') return `网络搜索${args?.query ? `: ${args.query}` : ''}`
+  if (name === 'web_fetch') return `网页读取${args?.url ? `: ${args.url}` : ''}`
+  if (name === 'read_file') return `读取文件${args?.path ? `: ${args.path}` : ''}`
+  if (name === 'write_file' || name === 'str_replace') return `修改文件${args?.path ? `: ${args.path}` : ''}`
+  if (name === 'bash') return `执行命令${args?.command ? `: ${args.command}` : ''}`
+  if (name === 'write_todos') return '更新待办'
+  if (name === 'ask_clarification') return '等待确认'
+  return name
 }
 
 /** 图片灯箱查看 */
@@ -2575,12 +2656,14 @@ function appendSystemMessage(text) {
   wrap.textContent = text
   _messagesEl.insertBefore(wrap, _typingEl)
   scrollToBottom()
+  syncQuickPromptsVisibility()
 }
 
 function clearMessages() {
   _messagesEl.querySelectorAll('.msg').forEach(m => m.remove())
   _autoScrollEnabled = true
   _lastScrollTop = 0
+  syncQuickPromptsVisibility()
 }
 
 function showTyping(show) {
