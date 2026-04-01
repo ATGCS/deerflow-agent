@@ -1,15 +1,41 @@
 /**
- * 记忆文件管理页面
+ * 记忆管理页面 - 与 Web 版一致
  */
 import { api } from '../lib/tauri-api.js'
 import { toast } from '../components/toast.js'
-import { showModal } from '../components/modal.js'
+import { showModal, showConfirm } from '../components/modal.js'
 
-const CATEGORIES = [
-  { key: 'memory', label: '工作记忆', desc: '当前活跃的工作上下文、决策记录和进度追踪' },
-  { key: 'archive', label: '记忆归档', desc: '已归档的历史记忆文件，按时间周期整理' },
-  { key: 'core', label: '核心文件', desc: 'Agent 核心配置文件，如 AGENTS.md、CLAUDE.md 等' },
-]
+const CATEGORIES = ['workContext', 'personalContext', 'topOfMind']
+const HISTORY_CATEGORIES = ['recentMonths', 'earlierContext', 'longTermBackground']
+
+function formatTimeAgo(timestamp) {
+  if (!timestamp) return ''
+  const date = new Date(timestamp)
+  const now = new Date()
+  const diff = (now - date) / 1000
+  if (diff < 60) return '刚刚'
+  if (diff < 3600) return Math.floor(diff / 60) + ' 分钟前'
+  if (diff < 86400) return Math.floor(diff / 3600) + ' 小时前'
+  if (diff < 604800) return Math.floor(diff / 86400) + ' 天前'
+  return date.toLocaleDateString('zh-CN')
+}
+
+function confidenceToLevel(confidence) {
+  if (typeof confidence !== 'number' || !Number.isFinite(confidence)) return { key: 'unknown', value: null }
+  const value = Math.min(1, Math.max(0, confidence))
+  if (value >= 0.85) return { key: 'veryHigh', value }
+  if (value >= 0.65) return { key: 'high', value }
+  return { key: 'normal', value }
+}
+
+function escapeHtml(str) {
+  if (!str) return ''
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+}
 
 export async function render() {
   const page = document.createElement('div')
@@ -17,307 +43,260 @@ export async function render() {
 
   page.innerHTML = `
     <div class="page-header">
-      <h1 class="page-title">记忆文件</h1>
-      <div class="page-actions" style="display:flex;align-items:center;gap:var(--space-sm)">
-        <label style="font-size:var(--font-size-sm);color:var(--text-tertiary)">Agent:</label>
-        <select class="form-input" id="agent-select" style="width:auto;min-width:140px"><option value="main">main</option></select>
+      <div>
+        <h1 class="page-title">记忆管理</h1>
+        <p class="page-desc">管理用户记忆上下文、历史摘要和事实</p>
+      </div>
+      <div class="page-actions">
+        <button class="btn btn-sm btn-secondary" id="btn-reload">刷新</button>
+        <button class="btn btn-sm btn-danger" id="btn-clear-all">清空全部</button>
       </div>
     </div>
-    <div class="tab-bar">
-      ${CATEGORIES.map((c, i) => `<div class="tab${i === 0 ? ' active' : ''}" data-tab="${c.key}">${c.label}</div>`).join('')}
-    </div>
-    <div class="form-hint" id="category-desc" style="margin-bottom:var(--space-md)">${CATEGORIES[0].desc}</div>
-    <div class="memory-layout">
-      <div class="memory-sidebar">
-        <div style="padding:0 var(--space-sm) var(--space-sm);display:flex;gap:4px">
-          <button class="btn btn-sm btn-secondary" id="btn-new-file" style="flex:1">+ 新建</button>
-          <button class="btn btn-sm btn-danger" id="btn-del-file" disabled style="flex:1">删除</button>
+    <div class="page-content">
+      <div style="margin-bottom:var(--space-md);display:flex;gap:var(--space-sm);flex-wrap:wrap;align-items:center">
+        <input class="form-input" id="memory-search" placeholder="搜索记忆..." style="max-width:300px">
+        <div class="tab-bar" style="display:flex;gap:4px">
+          <div class="tab active" data-filter="all">全部</div>
+          <div class="tab" data-filter="summaries">摘要</div>
+          <div class="tab" data-filter="facts">事实</div>
         </div>
-        <div style="padding:0 var(--space-sm) var(--space-sm)">
-          <button class="btn btn-sm btn-secondary" id="btn-export-zip" style="width:100%">打包下载全部</button>
-        </div>
-        <div id="file-tree"><div class="stat-card loading-placeholder" style="height:32px;margin:8px"></div><div class="stat-card loading-placeholder" style="height:32px;margin:8px"></div><div class="stat-card loading-placeholder" style="height:32px;margin:8px"></div></div>
       </div>
-      <div class="memory-editor">
-        <div class="editor-toolbar">
-          <span id="current-file" style="font-size:var(--font-size-sm);color:var(--text-tertiary)">选择文件查看</span>
-          <div style="display:flex;gap:8px">
-            <button class="btn btn-sm btn-secondary" id="btn-download" disabled>下载</button>
-            <button class="btn btn-sm btn-secondary" id="btn-preview" disabled>预览</button>
-            <button class="btn btn-sm btn-primary" id="btn-save-file" disabled>保存</button>
-          </div>
-        </div>
-        <textarea class="editor-area" id="file-editor" placeholder="选择左侧文件进行编辑..." disabled></textarea>
-      </div>
+      <div id="memory-loading" style="padding:40px;text-align:center;color:var(--text-tertiary)">加载中...</div>
+      <div id="memory-content" style="display:none"></div>
+      <div id="memory-empty" style="display:none;padding:40px;text-align:center;color:var(--text-tertiary)">暂无记忆数据</div>
+      <div id="memory-error" style="display:none;padding:40px;text-align:center;color:var(--error)"></div>
     </div>
   `
 
-  const state = { category: 'memory', currentPath: null, agentId: 'main' }
-
-  // 先用默认选项填充下拉框，立即显示页面
-  const agentSelect = page.querySelector('#agent-select')
-  agentSelect.innerHTML = '<option value="main">main</option>'
-
-  // 异步加载 agent 列表并更新下拉框
-  api.agentsList().then(resp => {
-    const agents = Array.isArray(resp?.agents) ? resp.agents : []
-    if (!agentSelect) return
-    const options = agents.map(a => {
-      const label = a.description ? a.description.trim() : a.name
-      return `<option value="${a.name}">${a.name}${a.name !== label ? ' — ' + label : ''}</option>`
-    }).join('')
-    agentSelect.innerHTML = options
-  }).catch(() => {})
-
-  // Agent 切换
-  page.querySelector('#agent-select').onchange = (e) => {
-    state.agentId = e.target.value
-    state.currentPath = null
-    resetEditor(page)
-    // 显示加载动画
-    const tree = page.querySelector('#file-tree')
-    tree.innerHTML = '<div class="stat-card loading-placeholder" style="height:32px;margin:8px"></div><div class="stat-card loading-placeholder" style="height:32px;margin:8px"></div><div class="stat-card loading-placeholder" style="height:32px;margin:8px"></div>'
-    loadFiles(page, state)
+  const state = {
+    memory: null,
+    filter: 'all',
+    query: '',
+    loading: true
   }
 
-  // Tab 切换
-  page.querySelectorAll('.tab').forEach(tab => {
-    tab.onclick = () => {
-      page.querySelectorAll('.tab').forEach(t => t.classList.remove('active'))
-      tab.classList.add('active')
-      state.category = tab.dataset.tab
-      state.currentPath = null
-      const cat = CATEGORIES.find(c => c.key === state.category)
-      page.querySelector('#category-desc').textContent = cat?.desc || ''
-      resetEditor(page)
-      // 显示加载动画
-      const tree = page.querySelector('#file-tree')
-      tree.innerHTML = '<div class="stat-card loading-placeholder" style="height:32px;margin:8px"></div><div class="stat-card loading-placeholder" style="height:32px;margin:8px"></div><div class="stat-card loading-placeholder" style="height:32px;margin:8px"></div>'
-      loadFiles(page, state)
+  // 加载记忆数据
+  async function loadMemory() {
+    const loadingEl = page.querySelector('#memory-loading')
+    const contentEl = page.querySelector('#memory-content')
+    const emptyEl = page.querySelector('#memory-empty')
+    const errorEl = page.querySelector('#memory-error')
+
+    loadingEl.style.display = 'block'
+    contentEl.style.display = 'none'
+    emptyEl.style.display = 'none'
+    errorEl.style.display = 'none'
+
+    try {
+      const memory = await api.getMemory()
+      state.memory = memory
+      state.loading = false
+      loadingEl.style.display = 'none'
+      renderMemory(page, state)
+    } catch (e) {
+      loadingEl.style.display = 'none'
+      errorEl.textContent = '加载失败: ' + e
+      errorEl.style.display = 'block'
+      toast('加载记忆失败: ' + e, 'error')
     }
-  })
+  }
 
-  // 保存
-  page.querySelector('#btn-save-file').onclick = () => saveFile(page, state)
+  // 渲染记忆内容
+  function renderMemory(page, state) {
+    const contentEl = page.querySelector('#memory-content')
+    const emptyEl = page.querySelector('#memory-empty')
+    const { memory, filter, query } = state
 
-  // 预览（简易 Markdown 渲染）
-  page.querySelector('#btn-preview').onclick = () => togglePreview(page, state)
+    if (!memory) return
 
-  // 新建文件
-  page.querySelector('#btn-new-file').onclick = () => {
-    showModal({
-      title: '新建记忆文件',
-      fields: [{ name: 'filename', label: '文件名', placeholder: '如 notes.md', hint: '建议使用 .md 格式，文件将保存到当前分类目录下' }],
-      onConfirm: async ({ filename }) => {
-        if (!filename) return
-        try {
-          await api.writeMemoryFile(filename, `# ${filename}\n\n`, state.category, state.agentId)
-          toast(`已创建 ${filename}`, 'success')
-          loadFiles(page, state)
-        } catch (e) {
-          toast('创建失败: ' + e, 'error')
+    const normalizedQuery = query.trim().toLowerCase()
+    const showSummaries = filter !== 'facts'
+    const showFacts = filter !== 'summaries'
+
+    // 构建摘要 sections
+    const summarySections = []
+
+    // 用户上下文
+    const userContextTitle = '用户上下文'
+    for (const cat of CATEGORIES) {
+      const section = memory.user?.[cat]
+      if (section) {
+        const label = cat === 'workContext' ? '工作' : cat === 'personalContext' ? '个人' : '最重要的事'
+        if (!normalizedQuery || `${label} ${section.summary}`.toLowerCase().includes(normalizedQuery)) {
+          summarySections.push({
+            group: userContextTitle,
+            label,
+            summary: section.summary,
+            updatedAt: section.updatedAt
+          })
         }
-      },
+      }
+    }
+
+    // 历史上下文
+    const historyTitle = '历史背景'
+    for (const cat of HISTORY_CATEGORIES) {
+      const section = memory.history?.[cat]
+      if (section) {
+        const label = cat === 'recentMonths' ? '最近几个月' : cat === 'earlierContext' ? '更早的上下文' : '长期背景'
+        if (!normalizedQuery || `${label} ${section.summary}`.toLowerCase().includes(normalizedQuery)) {
+          summarySections.push({
+            group: historyTitle,
+            label,
+            summary: section.summary,
+            updatedAt: section.updatedAt
+          })
+        }
+      }
+    }
+
+    // 过滤事实
+    const filteredFacts = (memory.facts || []).filter(fact => {
+      if (!normalizedQuery) return true
+      return `${fact.content} ${fact.category}`.toLowerCase().includes(normalizedQuery)
+    })
+
+    // 检查是否有内容
+    const hasSummary = summarySections.some(s => s.summary && s.summary.trim())
+    const hasFacts = filteredFacts.length > 0
+
+    if (!hasSummary && !hasFacts) {
+      contentEl.style.display = 'none'
+      emptyEl.style.display = 'block'
+      return
+    }
+
+    emptyEl.style.display = 'none'
+    contentEl.style.display = 'block'
+
+    let html = ''
+
+    // 渲染摘要
+    if (showSummaries && hasSummary) {
+      html += `
+        <div class="memory-section" style="margin-bottom:var(--space-xl)">
+          <div style="margin-bottom:var(--space-md)">
+            <h3 style="font-size:var(--font-size-lg);font-weight:600;margin-bottom:var(--space-xs)">记忆摘要</h3>
+            <p style="font-size:var(--font-size-sm);color:var(--text-tertiary)">摘要内容为只读，你可以清空全部记忆或删除单个事实</p>
+          </div>
+      `
+
+      // 按组分类
+      const grouped = {}
+      for (const s of summarySections) {
+        if (!grouped[s.group]) grouped[s.group] = []
+        grouped[s.group].push(s)
+      }
+
+      for (const [groupTitle, sections] of Object.entries(grouped)) {
+        html += `<div style="margin-bottom:var(--space-lg)">`
+        html += `<h4 style="font-size:var(--font-size-base);font-weight:500;color:var(--text-secondary);margin-bottom:var(--space-sm)">${escapeHtml(groupTitle)}</h4>`
+        for (const s of sections) {
+          html += `
+            <div style="background:var(--bg-tertiary);border:1px solid var(--border);border-radius:var(--radius-md);padding:var(--space-md);margin-bottom:var(--space-sm)">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-xs)">
+                <span style="font-weight:500">${escapeHtml(s.label)}</span>
+                ${s.updatedAt ? `<span style="font-size:var(--font-size-xs);color:var(--text-tertiary)">更新于 ${formatTimeAgo(s.updatedAt)}</span>` : ''}
+              </div>
+              <div style="color:var(--text-secondary);font-size:var(--font-size-sm);line-height:1.6">
+                ${s.summary ? escapeHtml(s.summary) : '<span style="color:var(--text-tertiary)">暂无内容</span>'}
+              </div>
+            </div>
+          `
+        }
+        html += `</div>`
+      }
+
+      html += `</div>`
+    }
+
+    // 渲染事实
+    if (showFacts && hasFacts) {
+      html += `
+        <div class="memory-section">
+          <div style="margin-bottom:var(--space-md)">
+            <h3 style="font-size:var(--font-size-lg);font-weight:600;margin-bottom:var(--space-xs)">记忆事实</h3>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:var(--space-sm)">
+      `
+
+      for (const fact of filteredFacts) {
+        const { key } = confidenceToLevel(fact.confidence)
+        const confidenceLabel = key === 'veryHigh' ? '非常高' : key === 'high' ? '高' : '一般'
+        const categoryLabel = fact.category === 'context' ? '上下文' : fact.category === 'preference' ? '偏好' : fact.category === 'fact' ? '事实' : escapeHtml(fact.category)
+
+        html += `
+          <div style="background:var(--bg-tertiary);border:1px solid var(--border);border-radius:var(--radius-md);padding:var(--space-md)">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:var(--space-md)">
+              <div style="flex:1;min-width:0">
+                <div style="display:flex;flex-wrap:wrap;gap:var(--space-md);font-size:var(--font-size-xs);color:var(--text-tertiary);margin-bottom:var(--space-xs)">
+                  <span>分类: <span style="color:var(--text-secondary)">${categoryLabel}</span></span>
+                  <span>置信度: <span style="color:var(--text-secondary)">${confidenceLabel}</span></span>
+                  ${fact.createdAt ? `<span>创建于: <span style="color:var(--text-secondary)">${formatTimeAgo(fact.createdAt)}</span></span>` : ''}
+                </div>
+                <div style="font-size:var(--font-size-sm);color:var(--text-primary);line-height:1.6;word-break:break-word">
+                  ${escapeHtml(fact.content)}
+                </div>
+              </div>
+              <button class="btn btn-sm btn-danger" data-action="delete-fact" data-id="${escapeHtml(fact.id)}" style="flex-shrink:0">删除</button>
+            </div>
+          </div>
+        `
+      }
+
+      html += `</div></div>`
+    }
+
+    contentEl.innerHTML = html
+
+    // 绑定删除事实事件
+    contentEl.querySelectorAll('[data-action="delete-fact"]').forEach(btn => {
+      btn.onclick = async () => {
+        const factId = btn.dataset.id
+        const yes = await showConfirm('确定删除这条记忆事实？此操作无法撤销。')
+        if (!yes) return
+        try {
+          await api.deleteMemoryFact(factId)
+          toast('已删除', 'success')
+          await loadMemory()
+        } catch (e) {
+          toast('删除失败: ' + e, 'error')
+        }
+      }
     })
   }
 
-  // 删除文件
-  page.querySelector('#btn-del-file').onclick = async () => {
-    if (!state.currentPath) return
-    const name = state.currentPath.split('/').pop()
-    const { showConfirm } = await import('../components/modal.js')
-    const yes = await showConfirm(`确定删除 ${name}？`)
+  // 事件绑定
+  page.querySelector('#btn-reload').onclick = loadMemory
+
+  page.querySelector('#btn-clear-all').onclick = async () => {
+    const yes = await showConfirm('确定清空全部记忆？此操作无法撤销。')
     if (!yes) return
     try {
-      await api.deleteMemoryFile(state.currentPath, state.agentId)
-      toast(`已删除 ${name}`, 'success')
-      state.currentPath = null
-      resetEditor(page)
-      loadFiles(page, state)
+      await api.clearMemory()
+      toast('已清空全部记忆', 'success')
+      await loadMemory()
     } catch (e) {
-      toast('删除失败: ' + e, 'error')
+      toast('清空失败: ' + e, 'error')
     }
   }
 
-  // 单个下载
-  page.querySelector('#btn-download').onclick = () => downloadCurrentFile(page, state)
-
-  // 打包下载
-  page.querySelector('#btn-export-zip').onclick = () => exportZip(state)
-
-  loadFiles(page, state)
-  return page
-}
-
-async function loadFiles(page, state) {
-  const tree = page.querySelector('#file-tree')
-
-  try {
-    const files = await api.listMemoryFiles(state.category, state.agentId)
-    if (!files || !files.length) {
-      tree.innerHTML = '<div style="color:var(--text-tertiary);padding:12px">暂无文件</div>'
-      return
-    }
-    renderFileTree(page, state, files)
-  } catch (e) {
-    tree.innerHTML = '<div style="color:var(--error);padding:12px">加载失败: ' + e + '</div>'
-    toast('加载文件列表失败: ' + e, 'error')
+  page.querySelector('#memory-search').oninput = (e) => {
+    state.query = e.target.value
+    renderMemory(page, state)
   }
-}
 
-function renderFileTree(page, state, files) {
-  const tree = page.querySelector('#file-tree')
-  tree.innerHTML = files.map(f => {
-    const name = f.split('/').pop()
-    const active = state.currentPath === f ? ' active' : ''
-    return `<div class="file-item${active}" data-path="${f}">${name}</div>`
-  }).join('')
-
-  tree.querySelectorAll('.file-item').forEach(item => {
-    item.onclick = () => {
-      state.currentPath = item.dataset.path
-      tree.querySelectorAll('.file-item').forEach(i => i.classList.remove('active'))
-      item.classList.add('active')
-      loadFileContent(page, state)
+  page.querySelectorAll('.tab-bar .tab').forEach(tab => {
+    tab.onclick = () => {
+      page.querySelectorAll('.tab-bar .tab').forEach(t => t.classList.remove('active'))
+      tab.classList.add('active')
+      state.filter = tab.dataset.filter
+      renderMemory(page, state)
     }
   })
-}
 
-async function loadFileContent(page, state) {
-  const editor = page.querySelector('#file-editor')
-  const label = page.querySelector('#current-file')
-  const btnSave = page.querySelector('#btn-save-file')
-  const btnPreview = page.querySelector('#btn-preview')
-  const btnDel = page.querySelector('#btn-del-file')
-  const btnDl = page.querySelector('#btn-download')
+  // 初始加载
+  await loadMemory()
 
-  editor.disabled = true
-  editor.value = '加载中...'
-  label.textContent = state.currentPath
-
-  // 退出预览模式
-  editor.style.display = ''
-  const previewEl = page.querySelector('#md-preview')
-  if (previewEl) previewEl.remove()
-  btnPreview.textContent = '预览'
-
-  try {
-    const content = await api.readMemoryFile(state.currentPath, state.agentId)
-    editor.value = content || ''
-    editor.disabled = false
-    btnSave.disabled = false
-    btnPreview.disabled = false
-    btnDel.disabled = false
-    btnDl.disabled = false
-  } catch (e) {
-    editor.value = '读取失败: ' + e
-    toast('读取文件失败: ' + e, 'error')
-  }
-}
-
-function resetEditor(page) {
-  const editor = page.querySelector('#file-editor')
-  editor.value = ''
-  editor.disabled = true
-  editor.style.display = ''
-  const previewEl = page.querySelector('#md-preview')
-  if (previewEl) previewEl.remove()
-  page.querySelector('#current-file').textContent = '选择文件查看'
-  page.querySelector('#btn-save-file').disabled = true
-  page.querySelector('#btn-preview').disabled = true
-  page.querySelector('#btn-preview').textContent = '预览'
-  page.querySelector('#btn-del-file').disabled = true
-  page.querySelector('#btn-download').disabled = true
-}
-
-async function saveFile(page, state) {
-  if (!state.currentPath) return
-  const content = page.querySelector('#file-editor').value
-  try {
-    await api.writeMemoryFile(state.currentPath, content, null, state.agentId)
-    toast('文件已保存', 'success')
-  } catch (e) {
-    toast('保存失败: ' + e, 'error')
-  }
-}
-
-function togglePreview(page) {
-  const editor = page.querySelector('#file-editor')
-  const btn = page.querySelector('#btn-preview')
-  let previewEl = page.querySelector('#md-preview')
-
-  if (previewEl) {
-    // 退出预览
-    previewEl.remove()
-    editor.style.display = ''
-    btn.textContent = '预览'
-  } else {
-    // 进入预览
-    const md = editor.value
-    previewEl = document.createElement('div')
-    previewEl.id = 'md-preview'
-    previewEl.style.cssText = 'flex:1;padding:var(--space-lg);overflow-y:auto;line-height:1.8;color:var(--text-primary)'
-    previewEl.innerHTML = renderMarkdown(md)
-    editor.style.display = 'none'
-    editor.parentElement.appendChild(previewEl)
-    btn.textContent = '编辑'
-  }
-}
-
-// 简易 Markdown 渲染
-function renderMarkdown(md) {
-  return md
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    .replace(/^### (.+)$/gm, '<h3 style="font-size:var(--font-size-lg);font-weight:600;margin:16px 0 8px">$1</h3>')
-    .replace(/^## (.+)$/gm, '<h2 style="font-size:var(--font-size-xl);font-weight:600;margin:20px 0 8px">$1</h2>')
-    .replace(/^# (.+)$/gm, '<h1 style="font-size:var(--font-size-2xl);font-weight:700;margin:24px 0 12px">$1</h1>')
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*(.+?)\*/g, '<em>$1</em>')
-    .replace(/`(.+?)`/g, '<code style="background:var(--bg-tertiary);padding:2px 6px;border-radius:4px;font-family:var(--font-mono);font-size:var(--font-size-xs)">$1</code>')
-    .replace(/^- (.+)$/gm, '<li style="margin-left:20px">$1</li>')
-    .replace(/\n\n/g, '<br><br>')
-    .replace(/\n/g, '<br>')
-}
-
-// ===== 下载功能 =====
-
-function triggerDownload(filename, content) {
-  const blob = new Blob([content], { type: 'text/plain;charset=utf-8' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = filename
-  a.click()
-  URL.revokeObjectURL(url)
-}
-
-async function downloadCurrentFile(page, state) {
-  if (!state.currentPath) return
-  try {
-    const content = page.querySelector('#file-editor').value
-    const filename = state.currentPath.split('/').pop()
-    triggerDownload(filename, content)
-    toast(`已下载 ${filename}`, 'success')
-  } catch (e) {
-    toast('下载失败: ' + e, 'error')
-  }
-}
-
-async function exportZip(state) {
-  try {
-    const zipPath = await api.exportMemoryZip(state.category, state.agentId)
-    const label = CATEGORIES.find(c => c.key === state.category)?.label || state.category
-    // 尝试用 Tauri shell open 打开文件所在目录
-    try {
-      const { open } = await import('@tauri-apps/plugin-shell')
-      const dir = zipPath.substring(0, zipPath.lastIndexOf('/')) || zipPath
-      await open(dir)
-      toast(`已导出: ${label} → ${zipPath}`, 'success')
-    } catch {
-      // fallback：仅显示路径
-      toast(`已导出: ${label} → ${zipPath}`, 'success')
-    }
-  } catch (e) {
-    toast('打包下载失败: ' + e, 'error')
-  }
+  return page
 }

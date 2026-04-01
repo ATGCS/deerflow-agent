@@ -33,7 +33,9 @@ export function initRouter(contentEl) {
 
 async function loadRoute() {
   const hash = window.location.hash.slice(1) || _defaultRoute
-  const loader = routes[hash]
+  // 忽略查询参数，只取路径部分
+  const path = hash.split('?')[0]
+  const loader = routes[path]
   if (!loader || !_contentEl) return
 
   // 竞态防护：记录本次加载 ID

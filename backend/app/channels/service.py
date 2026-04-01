@@ -122,6 +122,67 @@ class ChannelService:
 
         return await self._start_channel(name, config)
 
+    async def set_channel_enabled(self, name: str, enabled: bool) -> bool:
+        """Enable or disable a specific channel. Returns True if successful."""
+        config = self._config.get(name)
+        if not config or not isinstance(config, dict):
+            logger.warning("No config for channel %s", name)
+            return False
+
+        # Update config
+        config["enabled"] = enabled
+        self._config[name] = config
+
+        # If channel is currently running, restart it with new enabled state
+        if enabled and name not in self._channels:
+            return await self._start_channel(name, config)
+        elif not enabled and name in self._channels:
+            try:
+                await self._channels[name].stop()
+                del self._channels[name]
+            except Exception:
+                logger.exception("Error stopping channel %s", name)
+                return False
+
+        return True
+
+    def get_channel_config(self, name: str) -> tuple[dict[str, Any] | None, bool, bool]:
+        """Get the configuration of a specific channel. Returns (config, enabled, running)."""
+        config = self._config.get(name)
+        if not config:
+            return None, False, False
+
+        enabled = isinstance(config, dict) and config.get("enabled", False)
+        running = name in self._channels and self._channels[name].is_running
+        return config, enabled, running
+
+    async def update_channel_config(self, name: str, new_config: dict[str, Any]) -> bool:
+        """Update the configuration of a specific channel. Returns True if successful."""
+        config = self._config.get(name)
+        
+        # If channel doesn't exist in config, create a new entry
+        if not config or not isinstance(config, dict):
+            logger.info("Channel %s not found in config, creating new entry", name)
+            config = {"enabled": False}
+            self._config[name] = config
+
+        # Update config
+        config.update(new_config)
+        self._config[name] = config
+
+        # Restart channel with new config if it's running
+        if name in self._channels:
+            try:
+                await self._channels[name].stop()
+            except Exception:
+                logger.exception("Error stopping channel %s for config update", name)
+            del self._channels[name]
+
+            if config.get("enabled", False):
+                return await self._start_channel(name, config)
+
+        return True
+
     async def _start_channel(self, name: str, config: dict[str, Any]) -> bool:
         """Instantiate and start a single channel."""
         import_path = _CHANNEL_REGISTRY.get(name)

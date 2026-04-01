@@ -7,7 +7,7 @@ import { wsClient, uuid, threadStatePayloadFromValues } from '../lib/ws-client.j
 import { renderMarkdown } from '../lib/markdown.js'
 import { saveMessage, saveMessages, getLocalMessages, isStorageAvailable } from '../lib/message-db.js'
 import { toast } from '../components/toast.js'
-import { showConfirm } from '../components/modal.js'
+import { showConfirm, showModal } from '../components/modal.js'
 import { icon as svgIcon } from '../lib/icons.js'
 
 const RENDER_THROTTLE = 30
@@ -147,6 +147,10 @@ export async function render() {
           <span class="chat-title" id="chat-title">聊天</span>
         </div>
         <div class="chat-header-actions">
+          <div class="chat-agent-group" style="margin-right:12px">
+            <button class="btn btn-sm btn-secondary" id="btn-new-agent" title="新建智能体">+ 智能体</button>
+            <button class="btn btn-sm btn-secondary" id="btn-switch-agent" title="切换智能体">切换智能体</button>
+          </div>
           <div class="chat-token-stats" id="chat-token-stats" title="当前会话累计 Token 消耗">↑0 ↓0 · Σ0</div>
           <div class="chat-model-group">
             <select class="form-input" id="chat-model-select" title="切换当前会话模型" style="width:200px;max-width:28vw;padding:6px 10px;font-size:var(--font-size-xs)">
@@ -297,6 +301,50 @@ export async function render() {
 
   const initHosted = (window.__TAURI_INTERNALS__ ? loadHostedDefaults() : Promise.resolve())
   initHosted.then(() => { loadHostedSessionConfig(); renderHostedPanel(); updateHostedBadge() })
+  // 处理 URL 参数中的 agent
+  const hash = window.location.hash
+  const urlParams = new URLSearchParams(hash.split('?')[1] || '')
+  const agentParam = urlParams.get('agent')
+  if (agentParam) {
+    // 创建新会话时指定 agent
+    const defaultAgent = agentParam
+    const keyTail = `new-${Date.now().toString(36)}`
+    const newKey = `agent:${defaultAgent}:${keyTail}`
+    const currentMode = getSessionMode(_sessionKey)
+    setSessionMode(newKey, 'flash') // 使用 flash 模式，与 web 版一致
+    setSessionName(newKey, '')
+    _sessionKey = newKey
+    localStorage.setItem(STORAGE_SESSION_KEY, newKey)
+    
+    // 主动发送初始化消息，与 web 版一致
+    setTimeout(async () => {
+      try {
+        // 先确保 Gateway 连接
+        if (!wsClient.connected || !wsClient.gatewayReady) {
+          await new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => reject(new Error('连接超时')), 10000)
+            const unsub = wsClient.onReady(() => {
+              clearTimeout(timeout)
+              unsub()
+              resolve()
+            })
+            wsClient.connect(location.host, '')
+          })
+        }
+        
+        // 发送初始化消息
+        await api.chatSend(_sessionKey, `新智能体的名称是 ${defaultAgent}，现在开始为它生成 **SOUL**。`, {
+          mode: 'flash',
+          is_bootstrap: true,
+          thinking_enabled: false
+        })
+      } catch (e) {
+        console.warn('[Chat] 发送初始化消息失败:', e)
+        // 即使发送失败，也继续流程
+      }
+    }, 500)
+  }
+
   loadModelOptions()
   // 非阻塞：先返回 DOM，后台连接 Gateway
   connectGateway()
@@ -389,6 +437,137 @@ function bindEvents(page) {
   page.querySelector('#btn-toggle-sidebar')?.addEventListener('click', toggleSidebar)
   page.querySelector('#btn-toggle-sidebar-main')?.addEventListener('click', toggleSidebar)
   page.querySelector('#btn-new-session').addEventListener('click', () => createNewSessionQuick())
+  
+  // 新建智能体按钮
+  page.querySelector('#btn-new-agent')?.addEventListener('click', () => {
+    // 直接在当前页面弹出创建智能体对话框
+    showModal({
+      title: '新建 Agent',
+      fields: [
+        { name: 'name', label: 'Agent 名称', value: '', placeholder: '例如：translator（字母、数字、连字符）' },
+      ],
+      onConfirm: async (result) => {
+        const name = (result.name || '').trim().toLowerCase()
+        if (!name) { toast('请输入 Agent 名称', 'warning'); return }
+        if (!/^[a-z0-9-]+$/.test(name)) { toast('Agent 名称只能包含小写字母、数字和连字符', 'warning'); return }
+
+        // 检查名称是否可用
+        try {
+          const result = await api.checkAgentName(name)
+          if (!result.available) {
+            toast('Agent 名称已存在', 'warning')
+            return
+          }
+        } catch (e) {
+          console.warn('[Agent创建] 检查名称失败:', e)
+          // 继续创建，忽略检查失败
+        }
+
+        // 创建智能体
+          try {
+            await api.createAgent({
+              name,
+              description: '',
+              model: null,
+              tool_groups: null,
+              soul: '',
+            })
+            toast('Agent 已创建', 'success')
+
+            // 创建新会话
+            const keyTail = `new-${Date.now().toString(36)}`
+            const newKey = `agent:${name}:${keyTail}`
+            setSessionMode(newKey, 'flash') // 使用 flash 模式，与 web 版一致
+            setSessionName(newKey, '')
+            
+            // 切换到新会话
+            await switchSession(newKey)
+            
+            // 重新加载历史
+            loadHistory()
+            
+            // 主动发送初始化消息，与 web 版一致
+            try {
+              // 先确保 Gateway 连接
+              if (!wsClient.connected || !wsClient.gatewayReady) {
+                await new Promise((resolve, reject) => {
+                  const timeout = setTimeout(() => reject(new Error('连接超时')), 10000)
+                  const unsub = wsClient.onReady(() => {
+                    clearTimeout(timeout)
+                    unsub()
+                    resolve()
+                  })
+                  wsClient.connect(location.host, '')
+                })
+              }
+              
+              // 发送初始化消息
+              await api.chatSend(_sessionKey, `新智能体的名称是 ${name}，现在开始为它生成 **SOUL**。`, {
+                mode: 'flash',
+                is_bootstrap: true,
+                thinking_enabled: false
+              })
+            } catch (e) {
+              console.warn('[Chat] 发送初始化消息失败:', e)
+              // 即使发送失败，也继续流程
+            }
+          } catch (e) {
+            toast('创建失败: ' + e, 'error')
+          }
+      }
+    })
+  })
+  
+  // 切换智能体按钮
+  page.querySelector('#btn-switch-agent')?.addEventListener('click', async () => {
+    try {
+      const agents = await api.listAgents()
+      if (!agents.length) {
+        toast('暂无智能体，请先创建', 'warning')
+        return
+      }
+      
+      // 显示智能体选择对话框
+      const options = agents.map(agent => ({
+        label: agent.name,
+        value: agent.name
+      }))
+      
+      showModal({
+        title: '切换智能体',
+        fields: [
+          {
+            name: 'agent',
+            label: '选择智能体',
+            type: 'select',
+            options: options
+          }
+        ],
+        onConfirm: async (result) => {
+          const agentName = result.agent
+          if (!agentName) return
+          
+          // 创建新会话并切换到选定的智能体
+          const keyTail = `new-${Date.now().toString(36)}`
+          const newKey = `agent:${agentName}:${keyTail}`
+          setSessionMode(newKey, 'flash') // 使用 flash 模式，与 web 版一致
+          setSessionName(newKey, '')
+          
+          // 切换到新会话
+          await switchSession(newKey)
+          
+          // 标记需要发送初始化消息
+          window._needsBootstrapMessage = true
+          window._bootstrapAgentName = agentName
+          
+          // 重新加载历史
+          loadHistory()
+        }
+      })
+    } catch (e) {
+      toast('加载智能体列表失败: ' + e, 'error')
+    }
+  })
   page.querySelector('#chat-quick-prompts')?.addEventListener('click', (e) => {
     const btn = e.target.closest('[data-prompt]')
     if (!btn) return
@@ -1045,6 +1224,24 @@ async function connectGateway() {
       // 先与 Web 端一致从 LangGraph threads/search 拉回映射，再加载历史，避免刷新后本地映射空导致列表/消息全丢
       await refreshSessionList()
       loadHistory()
+      
+      // 发送初始化消息，与 web 版一致
+      if (window._needsBootstrapMessage && window._bootstrapAgentName) {
+        const agentName = window._bootstrapAgentName
+        window._needsBootstrapMessage = false
+        window._bootstrapAgentName = null
+        
+        try {
+          // 发送初始化消息
+          await api.chatSend(_sessionKey, `新智能体的名称是 ${agentName}，现在开始为它生成 **SOUL**。`, {
+            mode: 'flash',
+            is_bootstrap: true,
+            thinking_enabled: false
+          })
+        } catch (e) {
+          console.warn('[Chat] 发送初始化消息失败:', e)
+        }
+      }
     })
 
     _unsubEvent = wsClient.onEvent((msg) => {
@@ -1062,6 +1259,24 @@ async function connectGateway() {
       renderModeControl()
       await refreshSessionList()
       loadHistory()
+      
+      // 发送初始化消息，与 web 版一致
+      if (window._needsBootstrapMessage && window._bootstrapAgentName) {
+        const agentName = window._bootstrapAgentName
+        window._needsBootstrapMessage = false
+        window._bootstrapAgentName = null
+        
+        try {
+          // 发送初始化消息
+          await api.chatSend(_sessionKey, `新智能体的名称是 ${agentName}，现在开始为它生成 **SOUL**。`, {
+            mode: 'flash',
+            is_bootstrap: true,
+            thinking_enabled: false
+          })
+        } catch (e) {
+          console.warn('[Chat] 发送初始化消息失败:', e)
+        }
+      }
       return
     }
 

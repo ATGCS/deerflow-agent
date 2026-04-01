@@ -18,7 +18,6 @@ export async function render() {
       </div>
       <div class="page-actions">
         <button class="btn btn-secondary" id="btn-refresh-agents">刷新</button>
-        <button class="btn btn-primary" id="btn-add-agent">+ 新建 Agent</button>
       </div>
     </div>
     <div class="page-content">
@@ -34,7 +33,6 @@ export async function render() {
   // 非阻塞：先返回 DOM，后台加载数据
   loadAgents(page, state)
 
-  page.querySelector('#btn-add-agent').addEventListener('click', () => showAddAgentDialog(page, state))
   page.querySelector('#btn-refresh-agents').addEventListener('click', async () => {
     invalidate('agents_list')
     await loadAgents(page, state)
@@ -68,9 +66,8 @@ async function loadAgents(page, state) {
   if (countEl) countEl.textContent = '加载中...'
   renderSkeleton(container)
   try {
-    const data = await api.agentsList()
-    const raw = Array.isArray(data?.agents) ? data.agents : []
-    state.agents = raw.sort((a, b) => {
+    const agents = await api.listAgents()
+    state.agents = agents.sort((a, b) => {
       if (a.name === 'main') return -1
       if (b.name === 'main') return 1
       return String(a.name || '').localeCompare(String(b.name || ''))
@@ -110,7 +107,7 @@ function renderAgents(page, state) {
     return
   }
 
-  container.innerHTML = list.map(a => {
+  container.innerHTML = `<div class="agent-list">${list.map(a => {
     const isDefault = a.isDefault || a.name === 'main'
     const name = a.name || '-'
     const desc = a.description || '无描述'
@@ -122,11 +119,6 @@ function renderAgents(page, state) {
           <div class="agent-card-title">
             <span class="agent-id">${escapeHtml(name)}</span>
             ${isDefault ? '<span class="badge badge-success">默认</span>' : ''}
-          </div>
-          <div class="agent-card-actions">
-            <button class="btn btn-sm btn-secondary" data-action="backup" data-id="${a.name}">备份</button>
-            <button class="btn btn-sm btn-secondary" data-action="edit" data-id="${a.name}">编辑</button>
-            ${!isDefault ? `<button class="btn btn-sm btn-danger" data-action="delete" data-id="${a.name}">删除</button>` : ''}
           </div>
         </div>
         <div class="agent-card-body">
@@ -143,9 +135,16 @@ function renderAgents(page, state) {
             <span class="agent-info-value">${escapeHtml(groups)}</span>
           </div>
         </div>
+        <div class="agent-card-footer">
+          <button class="btn btn-sm btn-primary" data-action="chat" data-id="${a.name}">Chat</button>
+          <button class="btn btn-sm btn-secondary" data-action="detail" data-id="${a.name}">详情</button>
+          <button class="btn btn-sm btn-secondary" data-action="edit" data-id="${a.name}">编辑</button>
+          <button class="btn btn-sm btn-secondary" data-action="backup" data-id="${a.name}">备份</button>
+          ${!isDefault ? `<button class="btn btn-sm btn-danger" data-action="delete" data-id="${a.name}">删除</button>` : ''}
+        </div>
       </div>
     `
-  }).join('')
+  }).join('')}</div>`
 }
 
 function attachAgentEvents(page, state) {
@@ -156,68 +155,54 @@ function attachAgentEvents(page, state) {
     const action = btn.dataset.action
     const id = btn.dataset.id
 
-    if (action === 'edit') showEditAgentDialog(page, state, id)
+    if (action === 'chat') {
+      const hash = `#/chat?agent=${encodeURIComponent(id)}`
+      window.location.hash = hash
+      // 强制触发路由更新
+      setTimeout(() => {
+        window.dispatchEvent(new HashChangeEvent('hashchange'))
+      }, 100)
+    } else if (action === 'detail') await showAgentDetailDialog(id)
+    else if (action === 'edit') showEditAgentDialog(page, state, id)
     else if (action === 'delete') await deleteAgent(page, state, id)
     else if (action === 'backup') await backupAgent(id)
   })
 }
 
-async function showAddAgentDialog(page, state) {
-  // 获取模型列表
-  let models = []
+async function showAgentDetailDialog(id) {
   try {
-    const config = await api.readOpenclawConfig()
-    const providers = config?.models?.providers || {}
-    for (const [pk, pv] of Object.entries(providers)) {
-      for (const m of (pv.models || [])) {
-        const id = typeof m === 'string' ? m : m.id
-        if (id) models.push({ value: `${pk}/${id}`, label: `${pk}/${id}` })
+    const agent = await api.getAgent(id)
+    const soulContent = agent.soul || '无'
+    const toolGroupsContent = Array.isArray(agent.tool_groups) && agent.tool_groups.length > 0 ? agent.tool_groups.join(', ') : '未限制'
+    
+    showModal({
+      title: `Agent 详情 — ${id}`,
+      fields: [
+        { name: 'name', label: '名称', value: agent.name || '', readonly: true },
+        { name: 'description', label: '描述', value: agent.description || '无', readonly: true },
+        { name: 'model', label: '模型', value: parseModelValue(agent) || '未设置', readonly: true },
+        { name: 'toolGroups', label: '工具组', value: toolGroupsContent, readonly: true },
+      ],
+      onConfirm: () => {}
+    })
+    
+    // 在弹窗中添加 SOUL 内容
+    setTimeout(() => {
+      const modal = document.querySelector('.modal')
+      if (modal) {
+        modal.style.cssText = 'max-width:1200px !important;width:90vw !important;min-width:500px;max-height:90vh;overflow-y:auto'
+        const soulDiv = document.createElement('div')
+        soulDiv.className = 'form-group'
+        soulDiv.innerHTML = `
+          <label class="form-label">SOUL</label>
+          <textarea class="form-input" readonly style="height:400px;opacity:0.6;cursor:not-allowed;resize:vertical;white-space:pre-wrap;overflow-y:auto;font-family:var(--font-mono);font-size:12px;line-height:1.6">${escapeHtml(soulContent)}</textarea>
+        `
+        modal.querySelector('.modal-actions')?.before(soulDiv)
       }
-    }
-  } catch { models = [{ value: 'newapi/claude-opus-4-6', label: 'newapi/claude-opus-4-6' }] }
-
-  if (!models.length) {
-    toast('请先在模型配置页面添加模型', 'warning')
-    return
+    }, 0)
+  } catch (e) {
+    toast('获取 Agent 详情失败: ' + e, 'error')
   }
-
-  showModal({
-    title: '新建 Agent',
-    fields: [
-      { name: 'name', label: 'Agent 名称', value: '', placeholder: '例如：translator（字母、数字、连字符）' },
-      { name: 'description', label: '描述', value: '', placeholder: '例如：翻译助手' },
-      { name: 'model', label: '模型', type: 'select', value: models[0]?.value || '', options: models },
-      { name: 'toolGroups', label: '工具组', value: '', placeholder: '逗号分隔，例如：search,files' },
-      { name: 'soul', label: 'SOUL', value: '', placeholder: '可选：Agent 个性与约束（简要）' },
-    ],
-    onConfirm: async (result) => {
-      const name = (result.name || '').trim().toLowerCase()
-      if (!name) { toast('请输入 Agent 名称', 'warning'); return }
-      if (!/^[a-z0-9-]+$/.test(name)) { toast('Agent 名称只能包含小写字母、数字和连字符', 'warning'); return }
-
-      const description = (result.description || '').trim()
-      const model = result.model || models[0]?.value || ''
-      const soul = (result.soul || '').trim()
-      const toolGroups = String(result.toolGroups || '').split(',').map(x => x.trim()).filter(Boolean)
-
-      try {
-        await api.agentsCreate({
-          name,
-          description,
-          model: model || null,
-          tool_groups: toolGroups.length ? toolGroups : null,
-          soul,
-        })
-        toast('Agent 已创建', 'success')
-
-        // 强制清除缓存并重新加载
-        invalidate('agents_list')
-        await loadAgents(page, state)
-      } catch (e) {
-        toast('创建失败: ' + e, 'error')
-      }
-    }
-  })
 }
 
 async function showEditAgentDialog(page, state, id) {
@@ -285,11 +270,11 @@ async function showEditAgentDialog(page, state, id) {
       const toolGroups = String(result.toolGroups || '').split(',').map(x => x.trim()).filter(Boolean)
 
       try {
-        await api.agentsUpdate(id, {
+        await api.updateAgent(id, {
           description: newDesc,
           model: model || null,
-          tool_groups: toolGroups.length ? toolGroups : [],
-          soul: soul || '',
+          tool_groups: toolGroups.length ? toolGroups : null,
+          soul: soul || null,
         })
 
         // 手动更新 state 并重新渲染，确保立即生效
@@ -313,7 +298,7 @@ async function deleteAgent(page, state, id) {
   if (!yes) return
 
   try {
-    await api.agentsDelete(id)
+    await api.deleteAgent(id)
     toast('已删除', 'success')
     await loadAgents(page, state)
   } catch (e) {

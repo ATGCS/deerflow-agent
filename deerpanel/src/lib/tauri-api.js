@@ -5,6 +5,20 @@
 
 const isTauri = !!window.__TAURI_INTERNALS__
 
+// 获取后端基础 URL
+function getBackendBaseURL() {
+  const origin = window.location.origin
+  // Tauri 桌面应用可能运行在端口 1420 或 1421，或者没有端口（如 http://localhost）
+  if (origin.includes(':1420') || origin.includes(':1421')) {
+    return origin.replace(/:\d+$/, ':2026')
+  }
+  // 如果 origin 是 http://localhost 或 http://localhost:xxx 但不是 2026，添加端口 2026
+  if (origin === 'http://localhost' || /^http:\/\/localhost:\d+$/.test(origin)) {
+    return origin.replace(/(:\d+)?$/, ':2026')
+  }
+  return origin || 'http://localhost:2026';
+}
+
 // 仅在 Node.js 后端实现的命令（Tauri Rust 不处理），强制走 webInvoke
 const WEB_ONLY_CMDS = new Set([
   'agents_list', 'agents_get', 'agents_create', 'agents_update', 'agents_delete',
@@ -209,7 +223,61 @@ export const api = {
 
   // Agent 扩展能力（非 Gateway 标准协议）
   backupAgent: (id) => invoke('backup_agent', { id }),
-  // Agent 管理（Web 接口语义）
+  // Agent 管理（Web 版语义）
+  listAgents: async () => {
+    const response = await fetch(`${getBackendBaseURL()}/api/agents`);
+    if (!response.ok) throw new Error(`Failed to load agents: ${response.statusText}`);
+    const data = await response.json();
+    return data.agents || [];
+  },
+  getAgent: async (name) => {
+    const response = await fetch(`${getBackendBaseURL()}/api/agents/${name}`);
+    if (!response.ok) throw new Error(`Agent '${name}' not found`);
+    return response.json();
+  },
+  createAgent: async (request) => {
+    const response = await fetch(`${getBackendBaseURL()}/api/agents`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.detail ?? `Failed to create agent: ${response.statusText}`);
+    }
+    return response.json();
+  },
+  updateAgent: async (name, request) => {
+    const response = await fetch(`${getBackendBaseURL()}/api/agents/${name}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.detail ?? `Failed to update agent: ${response.statusText}`);
+    }
+    return response.json();
+  },
+  deleteAgent: async (name) => {
+    const response = await fetch(`${getBackendBaseURL()}/api/agents/${name}`, {
+      method: "DELETE",
+    });
+    if (!response.ok) throw new Error(`Failed to delete agent: ${response.statusText}`);
+  },
+  checkAgentName: async (name) => {
+    const response = await fetch(
+      `${getBackendBaseURL()}/api/agents/check?name=${encodeURIComponent(name)}`
+    );
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(
+        err.detail ?? `Failed to check agent name: ${response.statusText}`
+      );
+    }
+    return response.json();
+  },
+  // 传统 Agent 接口（保持兼容）
   agentsList: async () => {
     const data = await invoke('agents_list')
     const agents = Array.isArray(data?.agents) ? data.agents : (Array.isArray(data) ? data : [])
@@ -279,6 +347,38 @@ export const api = {
   // 日志（短缓存）
   readLogTail: (logName, lines = 100) => cachedInvoke('read_log_tail', { logName, lines }, 5000),
   searchLog: (logName, query, maxResults = 50) => invoke('search_log', { logName, query, maxResults }),
+
+  // 记忆 API
+  getMemory: async () => {
+    const response = await fetch(`${getBackendBaseURL()}/api/memory`);
+    if (!response.ok) throw new Error(`Failed to load memory: ${response.statusText}`);
+    return response.json();
+  },
+  reloadMemory: async () => {
+    const response = await fetch(`${getBackendBaseURL()}/api/memory/reload`, { method: 'POST' });
+    if (!response.ok) throw new Error(`Failed to reload memory: ${response.statusText}`);
+    return response.json();
+  },
+  clearMemory: async () => {
+    const response = await fetch(`${getBackendBaseURL()}/api/memory`, { method: 'DELETE' });
+    if (!response.ok) throw new Error(`Failed to clear memory: ${response.statusText}`);
+    return response.json();
+  },
+  deleteMemoryFact: async (factId) => {
+    const response = await fetch(`${getBackendBaseURL()}/api/memory/facts/${factId}`, { method: 'DELETE' });
+    if (!response.ok) throw new Error(`Failed to delete memory fact: ${response.statusText}`);
+    return response.json();
+  },
+  getMemoryConfig: async () => {
+    const response = await fetch(`${getBackendBaseURL()}/api/memory/config`);
+    if (!response.ok) throw new Error(`Failed to load memory config: ${response.statusText}`);
+    return response.json();
+  },
+  getMemoryStatus: async () => {
+    const response = await fetch(`${getBackendBaseURL()}/api/memory/status`);
+    if (!response.ok) throw new Error(`Failed to load memory status: ${response.statusText}`);
+    return response.json();
+  },
 
   // 记忆文件
   listMemoryFiles: (category, agentId) => cachedInvoke('list_memory_files', { category, agentId: agentId || null }),
@@ -354,7 +454,101 @@ export const api = {
   assistantWebSearch: (query, maxResults) => invoke('assistant_web_search', { query, max_results: maxResults || 5 }),
   assistantFetchUrl: (url) => invoke('assistant_fetch_url', { url }),
 
-  // 技能接口（统一语义）
+  // 技能接口（Web 版语义）
+  loadSkills: async () => {
+    const response = await fetch(`${getBackendBaseURL()}/api/skills`);
+    const json = await response.json();
+    return json.skills || [];
+  },
+  enableSkill: async (skillName, enabled) => {
+    const response = await fetch(
+      `${getBackendBaseURL()}/api/skills/${skillName}`,
+      {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          enabled,
+        }),
+      },
+    );
+    return response.json();
+  },
+  installSkill: async (request) => {
+    const response = await fetch(`${getBackendBaseURL()}/api/skills/install`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(request),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      const errorMessage = errorData.detail ?? `HTTP ${response.status}: ${response.statusText}`;
+      return {
+        success: false,
+        skill_name: "",
+        message: errorMessage,
+      };
+    }
+
+    return response.json();
+  },
+
+  // MCP 工具 API
+  getMCPConfig: async () => {
+    const response = await fetch(`${getBackendBaseURL()}/api/mcp/config`);
+    if (!response.ok) throw new Error(`Failed to load MCP config: ${response.statusText}`);
+    return response.json();
+  },
+  updateMCPConfig: async (mcpServers) => {
+    const response = await fetch(`${getBackendBaseURL()}/api/mcp/config`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mcp_servers: mcpServers }),
+    });
+    if (!response.ok) throw new Error(`Failed to update MCP config: ${response.statusText}`);
+    return response.json();
+  },
+
+  // DeerFlaw 多渠道 API
+  getChannelsStatus: async () => {
+    const response = await fetch(`${getBackendBaseURL()}/api/channels`);
+    if (!response.ok) throw new Error(`Failed to get channels status: ${response.statusText}`);
+    return response.json();
+  },
+  restartChannel: async (name) => {
+    const response = await fetch(`${getBackendBaseURL()}/api/channels/${name}/restart`, { method: 'POST' });
+    if (!response.ok) throw new Error(`Failed to restart channel: ${response.statusText}`);
+    return response.json();
+  },
+  enableChannel: async (name, enabled) => {
+    const response = await fetch(`${getBackendBaseURL()}/api/channels/${name}/enable`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+    });
+    if (!response.ok) throw new Error(`Failed to enable/disable channel: ${response.statusText}`);
+    return response.json();
+  },
+  getChannelConfig: async (name) => {
+    const response = await fetch(`${getBackendBaseURL()}/api/channels/${name}/config`);
+    if (!response.ok) throw new Error(`Failed to get channel config: ${response.statusText}`);
+    return response.json();
+  },
+  updateChannelConfig: async (name, config) => {
+    const response = await fetch(`${getBackendBaseURL()}/api/channels/${name}/config`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config),
+    });
+    if (!response.ok) throw new Error(`Failed to update channel config: ${response.statusText}`);
+    return response.json();
+  },
+
+  // 传统技能接口（保持兼容）
   skillsCatalog: () => invoke('skills_list'),
   skillsDetail: (name) => invoke('skills_info', { name }),
   skillsHealth: () => invoke('skills_check'),

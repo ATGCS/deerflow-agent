@@ -298,6 +298,7 @@ async function boot() {
   registerRoute('/gateway', () => import('./pages/gateway.js'))
   registerRoute('/memory', () => import('./pages/memory.js'))
   registerRoute('/skills', () => import('./pages/skills.js'))
+  registerRoute('/tools', () => import('./pages/tools.js'))
   registerRoute('/security', () => import('./pages/security.js'))
   registerRoute('/about', () => import('./pages/about.js'))
   registerRoute('/assistant', () => import('./pages/assistant.js'))
