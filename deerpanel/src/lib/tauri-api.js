@@ -6,7 +6,7 @@
 const isTauri = !!window.__TAURI_INTERNALS__
 
 // 获取后端基础 URL
-function getBackendBaseURL() {
+export function getBackendBaseURL() {
   const origin = window.location.origin
   // Tauri 桌面应用可能运行在端口 1420 或 1421，或者没有端口（如 http://localhost）
   if (origin.includes(':1420') || origin.includes(':1421')) {
@@ -326,6 +326,19 @@ export const api = {
     const { wsClient } = await import('./ws-client.js')
     return wsClient.chatSend(sessionKey, message, attachments)
   },
+  chatGetRunStatus: async (sessionKey) => {
+    const { wsClient } = await import('./ws-client.js')
+    return wsClient.getSessionRunStatus(sessionKey)
+  },
+  chatCancelActiveRuns: async (sessionKey) => {
+    const { wsClient } = await import('./ws-client.js')
+    return wsClient.cancelSessionActiveRuns(sessionKey)
+  },
+  /** 取消 LangGraph 进程内所有 pending/running（释放全局 worker 池，避免新会话被旧任务堵死） */
+  chatCancelAllGlobalRuns: async () => {
+    const { wsClient } = await import('./ws-client.js')
+    return wsClient.cancelAllGlobalRunsBestEffort()
+  },
   chatAbort: async (sessionKey, runId = undefined) => {
     const { wsClient } = await import('./ws-client.js')
     return wsClient.chatAbort(sessionKey, runId)
@@ -583,4 +596,125 @@ export const api = {
   saveImage: (id, data) => invoke('assistant_save_image', { id, data }),
   loadImage: (id) => invoke('assistant_load_image', { id }),
   deleteImage: (id) => invoke('assistant_delete_image', { id }),
+
+  // ========== 多智能体协作任务 ==========
+  // 任务管理（任务为中心）
+  listAllTasks: async () => {
+    const response = await fetch(`${getBackendBaseURL()}/api/tasks`);
+    if (!response.ok) throw new Error(`Failed to list tasks: ${response.statusText}`);
+    return response.json();
+  },
+  getTask: async (taskId) => {
+    const response = await fetch(`${getBackendBaseURL()}/api/tasks/${taskId}`);
+    if (!response.ok) throw new Error(`Failed to get task: ${response.statusText}`);
+    return response.json();
+  },
+  createTask: async (name, description = '') => {
+    const response = await fetch(`${getBackendBaseURL()}/api/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, description }),
+    });
+    if (!response.ok) throw new Error(`Failed to create task: ${response.statusText}`);
+    return response.json();
+  },
+  updateTask: async (taskId, data) => {
+    const response = await fetch(`${getBackendBaseURL()}/api/tasks/${taskId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    if (!response.ok) throw new Error(`Failed to update task: ${response.statusText}`);
+    return response.json();
+  },
+  deleteTask: async (taskId) => {
+    const response = await fetch(`${getBackendBaseURL()}/api/tasks/${taskId}`, { method: 'DELETE' });
+    if (!response.ok) throw new Error(`Failed to delete task: ${response.statusText}`);
+    return response.json();
+  },
+
+  // 任务执行控制
+  startTaskPlanning: async (taskId) => {
+    const response = await fetch(`${getBackendBaseURL()}/api/tasks/${taskId}/start`, { method: 'POST' });
+    if (!response.ok) throw new Error(`Failed to start task: ${response.statusText}`);
+    return response.json();
+  },
+  stopTaskExecution: async (taskId) => {
+    const response = await fetch(`${getBackendBaseURL()}/api/tasks/${taskId}/stop`, { method: 'POST' });
+    if (!response.ok) throw new Error(`Failed to stop task: ${response.statusText}`);
+    return response.json();
+  },
+
+  // 子任务管理
+  addSubtask: async (taskId, name, description = '', dependencies = []) => {
+    const response = await fetch(`${getBackendBaseURL()}/api/tasks/${taskId}/subtasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, description, dependencies }),
+    });
+    if (!response.ok) throw new Error(`Failed to add subtask: ${response.statusText}`);
+    return response.json();
+  },
+  listSubtasks: async (taskId) => {
+    const response = await fetch(`${getBackendBaseURL()}/api/tasks/${taskId}/subtasks`);
+    if (!response.ok) throw new Error(`Failed to list subtasks: ${response.statusText}`);
+    return response.json();
+  },
+  getSubtask: async (taskId, subtaskId) => {
+    const response = await fetch(`${getBackendBaseURL()}/api/tasks/${taskId}/subtasks/${subtaskId}`);
+    if (!response.ok) throw new Error(`Failed to get subtask: ${response.statusText}`);
+    return response.json();
+  },
+  updateSubtask: async (taskId, subtaskId, data) => {
+    const response = await fetch(`${getBackendBaseURL()}/api/tasks/${taskId}/subtasks/${subtaskId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    if (!response.ok) throw new Error(`Failed to update subtask: ${response.statusText}`);
+    return response.json();
+  },
+  deleteSubtask: async (taskId, subtaskId) => {
+    const response = await fetch(`${getBackendBaseURL()}/api/tasks/${taskId}/subtasks/${subtaskId}`, { method: 'DELETE' });
+    if (!response.ok) throw new Error(`Failed to delete subtask: ${response.statusText}`);
+    return response.json();
+  },
+  assignSubtask: async (taskId, subtaskId, agentId) => {
+    const response = await fetch(`${getBackendBaseURL()}/api/tasks/${taskId}/subtasks/${subtaskId}/assign`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agent_id: agentId }),
+    });
+    if (!response.ok) throw new Error(`Failed to assign subtask: ${response.statusText}`);
+    return response.json();
+  },
+
+  // 任务记忆
+  getTaskFacts: async (taskId) => {
+    // Backend doesn't implement GET `/api/task-memory/tasks/{taskId}/facts`.
+    // Use the canonical endpoint and read `facts` from TaskMemoryResponse.
+    const response = await fetch(`${getBackendBaseURL()}/api/task-memory/tasks/${taskId}`);
+    if (!response.ok) throw new Error(`Failed to get task memory: ${response.statusText}`);
+    return response.json();
+  },
+  getTaskMemory: async (taskId) => {
+    const response = await fetch(`${getBackendBaseURL()}/api/task-memory/tasks/${taskId}`);
+    if (!response.ok) throw new Error(`Failed to get task memory: ${response.statusText}`);
+    return response.json();
+  },
+  getSubtaskMemory: async (taskId, subtaskId) => {
+    const response = await fetch(`${getBackendBaseURL()}/api/task-memory/subtasks/${subtaskId}`);
+    if (!response.ok) throw new Error(`Failed to get subtask memory: ${response.statusText}`);
+    return response.json();
+  },
+  searchTaskFacts: async (taskId, keyword) => {
+    const response = await fetch(`${getBackendBaseURL()}/api/task-memory/tasks/${taskId}/search?keyword=${encodeURIComponent(keyword)}`);
+    if (!response.ok) throw new Error(`Failed to search task facts: ${response.statusText}`);
+    return response.json();
+  },
+  getTaskRuntime: async (taskId) => {
+    const response = await fetch(`${getBackendBaseURL()}/api/task-memory/tasks/${taskId}/runtime`);
+    if (!response.ok) throw new Error(`Failed to get task runtime: ${response.statusText}`);
+    return response.json();
+  },
 }

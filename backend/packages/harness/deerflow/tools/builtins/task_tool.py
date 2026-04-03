@@ -1,6 +1,7 @@
 """Task tool for delegating work to subagents."""
 
 import asyncio
+import json
 import logging
 import uuid
 from dataclasses import replace
@@ -9,12 +10,22 @@ from typing import Annotated
 from langchain.tools import InjectedToolCallId, ToolRuntime, tool
 from langgraph.config import get_stream_writer
 from langgraph.typing import ContextT
+from pydantic import ValidationError
 
 from deerflow.agents.lead_agent.prompt import get_skills_prompt_section
 from deerflow.agents.thread_state import ThreadState
 from deerflow.sandbox.security import LOCAL_BASH_SUBAGENT_DISABLED_MESSAGE, is_host_bash_allowed
+from deerflow.collab.models import WorkerProfile
+from deerflow.collab.storage import (
+    collab_execution_gate_error,
+    find_main_task,
+    find_subtask_by_ids,
+    get_project_storage,
+    get_task_memory_storage,
+    persist_task_memory_after_subagent_run,
+)
 from deerflow.subagents import SubagentExecutor, get_available_subagent_names, get_subagent_config
-from deerflow.subagents.executor import SubagentStatus, cleanup_background_task, get_background_task_result
+from deerflow.subagents.executor import SubagentResult, SubagentStatus, cleanup_background_task, get_background_task_result
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +38,8 @@ async def task_tool(
     subagent_type: str,
     tool_call_id: Annotated[str, InjectedToolCallId],
     max_turns: int | None = None,
+    collab_task_id: str | None = None,
+    collab_subtask_id: str | None = None,
 ) -> str:
     """Delegate a task to a specialized subagent that runs in its own context.
 
@@ -58,57 +71,201 @@ async def task_tool(
         prompt: The task description for the subagent. Be specific and clear about what needs to be done. ALWAYS PROVIDE THIS PARAMETER SECOND.
         subagent_type: The type of subagent to use. ALWAYS PROVIDE THIS PARAMETER THIRD.
         max_turns: Optional maximum number of agent turns. Defaults to subagent's configured max.
+        collab_task_id: When set (or context key collab_task_id), enforce collaborative gate:
+            main task must exist, execution_authorized=true, and thread_id must match if the task is bound.
+        collab_subtask_id: With collab_task_id, load ``worker_profile`` from storage (§5.2 → §5.4):
+            ``base_subagent``, ``tools`` (whitelist ∩ global tools), ``skills``, ``instruction``.
     """
     available_subagent_names = get_available_subagent_names()
 
-    # Get subagent configuration
-    config = get_subagent_config(subagent_type)
+    thread_id = None
+    if runtime is not None:
+        thread_id = runtime.context.get("thread_id") if runtime.context else None
+        if thread_id is None:
+            thread_id = runtime.config.get("configurable", {}).get("thread_id")
+
+    resolved_collab = (collab_task_id or "").strip() or None
+    if not resolved_collab and runtime is not None and runtime.context:
+        ctx_ct = runtime.context.get("collab_task_id")
+        if ctx_ct:
+            resolved_collab = str(ctx_ct).strip() or None
+
+    resolved_subtask = (collab_subtask_id or "").strip() or None
+    if not resolved_subtask and runtime is not None and runtime.context:
+        ctx_st = runtime.context.get("collab_subtask_id")
+        if ctx_st:
+            resolved_subtask = str(ctx_st).strip() or None
+
+    if resolved_subtask and not resolved_collab:
+        return (
+            "Error: collab_subtask_id requires collab_task_id "
+            "(or runtime context collab_task_id)."
+        )
+
+    if resolved_collab:
+        gate = collab_execution_gate_error(resolved_collab, thread_id)
+        if gate:
+            return gate
+
+    collab_project_id: str | None = None
+    collab_agent_for_memory = ""
+    collab_memory_task_id: str | None = None
+    profile_model: WorkerProfile | None = None
+    if resolved_collab:
+        collab_storage = get_project_storage()
+        cm = find_main_task(collab_storage, resolved_collab)
+        if cm:
+            proj, main_task = cm
+            collab_project_id = proj["id"]
+            if resolved_subtask:
+                sub_row = find_subtask_by_ids(collab_storage, resolved_collab, resolved_subtask)
+                if not sub_row:
+                    return (
+                        f"Error: subtask {resolved_subtask!r} not found under collaborative task {resolved_collab!r}."
+                    )
+                collab_memory_task_id = resolved_subtask
+                collab_agent_for_memory = (sub_row.get("assigned_to") or main_task.get("assigned_to") or "") or ""
+                wp = sub_row.get("worker_profile")
+                if wp:
+                    try:
+                        profile_model = WorkerProfile.model_validate(wp)
+                    except ValidationError as e:
+                        return f"Error: invalid worker_profile in storage for subtask {resolved_subtask!r}: {e}"
+            else:
+                collab_memory_task_id = resolved_collab
+                collab_agent_for_memory = (main_task.get("assigned_to") or "") or ""
+
+    async def _persist_collab_task_memory(outcome: str, r: SubagentResult) -> None:
+        if collab_project_id is None or not collab_memory_task_id:
+            return
+        from deerflow.collab.sse_notify import broadcast_project_event
+
+        mem_store = get_task_memory_storage()
+        if outcome == "completed":
+            ok, facts_count = persist_task_memory_after_subagent_run(
+                mem_store,
+                collab_project_id,
+                collab_agent_for_memory,
+                collab_memory_task_id,
+                outcome="completed",
+                output_summary=(r.result or ""),
+                current_step="Subagent completed",
+                progress=100,
+                source_ref=tool_call_id,
+            )
+            prog, step = 100, "Subagent completed"
+        elif outcome == "failed":
+            ok, facts_count = persist_task_memory_after_subagent_run(
+                mem_store,
+                collab_project_id,
+                collab_agent_for_memory,
+                collab_memory_task_id,
+                outcome="failed",
+                output_summary=(r.error or ""),
+                current_step="Subagent failed",
+                progress=0,
+                source_ref=tool_call_id,
+            )
+            prog, step = 0, "Subagent failed"
+        else:
+            ok, facts_count = persist_task_memory_after_subagent_run(
+                mem_store,
+                collab_project_id,
+                collab_agent_for_memory,
+                collab_memory_task_id,
+                outcome="timed_out",
+                output_summary=(r.error or ""),
+                current_step="Subagent timed out",
+                progress=0,
+                source_ref=tool_call_id,
+            )
+            prog, step = 0, "Subagent timed out"
+        if not ok:
+            return
+        pid, tid = collab_project_id, collab_memory_task_id
+        await broadcast_project_event(pid, "task:progress", {"task_id": tid, "progress": prog, "current_step": step})
+        await broadcast_project_event(pid, "task_memory:updated", {"task_id": tid, "facts_count": facts_count})
+        if outcome == "completed":
+            await broadcast_project_event(pid, "task:completed", {"task_id": tid, "result": (r.result or "")[:4000]})
+        else:
+            await broadcast_project_event(pid, "task:failed", {"task_id": tid, "error": (r.error or "")[:4000]})
+
+    effective_subagent_type = subagent_type
+    if profile_model and profile_model.base_subagent:
+        effective_subagent_type = str(profile_model.base_subagent).strip()
+
+    config = get_subagent_config(effective_subagent_type)
     if config is None:
         available = ", ".join(available_subagent_names)
-        return f"Error: Unknown subagent type '{subagent_type}'. Available: {available}"
-    if subagent_type == "bash" and not is_host_bash_allowed():
+        return f"Error: Unknown subagent type '{effective_subagent_type}'. Available: {available}"
+    if effective_subagent_type == "bash" and not is_host_bash_allowed():
         return f"Error: {LOCAL_BASH_SUBAGENT_DISABLED_MESSAGE}"
-
-    # Build config overrides
-    overrides: dict = {}
-
-    skills_section = get_skills_prompt_section()
-    if skills_section:
-        overrides["system_prompt"] = config.system_prompt + "\n\n" + skills_section
-
-    if max_turns is not None:
-        overrides["max_turns"] = max_turns
-
-    if overrides:
-        config = replace(config, **overrides)
 
     # Extract parent context from runtime
     sandbox_state = None
     thread_data = None
-    thread_id = None
     parent_model = None
     trace_id = None
 
     if runtime is not None:
         sandbox_state = runtime.state.get("sandbox")
         thread_data = runtime.state.get("thread_data")
-        thread_id = runtime.context.get("thread_id") if runtime.context else None
         if thread_id is None:
-            thread_id = runtime.config.get("configurable", {}).get("thread_id")
+            thread_id = runtime.context.get("thread_id") if runtime.context else None
+            if thread_id is None:
+                thread_id = runtime.config.get("configurable", {}).get("thread_id")
 
-        # Try to get parent model from configurable
         metadata = runtime.config.get("metadata", {})
         parent_model = metadata.get("model_name")
-
-        # Get or generate trace_id for distributed tracing
         trace_id = metadata.get("trace_id") or str(uuid.uuid4())[:8]
 
-    # Get available tools (excluding task tool to prevent nesting)
-    # Lazy import to avoid circular dependency
     from deerflow.tools import get_available_tools
 
-    # Subagents should not have subagent tools enabled (prevent recursive nesting)
     tools = get_available_tools(model_name=parent_model, subagent_enabled=False)
+    allowed_tool_names: set[str] = set()
+    for t in tools:
+        if isinstance(t, str):
+            allowed_tool_names.add(t)
+        else:
+            n = getattr(t, "name", None)
+            if n is not None:
+                allowed_tool_names.add(str(n))
+
+    overrides: dict = {}
+
+    if profile_model is not None and profile_model.tools is not None:
+        req = list(profile_model.tools)
+        inter = [n for n in req if n in allowed_tool_names]
+        unknown = [n for n in req if n not in allowed_tool_names]
+        if unknown:
+            logger.warning(
+                "worker_profile.tools names not in global tool catalog (dropped): %s",
+                unknown,
+            )
+        if not inter:
+            return (
+                "Error: worker_profile.tools has no valid tool names after validation. "
+                f"Requested: {req!r}; available: {sorted(allowed_tool_names)!r}"
+            )
+        overrides["tools"] = inter
+
+    skills_kw: set[str] | None = None
+    if profile_model is not None and profile_model.skills is not None:
+        skills_kw = set(profile_model.skills)
+
+    skills_section = get_skills_prompt_section(skills_kw)
+    system_prompt = config.system_prompt
+    if skills_section:
+        system_prompt = system_prompt + "\n\n" + skills_section
+    if profile_model and profile_model.instruction:
+        system_prompt = system_prompt + "\n\n" + profile_model.instruction
+    overrides["system_prompt"] = system_prompt
+
+    if max_turns is not None:
+        overrides["max_turns"] = max_turns
+
+    if overrides:
+        config = replace(config, **overrides)
 
     # Create executor
     executor = SubagentExecutor(
@@ -132,11 +289,22 @@ async def task_tool(
     # Polling timeout: execution timeout + 60s buffer, checked every 5s
     max_poll_count = (config.timeout_seconds + 60) // 5
 
-    logger.info(f"[trace={trace_id}] Started background task {task_id} (subagent={subagent_type}, timeout={config.timeout_seconds}s, polling_limit={max_poll_count} polls)")
+    logger.info(
+        f"[trace={trace_id}] Started background task {task_id} "
+        f"(subagent={effective_subagent_type}, timeout={config.timeout_seconds}s, polling_limit={max_poll_count} polls)"
+    )
 
     writer = get_stream_writer()
     # Send Task Started message'
     writer({"type": "task_started", "task_id": task_id, "description": description})
+    if collab_project_id and collab_memory_task_id:
+        from deerflow.collab.sse_notify import broadcast_project_event
+
+        await broadcast_project_event(
+            collab_project_id,
+            "task:started",
+            {"task_id": collab_memory_task_id, "agent_id": collab_agent_for_memory},
+        )
 
     try:
         while True:
@@ -175,16 +343,19 @@ async def task_tool(
             if result.status == SubagentStatus.COMPLETED:
                 writer({"type": "task_completed", "task_id": task_id, "result": result.result})
                 logger.info(f"[trace={trace_id}] Task {task_id} completed after {poll_count} polls")
+                await _persist_collab_task_memory("completed", result)
                 cleanup_background_task(task_id)
                 return f"Task Succeeded. Result: {result.result}"
             elif result.status == SubagentStatus.FAILED:
                 writer({"type": "task_failed", "task_id": task_id, "error": result.error})
                 logger.error(f"[trace={trace_id}] Task {task_id} failed: {result.error}")
+                await _persist_collab_task_memory("failed", result)
                 cleanup_background_task(task_id)
                 return f"Task failed. Error: {result.error}"
             elif result.status == SubagentStatus.TIMED_OUT:
                 writer({"type": "task_timed_out", "task_id": task_id, "error": result.error})
                 logger.warning(f"[trace={trace_id}] Task {task_id} timed out: {result.error}")
+                await _persist_collab_task_memory("timed_out", result)
                 cleanup_background_task(task_id)
                 return f"Task timed out. Error: {result.error}"
 

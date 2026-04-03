@@ -1,4 +1,5 @@
 import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
 import { devApiPlugin } from './scripts/dev-api.js'
 import fs from 'fs'
 import path from 'path'
@@ -27,7 +28,16 @@ try {
 console.log(`[vite] Gateway WebSocket 代理目标: ws://127.0.0.1:${gatewayPort}`)
 
 export default defineConfig({
-  plugins: [devApiPlugin()],
+  plugins: [react(), devApiPlugin()],
+  optimizeDeps: {
+    include: [
+      'react',
+      'react-dom',
+      'react-dom/client',
+      'react/jsx-runtime',
+      '@tanstack/react-virtual',
+    ],
+  },
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
   },
@@ -39,6 +49,9 @@ export default defineConfig({
       '/api': {
         target: process.env.DEERFLOW_GATEWAY_URL || 'http://localhost:2026',
         changeOrigin: true,
+        // 避免 dev 代理对长连接 / SSE 过早超时（runs/stream 等）
+        timeout: 600000,
+        proxyTimeout: 600000,
       },
       '/ws': {
         target: `ws://127.0.0.1:${gatewayPort}`,
@@ -62,6 +75,9 @@ export default defineConfig({
           })
         },
       },
+    },
+    warmup: {
+      clientFiles: ['./src/pages/chat-react.js', './src/react/ChatApp.tsx'],
     },
   },
   envPrefix: ['VITE_', 'TAURI_'],

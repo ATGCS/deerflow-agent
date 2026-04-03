@@ -10,7 +10,7 @@ import { toast } from '../components/toast.js'
 import { showConfirm, showModal } from '../components/modal.js'
 import { icon as svgIcon } from '../lib/icons.js'
 
-const RENDER_THROTTLE = 30
+const RENDER_THROTTLE = 16
 const STORAGE_SESSION_KEY = 'clawpanel-last-session'
 const STORAGE_MODEL_KEY = 'clawpanel-chat-selected-model'
 const STORAGE_SIDEBAR_KEY = 'clawpanel-chat-sidebar-open'
@@ -23,6 +23,8 @@ const COMMANDS = [
     { cmd: '/new', desc: '新建会话', action: 'exec' },
     { cmd: '/reset', desc: '重置当前会话', action: 'exec' },
     { cmd: '/stop', desc: '停止生成', action: 'exec' },
+    { cmd: '/collab', desc: '进入任务协作（先规划+分配，再执行）', action: 'exec' },
+    { cmd: '/collab off', desc: '退出任务协作', action: 'exec' },
   ]},
   { title: '模型', commands: [
     { cmd: '/model ', desc: '切换模型（输入模型名）', action: 'fill' },
@@ -76,8 +78,12 @@ let _lastRenderTime = 0, _renderPending = false, _lastHistoryHash = ''
 let _autoScrollEnabled = true, _lastScrollTop = 0, _touchStartY = 0
 let _isLoadingHistory = false
 let _streamSafetyTimer = null, _unsubEvent = null, _unsubReady = null, _unsubStatus = null
+let _activeRunWatchTimer = null, _activeRunWatchSession = null, _activeRunWatchLastRunId = null
+let _lastRemoteHistoryPoll = 0
 let _seenRunIds = new Set()
 let _pageActive = false
+/** @type {((e: KeyboardEvent) => void) | null} */
+let _collabModalEscapeHandler = null
 const _toolEventTimes = new Map()
 const _toolEventData = new Map()
 const _toolRunIndex = new Map()
@@ -152,6 +158,7 @@ export async function render() {
             <button class="btn btn-sm btn-secondary" id="btn-switch-agent" title="切换智能体">切换智能体</button>
           </div>
           <div class="chat-token-stats" id="chat-token-stats" title="当前会话累计 Token 消耗">↑0 ↓0 · Σ0</div>
+          <button type="button" class="btn btn-sm btn-secondary" id="btn-open-collab-modal" title="任务协作">任务协作</button>
           <div class="chat-model-group">
             <select class="form-input" id="chat-model-select" title="切换当前会话模型" style="width:200px;max-width:28vw;padding:6px 10px;font-size:var(--font-size-xs)">
               <option value="">加载模型中...</option>
@@ -159,12 +166,32 @@ export async function render() {
           </div>
         </div>
       </div>
-      <div class="chat-messages" id="chat-messages">
-        <div class="typing-indicator" id="typing-indicator" style="display:none">
-          <span></span><span></span><span></span>
+      <div class="chat-workspace">
+        <div class="chat-messages-wrap">
+          <div class="chat-messages" id="chat-messages">
+            <div class="typing-indicator" id="typing-indicator" style="display:none">
+              <span></span><span></span><span></span>
+            </div>
+          </div>
+          <button class="chat-scroll-btn" id="chat-scroll-btn" style="display:none">↓</button>
         </div>
+        <aside class="chat-collab-drawer" id="chat-collab-drawer" aria-label="任务协作" aria-hidden="true" hidden>
+          <div class="chat-collab-drawer-header">
+            <div class="chat-collab-drawer-title">任务协作</div>
+            <button type="button" class="chat-collab-drawer-collapse" id="btn-collapse-collab-drawer" title="隐藏面板">«</button>
+          </div>
+          <div class="chat-collab-drawer-content">
+            <p class="chat-collab-modal-hint">适合需要多步拆解、边聊边跟进的任务。打开本面板后即启用协作与任务规划；下方对话即可开始触发并推进。</p>
+            <div class="chat-collab-bound-task-wrap">
+              <span class="chat-collab-bound-task-label">当前关联任务</span>
+              <div class="chat-collab-bound-task" id="chat-collab-bound-task">—</div>
+            </div>
+            <button type="button" class="btn btn-secondary btn-block chat-collab-open-task" id="btn-open-task-monitor" title="查看结构化进度与记录">
+              任务进度监控
+            </button>
+          </div>
+        </aside>
       </div>
-      <button class="chat-scroll-btn" id="chat-scroll-btn" style="display:none">↓</button>
       <div class="chat-compose-stack">
       <div class="chat-thread-panel" id="chat-thread-panel" hidden>
         <div class="chat-sidebar-thread-title" id="chat-sidebar-title" hidden></div>
@@ -348,7 +375,13 @@ export async function render() {
   loadModelOptions()
   // 非阻塞：先返回 DOM，后台连接 Gateway
   connectGateway()
+  if (!_sessionKey) {
+    _sessionKey = localStorage.getItem(STORAGE_SESSION_KEY) || 'agent:main:main'
+  }
   renderModeControl()
+  renderCollabControl()
+  void reconcileCollabWithContext(_sessionKey)
+  syncCollabHeaderButton()
   renderTokenStats()
   syncQuickPromptsVisibility()
   return page
@@ -392,6 +425,37 @@ function bindEvents(page) {
       applySelectedModel()
     })
   }
+
+  page.querySelector('#btn-open-collab-modal')?.addEventListener('click', async () => {
+    if (!_sessionKey) return
+    const drawer = page.querySelector('#chat-collab-drawer')
+    const isOn = getSessionCollabMode(_sessionKey)
+    const isDrawerOpen = !!(drawer && !drawer.hidden)
+
+    // 协作已开启：面板已展开 → 点击退出；面板已收起 → 点击仅展开面板
+    if (isOn && isDrawerOpen) {
+      await exitCollabFromModal()
+      return
+    }
+    await openCollabModal()
+  })
+  page.querySelector('#btn-collapse-collab-drawer')?.addEventListener('click', () => closeCollabModal())
+
+  _collabModalEscapeHandler = (e) => {
+    if (e.key !== 'Escape' || !_pageActive) return
+    const d = _page?.querySelector('#chat-collab-drawer')
+    if (d && !d.hidden) {
+      e.preventDefault()
+      closeCollabModal()
+    }
+  }
+  document.addEventListener('keydown', _collabModalEscapeHandler)
+
+  page.querySelector('#btn-open-task-monitor')?.addEventListener('click', async () => {
+    const tid = await resolveBoundTaskIdForSession(_sessionKey)
+    if (tid) window.location.hash = '#/task/' + encodeURIComponent(tid)
+    else toast('还没有关联到具体任务，可先创建任务或继续对话', 'warning')
+  })
 
   _textarea.addEventListener('input', () => {
     _textarea.style.height = 'auto'
@@ -902,6 +966,211 @@ function getSessionReasoningEffort(key) {
   return getSessionMetaMap()[key]?.reasoningEffort || 'off'
 }
 
+/** 任务协作开关（按会话持久化在 STORAGE_SESSION_META_KEY） */
+function getSessionCollabMode(key) {
+  return !!getSessionMetaMap()[key]?.collabMode
+}
+
+function setSessionCollabMode(key, on) {
+  if (!key) return
+  const map = getSessionMetaMap()
+  const cur = map[key] || {}
+  if (on) {
+    map[key] = { ...cur, collabMode: true }
+  } else {
+    const next = { ...cur }
+    delete next.collabMode
+    if (Object.keys(next).length) map[key] = next
+    else delete map[key]
+  }
+  localStorage.setItem(STORAGE_SESSION_META_KEY, JSON.stringify(map))
+}
+
+/** 与 E-01 同存储：写服务端 ``collab_phase``（可抛错，供 /collab 反馈）。主任务绑定由服务端维护 bound_task_id。 */
+async function applyCollabServerPatch(sessionKey, on) {
+  if (on) {
+    const threadId = await wsClient.ensureChatThread(sessionKey)
+    // 进入规划阶段：让模型优先用 supervisor 搭建任务/子任务并分配智能体
+    await wsClient.putThreadCollabState(threadId, { collab_phase: 'planning' })
+  } else {
+    const threadId = wsClient.getSessionThreadId(sessionKey)
+    if (threadId) {
+      await wsClient.putThreadCollabState(threadId, {
+        collab_phase: 'idle',
+        bound_task_id: null,
+        bound_project_id: null,
+      })
+    }
+  }
+}
+
+async function persistCollabToggleToServer(sessionKey, on) {
+  try {
+    await applyCollabServerPatch(sessionKey, on)
+  } catch (e) {
+    console.warn('[collab] server sync failed', e)
+  }
+}
+
+async function reconcileCollabWithContext(sessionKey) {
+  if (!sessionKey) return
+  if (getSessionCollabMode(sessionKey)) {
+    await api.chatUpdateContext(sessionKey, {
+      subagent_enabled: true,
+      is_plan_mode: true,
+      collab_task_id: null,
+    })
+  } else {
+    await api.chatUpdateContext(sessionKey, { collab_task_id: null })
+  }
+}
+
+async function openCollabModal() {
+  if (!_page || !_sessionKey) return
+  const drawer = _page.querySelector('#chat-collab-drawer')
+  if (!drawer) return
+  if (!getSessionCollabMode(_sessionKey)) {
+    setSessionCollabMode(_sessionKey, true)
+    await reconcileCollabWithContext(_sessionKey)
+    await persistCollabToggleToServer(_sessionKey, true)
+  }
+  drawer.hidden = false
+  drawer.setAttribute('aria-hidden', 'false')
+  void refreshCollabBoundTaskDisplay(_sessionKey)
+  applyCollabSidePanelPlaceholder()
+  syncCollabHeaderButton()
+}
+
+function closeCollabModal() {
+  const drawer = _page?.querySelector('#chat-collab-drawer')
+  if (drawer) {
+    drawer.hidden = true
+    drawer.setAttribute('aria-hidden', 'true')
+  }
+  syncCollabHeaderButton()
+}
+
+async function exitCollabFromModal() {
+  if (!_sessionKey) return
+  setSessionCollabMode(_sessionKey, false)
+  const mode = getSessionMode(_sessionKey)
+  applySessionModePreset(_sessionKey, mode)
+  api.chatUpdateContext(_sessionKey, { collab_task_id: null })
+  await persistCollabToggleToServer(_sessionKey, false)
+  closeCollabModal()
+  renderCollabControl()
+  toast('已退出任务协作', 'success')
+}
+
+function syncCollabHeaderButton() {
+  const btn = _page?.querySelector('#btn-open-collab-modal')
+  if (!btn) return
+  const on = _sessionKey ? getSessionCollabMode(_sessionKey) : false
+  const drawer = _page?.querySelector('#chat-collab-drawer')
+  const modalOpen = !!(drawer && !drawer.hidden)
+  btn.classList.toggle('chat-collab-header-on', on)
+  if (modalOpen) {
+    btn.title = '退出任务协作'
+    btn.setAttribute('aria-expanded', 'true')
+  } else {
+    btn.title = on ? '任务协作（点此展开面板）' : '任务协作'
+    btn.setAttribute('aria-expanded', 'false')
+  }
+}
+
+async function resolveBoundTaskIdForSession(sessionKey) {
+  const threadId = wsClient.getSessionThreadId(sessionKey)
+  if (!threadId) return null
+  try {
+    const s = await wsClient.getThreadCollabState(threadId)
+    const bid = (s?.bound_task_id ?? '').toString().trim()
+    return bid || null
+  } catch {
+    return null
+  }
+}
+
+async function refreshCollabBoundTaskDisplay(sessionKey) {
+  const el = _page?.querySelector('#chat-collab-bound-task')
+  if (!el) return
+  el.classList.remove('chat-collab-bound-task--start')
+  if (!sessionKey) {
+    el.textContent = '—'
+    return
+  }
+  const threadId = wsClient.getSessionThreadId(sessionKey)
+  if (!threadId) {
+    el.textContent = '无会话线程'
+    return
+  }
+  el.textContent = '读取中…'
+  try {
+    const s = await wsClient.getThreadCollabState(threadId)
+    const bid = (s?.bound_task_id ?? '').toString().trim()
+    if (bid) {
+      el.textContent = bid
+      return
+    }
+    if (getSessionCollabMode(sessionKey)) {
+      el.textContent = '任务协作已就绪：在下方输入框发第一条消息即可触发主任务生成。'
+      el.classList.add('chat-collab-bound-task--start')
+      return
+    } else {
+      el.textContent = '—'
+    }
+  } catch {
+    el.textContent = '无法读取协作状态'
+  }
+}
+
+/** 任务协作已开启且尚无流式状态时，右侧「进行状态」展示引导，避免只显示「—」或空白。 */
+function applyCollabSidePanelPlaceholder() {
+  if (!_page || !_sessionKey) return
+  if (!getSessionCollabMode(_sessionKey)) return
+  const activityEl = _page.querySelector('#chat-sidebar-activity')
+  if (!activityEl) return
+  const raw = (activityEl.textContent || '').trim()
+  const isOurHint = activityEl.dataset.collabHint === '1'
+  const looksIdle = raw === '—' || raw === '' || isOurHint
+  if (!looksIdle) return
+  activityEl.replaceChildren()
+  const span = document.createElement('span')
+  span.className = 'chat-sidebar-act-icon'
+  span.textContent = '📋'
+  activityEl.appendChild(span)
+  activityEl.appendChild(
+    document.createTextNode(' 任务协作已就绪：在下方输入框发消息即可。')
+  )
+  activityEl.dataset.collabHint = '1'
+  syncThreadPanelVisibility()
+}
+
+function renderCollabControl() {
+  if (!_page || !_sessionKey) return
+  if (!getSessionCollabMode(_sessionKey)) {
+    const activityEl = _page.querySelector('#chat-sidebar-activity')
+    if (activityEl?.dataset.collabHint === '1') {
+      activityEl.textContent = '—'
+      delete activityEl.dataset.collabHint
+      syncThreadPanelVisibility()
+    }
+  } else {
+    applyCollabSidePanelPlaceholder()
+  }
+  void refreshCollabBoundTaskDisplay(_sessionKey)
+  updateCollabPlaceholder()
+  syncCollabHeaderButton()
+}
+
+function updateCollabPlaceholder() {
+  if (!_textarea) return
+  if (_sessionKey && getSessionCollabMode(_sessionKey)) {
+    _textarea.placeholder = '描述多步骤目标；将先对齐需求再规划…'
+  } else {
+    _textarea.placeholder = '输入消息，Enter 发送，/ 打开指令'
+  }
+}
+
 function getSidebarOpen() {
   return localStorage.getItem(STORAGE_SIDEBAR_KEY) === '1'
 }
@@ -1221,6 +1490,8 @@ async function connectGateway() {
         updateSessionTitle()
       }
       renderModeControl()
+      renderCollabControl()
+      await reconcileCollabWithContext(_sessionKey)
       // 先与 Web 端一致从 LangGraph threads/search 拉回映射，再加载历史，避免刷新后本地映射空导致列表/消息全丢
       await refreshSessionList()
       loadHistory()
@@ -1257,6 +1528,8 @@ async function connectGateway() {
       showTyping(false)  // 确保关闭加载动画
       updateSessionTitle()
       renderModeControl()
+      renderCollabControl()
+      await reconcileCollabWithContext(_sessionKey)
       await refreshSessionList()
       loadHistory()
       
@@ -1404,12 +1677,15 @@ function parseSessionLabel(key) {
 
 async function switchSession(newKey) {
   if (newKey === _sessionKey) return
+  stopActiveRunWatch()
   _sessionKey = newKey
   localStorage.setItem(STORAGE_SESSION_KEY, newKey)
   _lastHistoryHash = ''
   resetStreamState()
   updateSessionTitle()
   renderModeControl()
+  renderCollabControl()
+  await reconcileCollabWithContext(_sessionKey)
   renderTokenStats()
   clearMessages()
   hideFollowups()
@@ -1418,6 +1694,7 @@ async function switchSession(newKey) {
   try {
     await refreshSessionList()
     await loadHistory()
+    syncActiveRunWatch(_sessionKey)
   } catch (e) {
     console.warn('[chat] switchSession:', e)
   }
@@ -1520,11 +1797,12 @@ async function applySessionModePreset(sessionKey, mode) {
       }
     }
     if (contextUpdate) {
-      api.chatUpdateContext(sessionKey, contextUpdate)
+      await api.chatUpdateContext(sessionKey, contextUpdate)
       if (sessionKey === _sessionKey) {
         appendSystemMessage(`已应用会话类型：${preset.label}`)
       }
     }
+    await reconcileCollabWithContext(sessionKey)
   } catch (e) {
     console.warn('[chat] applySessionModePreset failed:', e)
   }
@@ -1823,9 +2101,58 @@ function handleCommand(text) {
     info += `- thinking_enabled: ${current.thinking_enabled}\n`
     info += `- is_plan_mode: ${current.is_plan_mode}\n`
     info += `- subagent_enabled: ${current.subagent_enabled}\n`
-    info += `- reasoning_effort: ${current.reasoning_effort || 'default'}`
+    info += `- reasoning_effort: ${current.reasoning_effort || 'default'}\n`
+    info += `- 任务协作开关(本地): ${getSessionCollabMode(_sessionKey) ? '开' : '关'}\n`
+    info += `- collab_task_id(发往模型): ${current.collab_task_id || '(未设置)'}`
     appendSystemMessage(info)
+    const tid = wsClient.getSessionThreadId(_sessionKey)
+    if (tid) {
+      void wsClient.getThreadCollabState(tid).then((s) => {
+        if (!s || typeof s !== 'object') return
+        const line =
+          `\n服务端协作状态 (GET /api/collab):\n` +
+          `- collab_phase: ${s.collab_phase ?? '(unknown)'}\n` +
+          `- bound_task_id: ${s.bound_task_id || '(无)'}\n` +
+          `- bound_project_id: ${s.bound_project_id || '(无)'}`
+        appendSystemMessage(line)
+      }).catch(() => {})
+    }
     toast('已显示上下文配置', 'success')
+    return true
+  }
+
+  if (trimmed === '/collab' || trimmed === '/复杂任务' || trimmed === '/任务协作') {
+    if (!_sessionKey) return false
+    renderCollabControl()
+    void (async () => {
+      await openCollabModal()
+      appendSystemMessage(
+        '已进入任务协作：你可以在下方输入框继续说明目标。'
+      )
+      toast('已开启任务协作（/collab）', 'success')
+    })()
+    return true
+  }
+
+  if (trimmed === '/collab off') {
+    if (!_sessionKey) return false
+    setSessionCollabMode(_sessionKey, false)
+    const mode = getSessionMode(_sessionKey)
+    applySessionModePreset(_sessionKey, mode)
+    api.chatUpdateContext(_sessionKey, { collab_task_id: null })
+    closeCollabModal()
+    renderCollabControl()
+    void (async () => {
+      try {
+        await applyCollabServerPatch(_sessionKey, false)
+        appendSystemMessage('已退出任务协作。')
+        toast('已关闭任务协作（/collab off）', 'success')
+      } catch (e) {
+        console.warn('[collab] /collab off server sync failed', e)
+        appendSystemMessage('已本地关闭任务协作；服务端置 idle 失败，可稍后重试。')
+        toast('服务端同步失败', 'warning')
+      }
+    })()
     return true
   }
 
@@ -1880,6 +2207,7 @@ function processMessageQueue() {
 
 function stopGeneration() {
   if (_currentRunId) api.chatAbort(_sessionKey, _currentRunId).catch(() => {})
+  api.chatCancelActiveRuns(_sessionKey).catch(() => {})
 }
 
 // ── 底部输入框上方的线程状态（对齐 Web：TodoList 叠在 InputBox 上） ──
@@ -1967,6 +2295,7 @@ function handleThreadState(payload) {
   }
 
   if (activityEl) {
+    delete activityEl.dataset.collabHint
     const kind = payload.activityKind || 'idle'
     const icons = { idle: '—', thinking: '💭', tools: '🔧', clarification: '❓' }
     activityEl.replaceChildren()
@@ -2017,6 +2346,79 @@ function handleThreadState(payload) {
 }
 
 // ── 事件处理（参照 clawapp 实现） ──
+
+/** 将 LangGraph / ws-client 的 tool 事件规范为可 upsert 的条目（含 tool_calls 与 tool 结果消息） */
+function normalizeChatToolPayloadToEntries(payload) {
+  const d = payload?.data || {}
+  const nameHint = payload?.name || d.name || d.tool_name || '工具'
+  const toolCalls = d.tool_calls || d.toolCalls
+  if (Array.isArray(toolCalls) && toolCalls.length) {
+    return toolCalls.map((tc) => {
+      const id = tc.id || tc.tool_call_id
+      const nm = tc.name || tc.tool_name || (tc.function && tc.function.name) || nameHint
+      let input = tc.args ?? tc.input ?? tc.parameters
+      if (input == null && tc.function && typeof tc.function.arguments === 'string') {
+        try {
+          input = JSON.parse(tc.function.arguments)
+        } catch {
+          input = tc.function.arguments
+        }
+      }
+      return {
+        id: id || uuid(),
+        name: nm || '工具',
+        input: input ?? null,
+        output: null,
+        status: 'running',
+      }
+    })
+  }
+  const toolCallId = payload?.toolCallId || d.tool_call_id || d.id
+  const isToolNode = d.type === 'tool' || d.role === 'tool'
+  let output
+  if (isToolNode && d.content != null) {
+    output = d.content
+    if (typeof output === 'string') {
+      const t = output.trim()
+      if ((t.startsWith('{') && t.endsWith('}')) || (t.startsWith('[') && t.endsWith(']'))) {
+        try {
+          output = JSON.parse(t)
+        } catch {
+          /* 保留原文 */
+        }
+      }
+    }
+  }
+  let input = d.args ?? d.input ?? d.arguments ?? null
+  let status = 'running'
+  if (output != null && output !== '') {
+    status = d.status === 'error' ? 'error' : 'ok'
+  } else if (isToolNode && (d.status === 'error' || d.isError === true)) {
+    status = 'error'
+  }
+  return [{
+    id: toolCallId || uuid(),
+    name: nameHint,
+    input,
+    output: output !== undefined ? output : undefined,
+    status,
+  }]
+}
+
+function armStreamSafetyTimeout() {
+  clearTimeout(_streamSafetyTimer)
+  _streamSafetyTimer = setTimeout(() => {
+    if (_isStreaming) {
+      console.warn('[chat] 流式输出超时（90s 无新数据），强制结束')
+      if (_currentAiBubble && _currentAiText) {
+        _currentAiBubble.innerHTML = renderMarkdown(_currentAiText)
+      }
+      appendSystemMessage('输出超时，已自动结束')
+      resetStreamState()
+      processMessageQueue()
+    }
+  }, 90000)
+}
 
 function handleEvent(msg) {
   const { event, payload } = msg
@@ -2076,13 +2478,49 @@ function handleChatEvent(payload) {
     return
   }
 
+  // LangGraph SSE：messages-tuple 中的 tool / tool_calls（此前未处理，导致流式阶段看不到工具）
+  if (state === 'tool') {
+    const entries = normalizeChatToolPayloadToEntries(payload)
+    if (!entries.length) return
+    showTyping(false)
+    if (!_currentAiBubble) {
+      _currentAiBubble = createStreamBubble()
+      _currentRunId = payload.runId
+      _isStreaming = true
+      _streamStartTime = Date.now()
+      updateSendState()
+    }
+    for (const e of entries) {
+      upsertTool(_currentAiTools, { ...e })
+      const tid = e.id
+      if (tid) {
+        const cur = _toolEventData.get(tid) || {}
+        if (e.input != null) cur.input = e.input
+        if (e.output != null) cur.output = e.output
+        if (e.status) cur.status = e.status
+        cur.time = cur.time || Date.now()
+        _toolEventData.set(tid, cur)
+        if (runId) {
+          const list = _toolRunIndex.get(runId) || []
+          if (!list.includes(tid)) list.push(tid)
+          _toolRunIndex.set(runId, list)
+        }
+      }
+    }
+    armStreamSafetyTimeout()
+    throttledRender()
+    return
+  }
+
   if (state === 'delta') {
     const c = extractChatContent(payload.message)
     if (c?.images?.length) _currentAiImages = c.images
     if (c?.videos?.length) _currentAiVideos = c.videos
     if (c?.audios?.length) _currentAiAudios = c.audios
     if (c?.files?.length) _currentAiFiles = c.files
-    if (c?.tools?.length) _currentAiTools = c.tools
+    if (c?.tools?.length) {
+      for (const t of c.tools) upsertTool(_currentAiTools, t)
+    }
     if ((c?.text && c.text.length >= _currentAiText.length) || c?.tools?.length) {
       showTyping(false)
       if (!_currentAiBubble) {
@@ -2093,19 +2531,7 @@ function handleChatEvent(payload) {
         updateSendState()
       }
       if (c?.text && c.text.length >= _currentAiText.length) _currentAiText = c.text
-      // 每次收到 delta 重置安全超时（90s 无新 delta 则强制结束）
-      clearTimeout(_streamSafetyTimer)
-      _streamSafetyTimer = setTimeout(() => {
-        if (_isStreaming) {
-          console.warn('[chat] 流式输出超时（90s 无新数据），强制结束')
-          if (_currentAiBubble && _currentAiText) {
-            _currentAiBubble.innerHTML = renderMarkdown(_currentAiText)
-          }
-          appendSystemMessage('输出超时，已自动结束')
-          resetStreamState()
-          processMessageQueue()
-        }
-      }, 90000)
+      armStreamSafetyTimeout()
       throttledRender()
     }
     return
@@ -2152,11 +2578,11 @@ function handleChatEvent(payload) {
     }
     if (_currentAiBubble) {
       if (_currentAiText) _currentAiBubble.innerHTML = renderMarkdown(_currentAiText)
+      appendToolsToEl(_currentAiBubble, finalTools.length ? finalTools : _currentAiTools)
       appendImagesToEl(_currentAiBubble, _currentAiImages)
       appendVideosToEl(_currentAiBubble, _currentAiVideos)
       appendAudiosToEl(_currentAiBubble, _currentAiAudios)
       appendFilesToEl(_currentAiBubble, _currentAiFiles)
-      appendToolsToEl(_currentAiBubble, finalTools.length ? finalTools : _currentAiTools)
     }
     // 添加时间戳 + 耗时 + token 消耗
     const wrapper = _currentAiBubble?.parentElement
@@ -2367,13 +2793,26 @@ function escapeHtml(text) {
     .replace(/'/g, '&#x27;')
 }
 
+function stripAgentMetaLines(text) {
+  if (!text) return ''
+  const lines = text.split('\n')
+  const out = []
+  for (const line of lines) {
+    const s = line.trim()
+    if (s && /^(身份|核心任务|工作模式|协作阶段|技能|近期操作)[:：]/.test(s)) continue
+    out.push(line)
+  }
+  return out.join('\n').replace(/\n{3,}/g, '\n\n').trim()
+}
 function stripThinkingTags(text) {
   const safe = stripAnsi(text)
-  return safe
+  const stripped = safe
     .replace(/<\s*think(?:ing)?\s*>[\s\S]*?<\s*\/\s*think(?:ing)?\s*>/gi, '')
     .replace(/Conversation info \(untrusted metadata\):\s*```json[\s\S]*?```\s*/gi, '')
     .replace(/\[Queued messages while agent was busy\]\s*---\s*Queued #\d+\s*/gi, '')
+    .replace(/<\s*collab_phase_context\s*>[\s\S]*?<\s*\/\s*collab_phase_context\s*>/gi, '')
     .trim()
+  return stripAgentMetaLines(stripped)
 }
 
 function normalizeTime(raw) {
@@ -2469,11 +2908,10 @@ function doRender() {
   if (!_currentAiBubble) return
   _currentAiBubble.innerHTML = _currentAiText ? renderMarkdown(_currentAiText) : ''
   appendToolsToEl(_currentAiBubble, _currentAiTools)
-  if (!_currentAiText && _currentAiTools.length) {
-    const tip = document.createElement('div')
-    tip.className = 'msg-tool-stream-tip'
-    tip.textContent = '正在调用工具...'
-    _currentAiBubble.appendChild(tip)
+  if (_isStreaming) {
+    const cur = document.createElement('span')
+    cur.className = 'stream-cursor'
+    _currentAiBubble.appendChild(cur)
   }
   scrollToBottom()
 }
@@ -2484,11 +2922,11 @@ function resetStreamState() {
   clearTimeout(_streamSafetyTimer)
   if (_currentAiBubble && (_currentAiText || _currentAiImages.length || _currentAiVideos.length || _currentAiAudios.length || _currentAiFiles.length || _currentAiTools.length)) {
     _currentAiBubble.innerHTML = renderMarkdown(_currentAiText)
+    appendToolsToEl(_currentAiBubble, _currentAiTools)
     appendImagesToEl(_currentAiBubble, _currentAiImages)
     appendVideosToEl(_currentAiBubble, _currentAiVideos)
     appendAudiosToEl(_currentAiBubble, _currentAiAudios)
     appendFilesToEl(_currentAiBubble, _currentAiFiles)
-    appendToolsToEl(_currentAiBubble, _currentAiTools)
   }
   _renderPending = false
   _lastRenderTime = 0
@@ -2546,7 +2984,7 @@ async function loadHistory() {
         scrollToBottom()
       }
     }
-    if (!wsClient.gatewayReady) return
+    // chatHistory 直连 LangGraph /state，不依赖 Gateway WebSocket；避免 Gateway 尚未 ready 时无法刷新 checkpoint
     const result = await api.chatHistory(key, 200)
     if (key !== _sessionKey) return
     if (!result?.messages?.length) {
@@ -2625,7 +3063,69 @@ async function loadHistory() {
     if (_messagesEl && !_messagesEl.querySelector('.msg')) appendSystemMessage('加载历史失败: ' + e.message)
   } finally {
     _isLoadingHistory = false
+    if (key === _sessionKey) {
+      syncActiveRunWatch(key)
+    }
   }
+}
+
+function stopActiveRunWatch() {
+  if (_activeRunWatchTimer) {
+    clearTimeout(_activeRunWatchTimer)
+    _activeRunWatchTimer = null
+  }
+  _activeRunWatchSession = null
+  _activeRunWatchLastRunId = null
+  _lastRemoteHistoryPoll = 0
+}
+
+function syncActiveRunWatch(sessionKey) {
+  const key = sessionKey || _sessionKey
+  if (!key || !_pageActive) return
+  _activeRunWatchSession = key
+  if (_activeRunWatchTimer) return
+
+  const tick = async () => {
+    if (!_pageActive || _activeRunWatchSession !== _sessionKey) {
+      stopActiveRunWatch()
+      return
+    }
+    let busy = false
+    try {
+      const stat = await api.chatGetRunStatus(_activeRunWatchSession)
+      const runId = stat?.runId || null
+      const status = (stat?.status || 'idle').toLowerCase()
+      busy = status === 'pending' || status === 'running'
+
+      if (busy && !_isStreaming && !_isSending) {
+        _currentRunId = runId || _currentRunId
+        showTyping(true)
+        // 刷新后 SSE 已断：轮询 checkpoint，尽量展示已落盘的中间输出
+        const now = Date.now()
+        if (now - _lastRemoteHistoryPoll > 5500) {
+          _lastRemoteHistoryPoll = now
+          loadHistory().catch(() => {})
+        }
+      } else {
+        _lastRemoteHistoryPoll = 0
+      }
+      if (!busy && _activeRunWatchLastRunId) {
+        showTyping(false)
+        // Stream got lost due to refresh/tab switch; reload from backend snapshot.
+        await loadHistory()
+      }
+      _activeRunWatchLastRunId = busy ? runId : null
+    } catch {
+      // Best-effort watcher; ignore transient errors.
+    } finally {
+      if (_pageActive && _activeRunWatchSession === _sessionKey) {
+        _activeRunWatchTimer = setTimeout(tick, busy ? 2000 : 3000)
+      } else {
+        stopActiveRunWatch()
+      }
+    }
+  }
+  _activeRunWatchTimer = setTimeout(tick, 100)
 }
 
 function dedupeHistory(messages) {
@@ -2811,11 +3311,11 @@ function appendAiMessage(text, msgTime, images, videos, audios, files, tools) {
   wrap.className = 'msg msg-ai'
   const bubble = document.createElement('div')
   bubble.className = 'msg-bubble'
-  appendToolsToEl(bubble, tools)
   const textEl = document.createElement('div')
   textEl.className = 'msg-text'
   textEl.innerHTML = renderMarkdown(text || '')
   bubble.appendChild(textEl)
+  appendToolsToEl(bubble, tools)
   appendImagesToEl(bubble, images)
   appendVideosToEl(bubble, videos)
   appendAudiosToEl(bubble, audios)
@@ -2930,14 +3430,50 @@ function mergeToolEventData(entry) {
   return entry
 }
 
+function parseToolInputValue(x) {
+  if (x == null) return null
+  if (typeof x === 'string') {
+    const t = x.trim()
+    if (t === '' || t === '{}' || t === '[]') return null
+    try {
+      const p = JSON.parse(t)
+      if (typeof p === 'object' && p !== null) return p
+      return x
+    } catch {
+      return x
+    }
+  }
+  return x
+}
+function isEmptyToolInput(x) {
+  const v = parseToolInputValue(x)
+  if (v == null) return true
+  if (Array.isArray(v) && v.length === 0) return true
+  if (typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === 0) return true
+  return false
+}
+function mergeToolInput(prev, next) {
+  const p = parseToolInputValue(prev)
+  const n = parseToolInputValue(next)
+  if (n == null) return p
+  if (p == null || isEmptyToolInput(p)) return n
+  if (isEmptyToolInput(n)) return p
+  if (typeof p === 'object' && typeof n === 'object' && !Array.isArray(p) && !Array.isArray(n)) {
+    return { ...p, ...n }
+  }
+  return n != null ? n : p
+}
 function upsertTool(tools, entry) {
   if (!entry) return
   const id = entry.id || entry.tool_call_id
   let target = null
   if (id) target = tools.find(t => t.id === id || t.tool_call_id === id)
-  if (!target && entry.name) target = tools.find(t => t.name === entry.name && !t.output)
+  if (!target && entry.name && !id) {
+    target = tools.find(t => t.name === entry.name && !t.output)
+    if (!target) target = tools.find(t => t.name === entry.name && isEmptyToolInput(t.input))
+  }
   if (target) {
-    if (entry.input != null && target.input == null) target.input = entry.input
+    if (entry.input != null) target.input = mergeToolInput(target.input, entry.input)
     if (entry.output != null) target.output = entry.output
     if (entry.status) target.status = entry.status
     if (entry.time) target.time = entry.time
@@ -2953,7 +3489,17 @@ function collectToolsFromMessage(message, tools) {
     toolCalls.forEach(call => {
       const fn = call.function || null
       const name = call.name || call.tool || call.tool_name || fn?.name
-      const input = call.input || call.args || call.parameters || call.arguments || fn?.arguments || null
+      let input = call.input || call.args || call.parameters || call.arguments || fn?.arguments || null
+      if (typeof input === 'string') {
+        const t = input.trim()
+        if ((t.startsWith('{') && t.endsWith('}')) || (t.startsWith('[') && t.endsWith(']'))) {
+          try {
+            input = JSON.parse(input)
+          } catch {
+            /* keep */
+          }
+        }
+      }
       const callId = call.id || call.tool_call_id
       upsertTool(tools, {
         id: callId,
@@ -2996,6 +3542,7 @@ function appendToolsToEl(el, tools) {
     details.className = 'msg-tool-item'
     const summary = document.createElement('summary')
     const running = isToolRunning(tool)
+    if (running) details.classList.add('msg-tool-item--running')
     const status = running ? '进行中' : (tool.status === 'error' ? '失败' : '完成')
     const statusCls = running ? 'running' : (tool.status === 'error' ? 'error' : 'ok')
     const timeValue = getToolTime(tool) || resolveToolTime(tool.id || tool.tool_call_id, tool.messageTimestamp)
@@ -3016,7 +3563,8 @@ function appendToolsToEl(el, tools) {
     container.appendChild(details)
   })
   if (existing) existing.remove()
-  el.insertBefore(container, el.firstChild)
+  /* 工具块接在正文之后，不再 insertBefore(firstChild) 顶在气泡最上 */
+  el.appendChild(container)
 }
 
 function isToolRunning(tool) {
@@ -3507,6 +4055,11 @@ function appendHostedOutput(text) {
 
 export function cleanup() {
   _pageActive = false
+  stopActiveRunWatch()
+  if (_collabModalEscapeHandler) {
+    document.removeEventListener('keydown', _collabModalEscapeHandler)
+    _collabModalEscapeHandler = null
+  }
   if (_unsubEvent) { _unsubEvent(); _unsubEvent = null }
   if (_unsubReady) { _unsubReady(); _unsubReady = null }
   if (_unsubStatus) { _unsubStatus(); _unsubStatus = null }

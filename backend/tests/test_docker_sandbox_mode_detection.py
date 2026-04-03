@@ -11,10 +11,22 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "docker.sh"
+SCRIPT_PATH_BASH = str(SCRIPT_PATH).replace("\\", "/")
 BASH_EXECUTABLE = which("bash") or r"C:\Program Files\Git\bin\bash.exe"
 
 if not Path(BASH_EXECUTABLE).exists():
     pytestmark = pytest.mark.skip(reason="bash is required for docker.sh detection tests")
+
+# On some Windows setups `bash` exists but cannot see Windows paths (so `source` fails).
+# Detect this early and skip the whole module in that environment.
+else:
+    try:
+        check_cmd = f"test -f '{SCRIPT_PATH_BASH}' && echo yes || echo no"
+        _out = subprocess.check_output([BASH_EXECUTABLE, "-lc", check_cmd], text=True).strip()
+        if _out.lower() != "yes":
+            pytestmark = pytest.mark.skip(reason="bash cannot access scripts/docker.sh path")
+    except Exception:
+        pytestmark = pytest.mark.skip(reason="bash path probe failed")
 
 
 def _detect_mode_with_config(config_content: str) -> str:
@@ -23,7 +35,7 @@ def _detect_mode_with_config(config_content: str) -> str:
         tmp_root = Path(tmpdir)
         (tmp_root / "config.yaml").write_text(config_content)
 
-        command = f"source '{SCRIPT_PATH}' && PROJECT_ROOT='{tmp_root}' && detect_sandbox_mode"
+        command = f"source '{SCRIPT_PATH_BASH}' && PROJECT_ROOT='{tmp_root.as_posix()}' && detect_sandbox_mode"
 
         output = subprocess.check_output(
             [BASH_EXECUTABLE, "-lc", command],
@@ -36,7 +48,7 @@ def _detect_mode_with_config(config_content: str) -> str:
 def test_detect_mode_defaults_to_local_when_config_missing():
     """No config file should default to local mode."""
     with tempfile.TemporaryDirectory() as tmpdir:
-        command = f"source '{SCRIPT_PATH}' && PROJECT_ROOT='{tmpdir}' && detect_sandbox_mode"
+        command = f"source '{SCRIPT_PATH_BASH}' && PROJECT_ROOT='{Path(tmpdir).as_posix()}' && detect_sandbox_mode"
         output = subprocess.check_output([BASH_EXECUTABLE, "-lc", command], text=True).strip()
 
     assert output == "local"

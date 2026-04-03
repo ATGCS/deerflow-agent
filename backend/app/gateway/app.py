@@ -9,11 +9,16 @@ from app.gateway.routers import (
     agents,
     artifacts,
     channels,
+    collab,
+    events,
     mcp,
     memory,
     models,
+    projects,
     skills,
     suggestions,
+    task_memory,
+    tasks,
     threads,
     uploads,
 )
@@ -145,6 +150,26 @@ This gateway provides custom endpoints for models, MCP configuration, skills, an
                 "description": "Manage IM channel integrations (Feishu, Slack, Telegram)",
             },
             {
+                "name": "projects",
+                "description": "Manage multi-agent collaboration projects",
+            },
+            {
+                "name": "tasks",
+                "description": "Manage tasks within projects",
+            },
+            {
+                "name": "task-memory",
+                "description": "Access agent task memory and extracted facts",
+            },
+            {
+                "name": "events",
+                "description": "Real-time SSE events for project monitoring",
+            },
+            {
+                "name": "collab",
+                "description": "Per-thread collaboration phase and bound task/project ids",
+            },
+            {
                 "name": "health",
                 "description": "Health check and system status endpoints",
             },
@@ -183,6 +208,21 @@ This gateway provides custom endpoints for models, MCP configuration, skills, an
 
     # Channels API is mounted at /api/channels
     app.include_router(channels.router)
+
+    # Projects API is mounted at /api/projects
+    app.include_router(projects.router)
+
+    # Tasks API is mounted at /api/tasks
+    app.include_router(tasks.router)
+
+    # Task Memory API is mounted at /api/task-memory
+    app.include_router(task_memory.router)
+
+    # Events SSE API is mounted at /api/events
+    app.include_router(events.router)
+
+    # Collaboration state API is mounted at /api/collab
+    app.include_router(collab.router)
 
     @app.get("/health", tags=["health"])
     async def health_check() -> dict:

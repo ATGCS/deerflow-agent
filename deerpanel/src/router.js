@@ -14,6 +14,14 @@ export function registerRoute(path, loader) {
   routes[path] = loader
 }
 
+/** 支持 /task/:id、/project/:id 等动态段 */
+function resolveLoader(path) {
+  if (routes[path]) return routes[path]
+  if (/^\/task\/[^/]+$/.test(path) && routes['/task/:id']) return routes['/task/:id']
+  if (/^\/project\/[^/]+$/.test(path) && routes['/project/:id']) return routes['/project/:id']
+  return null
+}
+
 export function setDefaultRoute(path) {
   _defaultRoute = path
 }
@@ -35,7 +43,7 @@ async function loadRoute() {
   const hash = window.location.hash.slice(1) || _defaultRoute
   // 忽略查询参数，只取路径部分
   const path = hash.split('?')[0]
-  const loader = routes[path]
+  const loader = resolveLoader(path)
   if (!loader || !_contentEl) return
 
   // 竞态防护：记录本次加载 ID
@@ -102,9 +110,14 @@ async function loadRoute() {
   // 保存页面清理函数
   _currentCleanup = mod.cleanup || null
 
-  // 更新侧边栏激活状态
-  document.querySelectorAll('.nav-item').forEach(item => {
-    item.classList.toggle('active', item.dataset.route === hash)
+  // 更新侧边栏激活状态（支持详情页与列表同高亮）
+  const routePath = path.split('?')[0]
+  document.querySelectorAll('.nav-item[data-route]').forEach(item => {
+    const r = item.dataset.route || ''
+    let active = routePath === r
+    if (!active && r === '/tasks' && routePath.startsWith('/task/')) active = true
+    if (!active && r === '/projects' && routePath.startsWith('/project/')) active = true
+    item.classList.toggle('active', active)
   })
 }
 

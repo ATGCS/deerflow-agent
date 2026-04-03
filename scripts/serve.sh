@@ -183,13 +183,16 @@ else
     LANGGRAPH_EXTRA_FLAGS="--no-reload"
     GATEWAY_EXTRA_FLAGS=""
 fi
-GATEWAY_PORT=8011
+GATEWAY_PORT=8012
+export BG_JOB_ISOLATED_LOOPS="${BG_JOB_ISOLATED_LOOPS:-true}"
+# langgraph dev subprocess defaults N_JOBS_PER_WORKER to 1 unless --n-jobs-per-worker is set
+export N_JOBS_PER_WORKER="${N_JOBS_PER_WORKER:-10}"
 
 echo "Starting LangGraph server..."
 # Read log_level from config.yaml, fallback to env var, then to "info"
 CONFIG_LOG_LEVEL=$(grep -m1 '^log_level:' config.yaml 2>/dev/null | awk '{print $2}' | tr -d ' ')
 LANGGRAPH_LOG_LEVEL="${LANGGRAPH_LOG_LEVEL:-${CONFIG_LOG_LEVEL:-info}}"
-(cd backend && NO_COLOR=1 PYTHONUNBUFFERED=1 "$UV_BIN" run langgraph dev --no-browser --allow-blocking --server-log-level $LANGGRAPH_LOG_LEVEL $LANGGRAPH_EXTRA_FLAGS > ../logs/langgraph.log 2>&1) &
+(cd backend && NO_COLOR=1 PYTHONUNBUFFERED=1 "$UV_BIN" run langgraph dev --no-browser --allow-blocking --n-jobs-per-worker "$N_JOBS_PER_WORKER" --server-log-level $LANGGRAPH_LOG_LEVEL $LANGGRAPH_EXTRA_FLAGS > ../logs/langgraph.log 2>&1) &
 ./scripts/wait-for-port.sh 2024 240 "LangGraph" || {
     echo "  See logs/langgraph.log for details"
     tail -20 logs/langgraph.log

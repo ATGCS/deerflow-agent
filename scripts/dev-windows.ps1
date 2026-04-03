@@ -1,6 +1,7 @@
 param(
     [string]$NginxDir = "D:\works\package\nginx",
-    [switch]$NoNginx
+    [switch]$NoNginx,
+    [switch]$NoFrontend
 )
 
 $ErrorActionPreference = "Stop"
@@ -75,7 +76,7 @@ $FrontendDir = Join-Path $ProjectRoot "frontend"
 $LogsDir = Join-Path $ProjectRoot "logs"
 $TempDir = Join-Path $ProjectRoot "temp"
 $FrontendPort = 3000
-$GatewayPort = 8011
+$GatewayPort = 8012
 
 Write-Step "Preparing directories"
 New-Item -ItemType Directory -Force -Path $LogsDir | Out-Null
@@ -138,27 +139,84 @@ if (-not (Test-Path $pyExe)) {
     throw "Python venv not found: $pyExe (run: cd backend; uv sync)"
 }
 
+$internalEventsSecret = $env:INTERNAL_EVENTS_SECRET
+if ([string]::IsNullOrWhiteSpace($internalEventsSecret)) {
+    $envCandidates = @(
+        (Join-Path $BackendDir ".env"),
+        (Join-Path $ProjectRoot ".env")
+    )
+    foreach ($p in $envCandidates) {
+        if (Test-Path $p) {
+            $m = Select-String -Path $p -Pattern '^INTERNAL_EVENTS_SECRET\s*=' -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($m) {
+                $internalEventsSecret = ($m.Line -split '=', 2)[1].Trim()
+                break
+            }
+        }
+    }
+}
+
 Write-Step "Starting LangGraph (2024)"
 # Use `python -m langgraph_cli` — on some Windows setups `uv run` / console_scripts hit "Failed to canonicalize script path".
+# langgraph dev defaults N_JOBS_PER_WORKER to 1 unless --n-jobs-per-worker is passed (see langgraph_api.cli patch_environment).
+$nJobsPerWorker = $env:N_JOBS_PER_WORKER
+if ([string]::IsNullOrWhiteSpace($nJobsPerWorker)) {
+    foreach ($p in @((Join-Path $BackendDir ".env"), (Join-Path $ProjectRoot ".env"))) {
+        if (-not (Test-Path $p)) { continue }
+        $m = Select-String -Path $p -Pattern '^\s*N_JOBS_PER_WORKER\s*=' -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($m) {
+            $nJobsPerWorker = ($m.Line -split '=', 2)[1].Trim()
+            break
+        }
+    }
+}
+if ([string]::IsNullOrWhiteSpace($nJobsPerWorker)) { $nJobsPerWorker = '10' }
+Write-Host "  N_JOBS_PER_WORKER (LangGraph): $nJobsPerWorker" -ForegroundColor DarkGray
+$gatewayBase = "http://127.0.0.1:$GatewayPort"
+$pythonPathValue = "$BackendDir;$BackendDir\\packages\\harness"
+$langgraphEventsEnv = "`$env:DEERFLOW_GATEWAY_URL='$gatewayBase'; "
+# Isolate run event loops to avoid one long/blocking run stalling all queued runs.
+$langgraphEventsEnv += "`$env:BG_JOB_ISOLATED_LOOPS='true'; "
+if (-not [string]::IsNullOrWhiteSpace($internalEventsSecret)) {
+    $escapedLg = ($internalEventsSecret -replace "'", "''")
+    $langgraphEventsEnv += "`$env:INTERNAL_EVENTS_SECRET='$escapedLg'; "
+}
 $langgraph = Start-Process powershell -ArgumentList @(
     "-NoProfile",
     "-ExecutionPolicy", "Bypass",
-    "-Command", "cd '$BackendDir'; & '$pyExe' -m langgraph_cli dev --no-browser --allow-blocking --no-reload"
+    "-Command", "cd '$BackendDir'; `$env:PYTHONPATH='$pythonPathValue'; $langgraphEventsEnv & '$pyExe' -m langgraph_cli dev --no-browser --allow-blocking --no-reload --n-jobs-per-worker $nJobsPerWorker"
 ) -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $LogsDir "langgraph.log") -RedirectStandardError (Join-Path $LogsDir "langgraph.err.log")
+
+#
+# Ensure internal SSE broadcast secret is present inside the gateway process.
+# `load_dotenv()` in `deerflow.config.app_config` may load from the gateway working
+# directory (`backend/`), and `Start-Process` environment inheritance can be flaky.
+# So we explicitly forward it (when provided) into the uvicorn process.
+#
+$gatewayInternalEventsEnv = ""
+if (-not [string]::IsNullOrWhiteSpace($internalEventsSecret)) {
+    $escaped = ($internalEventsSecret -replace "'", "''")
+    $gatewayInternalEventsEnv = "`$env:INTERNAL_EVENTS_SECRET='$escaped'; "
+}
 
 Write-Step "Starting Gateway ($GatewayPort)"
 $gateway = Start-Process powershell -ArgumentList @(
     "-NoProfile",
     "-ExecutionPolicy", "Bypass",
-    "-Command", "cd '$BackendDir'; `$env:PYTHONPATH='.'; & '$pyExe' -m uvicorn app.gateway.app:app --host 0.0.0.0 --port $GatewayPort --reload --reload-include='*.yaml' --reload-include='.env'"
+    "-Command", "cd '$BackendDir'; `$env:PYTHONPATH='$pythonPathValue'; $gatewayInternalEventsEnv & '$pyExe' -m uvicorn app.gateway.app:app --host 0.0.0.0 --port $GatewayPort --reload --reload-include='*.yaml' --reload-include='.env'"
 ) -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $LogsDir "gateway.log") -RedirectStandardError (Join-Path $LogsDir "gateway.err.log")
 
-Write-Step "Starting Frontend ($FrontendPort)"
-$frontend = Start-Process powershell -ArgumentList @(
-    "-NoProfile",
-    "-ExecutionPolicy", "Bypass",
-    "-Command", "cd '$FrontendDir'; `$env:PORT='$FrontendPort'; npm run dev"
-) -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $LogsDir "frontend.log") -RedirectStandardError (Join-Path $LogsDir "frontend.err.log")
+if (-not $NoFrontend) {
+    Write-Step "Starting Frontend ($FrontendPort)"
+    $frontend = Start-Process powershell -ArgumentList @(
+        "-NoProfile",
+        "-ExecutionPolicy", "Bypass",
+        "-Command", "cd '$FrontendDir'; `$env:PORT='$FrontendPort'; npm run dev"
+    ) -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $LogsDir "frontend.log") -RedirectStandardError (Join-Path $LogsDir "frontend.err.log")
+} else {
+    Write-Step "Skipping Frontend (NoFrontend)"
+    $frontend = $null
+}
 
 $nginx = $null
 if (-not $NoNginx) {
@@ -173,7 +231,10 @@ if (-not $NoNginx) {
 Write-Step "Waiting for ports"
 $ok2024 = Wait-PortReady -Port 2024 -TimeoutSec 90
 $okGateway = Wait-PortReady -Port $GatewayPort -TimeoutSec 90
-$okFrontend = Wait-PortReady -Port $FrontendPort -TimeoutSec 120
+$okFrontend = $true
+if (-not $NoFrontend) {
+    $okFrontend = Wait-PortReady -Port $FrontendPort -TimeoutSec 120
+}
 $ok2026 = $true
 if (-not $NoNginx) {
     $ok2026 = Wait-PortReady -Port 2026 -TimeoutSec 30
@@ -183,7 +244,11 @@ Write-Host ""
 Write-Host "DeerFlow (Windows) startup result:" -ForegroundColor Green
 Write-Host "  2024 LangGraph: $ok2024"
 Write-Host "  $GatewayPort Gateway:   $okGateway"
-Write-Host "  $FrontendPort Frontend:  $okFrontend"
+if (-not $NoFrontend) {
+    Write-Host "  $FrontendPort Frontend:  $okFrontend"
+} else {
+    Write-Host "  $FrontendPort Frontend:  (skipped)"
+}
 if (-not $NoNginx) {
     Write-Host "  2026 Nginx:     $ok2026"
 }
@@ -191,7 +256,9 @@ Write-Host ""
 Write-Host "PIDs:"
 Write-Host "  LangGraph: $($langgraph.Id)"
 Write-Host "  Gateway:   $($gateway.Id)"
-Write-Host "  Frontend:  $($frontend.Id)"
+if (-not $NoFrontend) {
+    Write-Host "  Frontend:  $($frontend.Id)"
+}
 if ($nginx) {
     Write-Host "  Nginx:     $($nginx.Id)"
 }
@@ -200,7 +267,9 @@ Write-Host "URLs:"
 if (-not $NoNginx) {
     Write-Host "  App:       http://localhost:2026"
 }
-Write-Host "  Frontend:  http://localhost:$FrontendPort"
+if (-not $NoFrontend) {
+    Write-Host "  Frontend:  http://localhost:$FrontendPort"
+}
 Write-Host "  LangGraph: http://localhost:2024"
 Write-Host "  Gateway:   http://localhost:$GatewayPort"
 Write-Host ""

@@ -22,6 +22,230 @@
   position: relative;
 }
 
+/* 消息区（任务协作改为顶栏弹窗，不再占右侧栏） */
+.chat-workspace {
+  flex: 1;
+  display: flex;
+  flex-direction: row;
+  min-height: 0;
+  min-width: 0;
+}
+
+.chat-messages-wrap {
+  flex: 1;
+  min-width: 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* 右侧任务协作抽屉（不遮住聊天，直接占位） */
+.chat-collab-drawer {
+  width: 380px;
+  flex-shrink: 0;
+  height: 100%;
+  border-left: 1px solid var(--border);
+  background: var(--bg-secondary, var(--bg-card));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.chat-collab-drawer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 14px 16px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.chat-collab-drawer-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.chat-collab-drawer-collapse {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  padding: 4px 6px;
+  border-radius: 6px;
+}
+
+.chat-collab-drawer-collapse:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover, rgba(0, 0, 0, 0.06));
+}
+
+.chat-collab-drawer-content {
+  padding: 12px 16px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+}
+
+.chat-collab-drawer-footer {
+  padding: 0 16px 16px;
+  display: flex;
+  justify-content: flex-end;
+  flex-shrink: 0;
+}
+
+.chat-collab-drawer[hidden] {
+  display: none !important;
+}
+
+@media (max-width: 960px) {
+  .chat-collab-drawer {
+    width: 100%;
+    border-left: none;
+    border-top: 1px solid var(--border);
+    height: min(42vh, 320px);
+  }
+}
+
+.chat-collab-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  background: rgba(0, 0, 0, 0.14);
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  padding: 16px;
+  box-sizing: border-box;
+}
+
+.chat-collab-modal-backdrop[hidden] {
+  display: none !important;
+}
+
+.chat-collab-modal-dialog {
+  width: min(420px, 92vw);
+  max-height: min(70vh, 520px);
+  overflow: auto;
+  background: var(--bg-card, var(--bg-secondary));
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.18);
+  display: flex;
+  flex-direction: column;
+}
+
+.chat-collab-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 14px 16px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.chat-collab-modal-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.chat-collab-modal-close {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+  border-radius: 4px;
+}
+
+.chat-collab-modal-close:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover, rgba(0, 0, 0, 0.06));
+}
+
+.chat-collab-modal-body {
+  padding: 12px 16px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.chat-collab-modal-hint {
+  margin: 0;
+  line-height: 1.45;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.chat-collab-modal-footer {
+  padding: 0 16px 16px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.chat-collab-bound-task-wrap {
+  width: 100%;
+}
+
+.chat-collab-bound-task-label {
+  display: block;
+  font-size: 10px;
+  color: var(--text-tertiary);
+  margin-bottom: 4px;
+}
+
+.chat-collab-bound-task {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.45rem 0.5rem;
+  border-radius: 6px;
+  border: 1px solid var(--border-primary, var(--border));
+  background: var(--bg-primary);
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.35;
+  word-break: break-all;
+  min-height: 2rem;
+}
+
+.chat-collab-bound-task--start {
+  border-color: var(--accent, #6366f1);
+  background: color-mix(in srgb, var(--accent, #6366f1) 10%, var(--bg-primary));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent, #6366f1) 20%, transparent);
+  animation: collab-bound-glow 1.6s ease-in-out infinite;
+}
+
+@keyframes collab-bound-glow {
+  0%, 100% {
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent, #6366f1) 18%, transparent), 0 0 0 rgba(99, 102, 241, 0.0);
+  }
+  50% {
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent, #6366f1) 28%, transparent), 0 0 18px rgba(99, 102, 241, 0.35);
+  }
+}
+
+.chat-collab-open-task {
+  margin-top: 0;
+}
+
+.btn-block {
+  width: 100%;
+  justify-content: center;
+}
+
+#btn-open-collab-modal.chat-collab-header-on {
+  border-color: var(--accent, #6366f1);
+  background: color-mix(in srgb, var(--accent, #6366f1) 12%, transparent);
+}
+
 /* 会话侧边栏 */
 .chat-sidebar {
   width: 0;
@@ -1441,6 +1665,10 @@
   border-radius: var(--radius-md, 8px);
   padding: 8px 10px;
 }
+.msg-tool-item--running {
+  border-color: rgba(37, 99, 235, 0.4);
+  box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.12);
+}
 .msg-tool-item > summary {
   cursor: pointer;
   font-size: 12px;
@@ -1522,6 +1750,101 @@
   margin-top: 6px;
   font-size: 12px;
   color: var(--text-tertiary);
+}
+
+/* React 工具调用（更美观/更紧凑/未展开自适应宽度/按类型样式） */
+.react-msg-tool {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start; /* 关键：让未展开时不占满整行 */
+}
+
+.react-msg-tool .msg-tool-item {
+  width: fit-content;
+  max-width: 100%;
+  padding: 6px 10px;
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(37, 99, 235, 0.05), rgba(255, 255, 255, 0.85));
+  transition: box-shadow 160ms ease, border-color 160ms ease, transform 160ms ease;
+}
+
+.react-msg-tool .msg-tool-item > summary {
+  display: inline-flex;
+  width: fit-content;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+  padding: 0;
+}
+
+.react-msg-tool .msg-tool-item > summary:hover {
+  background: rgba(37, 99, 235, 0.06);
+  border-radius: 10px;
+}
+
+.react-msg-tool .msg-tool-name {
+  flex: 0 1 auto; /* 关键：避免摘要宽度撑满 */
+  max-width: 320px;
+}
+
+.react-msg-tool .msg-tool-body {
+  margin-top: 10px;
+  gap: 10px;
+  grid-template-columns: 1fr;
+}
+
+.react-msg-tool .msg-tool-item[open] > .msg-tool-body {
+  display: grid;
+}
+
+.react-msg-tool .msg-tool-item[open] {
+  width: min(720px, 100%);
+  box-shadow: 0 16px 50px rgba(37, 99, 235, 0.12);
+  border-color: rgba(37, 99, 235, 0.28);
+}
+
+.react-msg-tool .msg-tool-block {
+  background: rgba(37, 99, 235, 0.03);
+  border-color: rgba(37, 99, 235, 0.18);
+  border-radius: 10px;
+}
+
+.react-msg-tool .msg-tool-block pre {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+/* ToolType: bash -> 终端风格 */
+.react-msg-tool .msg-tool-item--bash .msg-tool-block {
+  background: rgba(2, 6, 23, 0.72);
+  border-color: rgba(37, 99, 235, 0.28);
+}
+
+.react-msg-tool .msg-tool-item--bash .msg-tool-block pre {
+  color: #e5e7eb;
+  background: rgba(0, 0, 0, 0.22);
+  padding: 6px 8px;
+  border-radius: 8px;
+}
+
+.react-msg-tool .msg-tool-item--bash .msg-tool-title {
+  color: rgba(165, 180, 252, 0.95);
+}
+
+/* ToolType: read_file / write_file 轻微代码风格（不抢 bash 的终端主题） */
+.react-msg-tool .msg-tool-item--read_file,
+.react-msg-tool .msg-tool-item--write_file,
+.react-msg-tool .msg-tool-item--str_replace {
+  background: linear-gradient(180deg, rgba(99, 102, 241, 0.06), rgba(255, 255, 255, 0.9));
+}
+
+.react-msg-tool .msg-tool-item--read_file .msg-tool-block,
+.react-msg-tool .msg-tool-item--write_file .msg-tool-block,
+.react-msg-tool .msg-tool-item--str_replace .msg-tool-block {
+  background: rgba(99, 102, 241, 0.03);
+  border-color: rgba(99, 102, 241, 0.18);
 }
 
 /* 首次引导提示 */

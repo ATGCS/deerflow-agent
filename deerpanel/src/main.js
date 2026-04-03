@@ -10,6 +10,8 @@ import { api, checkBackendHealth, isBackendOnline, onBackendStatusChange } from 
 import { version as APP_VERSION } from '../package.json'
 import { statusIcon } from './lib/icons.js'
 import { tryShowEngagement } from './components/engagement.js'
+/** 静态导入：避免 dev 下 `import('./pages/chat-react.js')` 单独拉 chunk 时出现 Failed to fetch（与入口同图，由 Vite 随 main 解析）。 */
+import * as chatReactPage from './pages/chat-react.js'
 
 // 样式
 import './style/variables.css'
@@ -18,6 +20,7 @@ import './style/layout.css'
 import './style/components.css'
 import './style/pages.css'
 import './style/chat.css'
+import './style/react-chat.css'
 import './style/agents.css'
 import './style/debug.css'
 import './style/assistant.css'
@@ -289,7 +292,15 @@ const content = document.getElementById('content')
 async function boot() {
   // 先注册所有路由，立即渲染 UI（不等后端检测）
   registerRoute('/dashboard', () => import('./pages/dashboard.js'))
-  registerRoute('/chat', () => import('./pages/chat.js'))
+  registerRoute('/chat-legacy', () => import('./pages/chat.js'))
+  /** 默认 React 聊天；设 VITE_USE_REACT_CHAT=0 或 false 则 #/chat 仍走经典 chat.js */
+  const legacyChatDefault =
+    import.meta.env.VITE_USE_REACT_CHAT === '0' || import.meta.env.VITE_USE_REACT_CHAT === 'false'
+  registerRoute(
+    '/chat',
+    () => (legacyChatDefault ? import('./pages/chat.js') : Promise.resolve(chatReactPage)),
+  )
+  registerRoute('/chat-react', () => Promise.resolve(chatReactPage))
   registerRoute('/chat-debug', () => import('./pages/chat-debug.js'))
   registerRoute('/services', () => import('./pages/services.js'))
   registerRoute('/logs', () => import('./pages/logs.js'))
@@ -307,6 +318,8 @@ async function boot() {
   registerRoute('/usage', () => import('./pages/usage.js'))
   registerRoute('/communication', () => import('./pages/communication.js'))
   registerRoute('/settings', () => import('./pages/settings.js'))
+  registerRoute('/tasks', () => import('./pages/tasks.js'))
+  registerRoute('/task/:id', () => import('./pages/task-detail.js'))
 
   renderSidebar(sidebar)
   initRouter(content)

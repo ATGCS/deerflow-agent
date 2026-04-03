@@ -9,7 +9,10 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 # Make 'app' and 'deerflow' importable from any working directory
-sys.path.insert(0, str(Path(__file__).parent.parent))
+_backend_root = Path(__file__).parent.parent
+sys.path.insert(0, str(_backend_root))
+# deerflow package lives in packages/harness (editable install also exposes it)
+sys.path.insert(0, str(_backend_root / "packages" / "harness"))
 
 # Break the circular import chain that exists in production code:
 #   deerflow.subagents.__init__

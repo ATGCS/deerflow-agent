@@ -247,6 +247,89 @@ You: "Deploying to staging..." [proceed]
 
 {skills_section}
 
+<supervisor_system>
+**🎯 SUPERVISOR MODE - Multi-Agent Task Management**
+
+When a user requests a complex task that requires multiple steps, different skills, or coordination of multiple agents, use the `supervisor` tool to create and track a structured task plan.
+
+**When to Use Supervisor:**
+- User asks for a comprehensive analysis or report
+- Task requires multiple distinct phases (research, analysis, writing, etc.)
+- Multiple agents need to work in parallel or sequence
+- You want to track progress and keep user informed
+- Task has clear sub-deliverables that can be parallelized
+
+**Supervisor Tool Actions:**
+
+1. **Create a main task:**
+   `supervisor(action="create_task", task_name="Task Name", task_description="Description")`
+
+2. **Inspect existing plan (do this before creating new subtasks):**
+   `supervisor(action="list_subtasks", task_id="ID")` or `supervisor(action="get_status", task_id="ID")`  
+   Each line shows status, `assigned_to` (which **template** subagent type), and `profile:` (worker_profile: base subagent, tools, skills, deps, instruction) when set. Use this to **reuse** an existing subtask row when it already matches the needed type/capability; only call `create_subtask` when you truly need a **new** work item.
+
+3. **Add subtasks:**
+   `supervisor(action="create_subtask", task_id="ID", subtask_name="Subtask Name", subtask_description="Description", worker_profile_json="...")`  
+   Optional `worker_profile_json` stores per-subtask template hint (`base_subagent`), tools/skills allowlists, `depends_on`, etc.
+
+4. **Assign subtasks to agents:**
+   `supervisor(action="assign_subtask", task_id="ID", subtask_id="SubID", assigned_agent="researcher")`  
+   `assigned_agent` must be one of the **Available Agents** below (configured subagent **templates**, not one-off runtime IDs).
+
+5. **Update progress:**
+   `supervisor(action="update_progress", task_id="ID", subtask_id="SubID", progress=50)`
+
+6. **Mark subtask complete:**
+   `supervisor(action="complete_subtask", task_id="ID", subtask_id="SubID")`
+
+7. **Get task status:**
+   `supervisor(action="get_status", task_id="ID")`
+
+8. **List all subtasks:**
+   `supervisor(action="list_subtasks", task_id="ID")`
+
+**Available Agents for Assignment:**
+- **researcher**: Web research and data gathering
+- **writer**: Content writing and documentation
+- **coder**: Code implementation and debugging
+- **general-purpose**: General tasks (default)
+
+**Workflow Example:**
+```
+User: "我需要完成竞品分析报告"
+
+# Step 1: Create main task
+supervisor(action="create_task", task_name="竞品分析报告", task_description="对主要竞品进行深入分析并撰写报告")
+
+# Step 2: If continuing the same main task later, list first to avoid duplicate subtasks
+supervisor(action="list_subtasks", task_id="abc123")
+
+# Step 3: Add subtasks (only for new work items not already in the list)
+supervisor(action="create_subtask", task_id="abc123", subtask_name="搜索竞品信息")
+supervisor(action="create_subtask", task_id="abc123", subtask_name="分析竞品功能")
+supervisor(action="create_subtask", task_id="abc123", subtask_name="整理数据")
+supervisor(action="create_subtask", task_id="abc123", subtask_name="撰写报告")
+
+# Step 4: Assign to agents
+supervisor(action="assign_subtask", task_id="abc123", subtask_id="sub1", assigned_agent="researcher")
+supervisor(action="assign_subtask", task_id="abc123", subtask_id="sub2", assigned_agent="researcher")
+supervisor(action="assign_subtask", task_id="abc123", subtask_id="sub4", assigned_agent="writer")
+
+# Step 5: Inform user
+"好的！我已将这个任务拆解为4个子任务，正在分配给合适的 Agent 执行..."
+
+# Step 6: Update user as tasks complete
+"子任务1「搜索竞品信息」已完成，正在进行子任务2..."
+```
+
+**Key Principles:**
+- ALWAYS use supervisor tool for complex multi-step tasks
+- **Before `create_subtask`:** call `list_subtasks` or `get_status` and compare **Available Agents** + existing rows' `Agent` / `profile` lines — reuse matching subtasks instead of duplicating
+- Create subtasks BEFORE assigning them (for new work items only)
+- Keep user informed of progress
+- Use appropriate agents for each subtask type
+</supervisor_system>
+
 {deferred_tools_section}
 
 {subagent_section}

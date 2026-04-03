@@ -104,6 +104,7 @@ function accumulateStreamAssistantText(prev, incoming) {
   const inc = typeof incoming === 'string' ? incoming : ''
   if (!inc) return prev || ''
   if (!prev) return inc
+  if (inc.length < prev.length && prev.startsWith(inc)) return prev
   if (inc.length >= prev.length && inc.startsWith(prev)) return inc
   return prev + inc
 }
@@ -150,6 +151,53 @@ function unwrapMessagesTupleRoot(data) {
 function isAssistantMessage(m) {
   if (!m || typeof m !== 'object') return false
   return m.role === 'assistant' || m.type === 'ai'
+}
+
+/** 从后往前最后一条 AI 消息（用于展示当前轮正文） */
+function findLastAssistantMessage(messages) {
+  if (!Array.isArray(messages)) return null
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (isAssistantMessage(messages[i])) return messages[i]
+  }
+  return null
+}
+
+/** 从后往前最后一条「真实用户」消息（排除 collab_phase_hint），用于界定当前轮 */
+function findLastNonCollabHumanIndex(messages) {
+  if (!Array.isArray(messages)) return -1
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]
+    if (!isHumanMessage(m)) continue
+    if (m.name === 'collab_phase_hint') continue
+    return i
+  }
+  return -1
+}
+
+/**
+ * 聚合当前轮内所有 assistant 上的 tool_calls（按 id 去重，顺序为首次出现）。
+ * 解决「多段 AI、每段一个 tool_call」时只取到最后一条 AI 的 tool_calls 的问题。
+ */
+function collectToolCallsForTurnAfterLastUser(messages) {
+  const start = findLastNonCollabHumanIndex(messages)
+  if (start < 0) return null
+  const byId = new Map()
+  const order = []
+  for (let i = start + 1; i < messages.length; i++) {
+    const m = messages[i]
+    if (!isAssistantMessage(m)) continue
+    const tc = m.tool_calls || m.toolCalls
+    if (!Array.isArray(tc) || !tc.length) continue
+    tc.forEach((c, j) => {
+      if (!c || typeof c !== 'object') return
+      const cid = c.id || c.tool_call_id
+      const key = cid != null && cid !== '' ? String(cid) : `__anon__:${i}:${j}`
+      if (!byId.has(key)) order.push(key)
+      byId.set(key, c)
+    })
+  }
+  if (!order.length) return null
+  return order.map((k) => byId.get(k))
 }
 
 function isHumanMessage(m) {
@@ -364,6 +412,36 @@ export class WsClient {
     })
   }
 
+  /** 仅读本地映射中的 thread id，不创建线程 */
+  getSessionThreadId(sessionKey) {
+    const key = sessionKey || MAIN_SESSION_KEY
+    const tid = loadSessionMap()[key]?.threadId
+    return typeof tid === 'string' && tid.trim() ? tid.trim() : null
+  }
+
+  /** 确保 LangGraph 线程存在并写回 session map（任务协作开关等需先落盘 collab 时用） */
+  async ensureChatThread(sessionKey) {
+    return this._ensureThread(sessionKey)
+  }
+
+  async getThreadCollabState(threadId) {
+    if (!threadId) return null
+    try {
+      return await fetchJson(`/api/collab/threads/${encodeURIComponent(threadId)}`)
+    } catch {
+      return null
+    }
+  }
+
+  async putThreadCollabState(threadId, body) {
+    if (!threadId || !body || typeof body !== 'object') return
+    await fetchJson(`/api/collab/threads/${encodeURIComponent(threadId)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  }
+
   async _ensureThread(sessionKey) {
     const key = sessionKey || MAIN_SESSION_KEY
     const map = loadSessionMap()
@@ -386,9 +464,136 @@ export class WsClient {
     return threadId
   }
 
+  async _listThreadRuns(threadId) {
+    if (!threadId) return []
+    try {
+      const data = await fetchJson(
+        `/api/langgraph/threads/${encodeURIComponent(threadId)}/runs?limit=50`,
+      )
+      if (Array.isArray(data)) return data
+      if (data && Array.isArray(data.items)) return data.items
+      if (data && Array.isArray(data.runs)) return data.runs
+      return []
+    } catch {
+      return []
+    }
+  }
+
+  _pickLatestRun(runs) {
+    if (!Array.isArray(runs) || !runs.length) return null
+    const normTs = (v) => {
+      if (!v) return 0
+      const t = Date.parse(String(v))
+      return Number.isNaN(t) ? 0 : t
+    }
+    const list = [...runs].sort((a, b) => {
+      const ta = normTs(a?.created_at ?? a?.updated_at)
+      const tb = normTs(b?.created_at ?? b?.updated_at)
+      return tb - ta
+    })
+    return list[0] || null
+  }
+
+  /** 优先返回仍 pending/running 的 run（避免「最新一条已是 success 但仍有一条在跑」时误判为空闲） */
+  _pickBusyOrLatestRun(runs) {
+    if (!Array.isArray(runs) || !runs.length) return null
+    const norm = (r) => String(r?.status || '').toLowerCase()
+    const busy = runs.filter((r) => {
+      const s = norm(r)
+      return s === 'pending' || s === 'running'
+    })
+    const pool = busy.length ? busy : runs
+    const normTs = (v) => {
+      if (!v) return 0
+      const t = Date.parse(String(v))
+      return Number.isNaN(t) ? 0 : t
+    }
+    const list = [...pool].sort((a, b) => {
+      const ta = normTs(a?.created_at ?? a?.updated_at)
+      const tb = normTs(b?.created_at ?? b?.updated_at)
+      return tb - ta
+    })
+    return list[0] || null
+  }
+
+  async _cancelThreadRunsByStatus(threadId, statuses = ['pending', 'running']) {
+    if (!threadId) return { cancelled: [] }
+    const target = new Set((statuses || []).map(x => String(x || '').toLowerCase()))
+    const runs = await this._listThreadRuns(threadId)
+    const cancelled = []
+    for (const r of runs) {
+      const runId = r?.run_id || r?.runId
+      const st = String(r?.status || '').toLowerCase()
+      if (!runId || !target.has(st)) continue
+      try {
+        await fetch(`/api/langgraph/threads/${encodeURIComponent(threadId)}/runs/${encodeURIComponent(runId)}/cancel`, {
+          method: 'POST',
+        })
+        cancelled.push(runId)
+      } catch {
+        // Best-effort cancellation only.
+      }
+    }
+    return { cancelled }
+  }
+
+  async getSessionRunStatus(sessionKey) {
+    const key = sessionKey || MAIN_SESSION_KEY
+    const threadId = this.getSessionThreadId(key)
+    if (!threadId) return { threadId: null, run: null, status: 'idle' }
+    const latest = this._pickBusyOrLatestRun(await this._listThreadRuns(threadId))
+    if (!latest) return { threadId, run: null, status: 'idle' }
+    return {
+      threadId,
+      run: latest,
+      runId: latest?.run_id || latest?.runId || null,
+      status: String(latest?.status || 'idle').toLowerCase(),
+    }
+  }
+
+  async cancelSessionActiveRuns(sessionKey) {
+    const key = sessionKey || MAIN_SESSION_KEY
+    const threadId = this.getSessionThreadId(key)
+    if (!threadId) return { cancelled: [] }
+    return this._cancelThreadRunsByStatus(threadId, ['pending', 'running'])
+  }
+
+  /**
+   * LangGraph 使用全局 worker 池（N_JOBS_PER_WORKER）。仅取消「当前 thread」上的 run 无法释放
+   * 其它会话里卡住的 running/pending，会导致新会话的 /runs/stream 一直排队无首包。
+   * 官方 POST /runs/cancel + { status: "all" } 会取消所有线程上的 pending+running。
+   * 本地调试可在 localStorage 设 deerflow-disable-global-run-cancel=1 关闭该行为。
+   */
+  async cancelAllGlobalRunsBestEffort() {
+    if (typeof localStorage !== 'undefined') {
+      if (localStorage.getItem('deerflow-disable-global-run-cancel') === '1') {
+        return { skipped: true }
+      }
+    }
+    try {
+      const resp = await fetch('/api/langgraph/runs/cancel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'all' }),
+      })
+      if (resp.status === 404) return { ok: true, cancelled: false }
+      if (!resp.ok) {
+        const text = await resp.text().catch(() => '')
+        throw new Error(text || `HTTP ${resp.status}`)
+      }
+      return { ok: true, cancelled: true }
+    } catch (e) {
+      console.warn('[ws-client] cancelAllGlobalRunsBestEffort:', e)
+      return { ok: false, error: String(e?.message || e) }
+    }
+  }
+
   async chatSend(sessionKey, message, attachments) {
     const key = sessionKey || MAIN_SESSION_KEY
     const threadId = await this._ensureThread(key)
+    // New user input should not be blocked by stale queued/running runs from a previous tab/session.
+    await this._cancelThreadRunsByStatus(threadId, ['pending', 'running'])
+    await this.cancelAllGlobalRunsBestEffort()
     const runId = uuid()
     const controller = new AbortController()
     this._abortByRunId.set(runId, controller)
@@ -418,6 +623,47 @@ export class WsClient {
       reasoning_effort: undefined,
     }
 
+    let serverCollab = null
+    try {
+      serverCollab = await fetchJson(`/api/collab/threads/${encodeURIComponent(threadId)}`)
+    } catch {
+      serverCollab = null
+    }
+
+    const runContext = {
+      ...defaultContext,
+      ...sessionContext,
+      thread_id: threadId,
+    }
+
+    const clientTaskId = (sessionContext.collab_task_id ?? '').toString().trim()
+
+    if (serverCollab && typeof serverCollab === 'object') {
+      const phase = serverCollab.collab_phase
+      if (phase != null && phase !== '') runContext.collab_phase = phase
+      // Collab phase 不是 idle 时，强制启用 plan + subagent（避免前端写入 context 发生 race）
+      const phaseStr = (phase ?? '').toString().trim()
+      const collabActive = !!phaseStr && phaseStr !== 'idle'
+      if (collabActive) {
+        runContext.is_plan_mode = true
+        runContext.subagent_enabled = true
+      }
+      const bproj = (serverCollab.bound_project_id ?? '').toString().trim()
+      if (bproj) runContext.bound_project_id = bproj
+      else delete runContext.bound_project_id
+      const boundTid = (serverCollab.bound_task_id ?? '').toString().trim()
+      if (clientTaskId) {
+        runContext.collab_task_id = clientTaskId
+      } else if (boundTid) {
+        runContext.collab_task_id = boundTid
+      } else {
+        delete runContext.collab_task_id
+      }
+    } else {
+      if (clientTaskId) runContext.collab_task_id = clientTaskId
+      else delete runContext.collab_task_id
+    }
+
     const body = {
       assistant_id: 'lead_agent',
       input: { messages: [{ role: 'user', content: blocks }] },
@@ -427,14 +673,14 @@ export class WsClient {
       config: {
         recursion_limit: 1000,
       },
-      context: {
-        ...defaultContext,
-        ...sessionContext,
-        thread_id: threadId,
-      },
+      context: runContext,
     }
     const started = nowTs()
     let finalText = ''
+    /** messages-tuple 已输出正文后，不再用 values 快照合并正文（双通道会重复/版本不一致） */
+    let streamTextFromMessages = false
+    /** 避免 values 快照每帧重复 emit 相同 tool_calls */
+    let lastValuesToolCallsSig = ''
 
     /** LangGraph / SSE 规范使用 CRLF；用 split('\\n\\n') 永远切不开「\\r\\n\\r\\n」分隔的事件 */
     const takeCompleteSseFrames = (raw) => {
@@ -478,25 +724,62 @@ export class WsClient {
           if (eventName === 'values') {
             if (!data || typeof data !== 'object') return
             const { messages } = normalizeStreamValues(data)
-            // 快照末尾若是本轮新 user，尚无 assistant：不能再取 reverse 到的「上一条 ai」，否则会把上一轮回答灌进当前气泡
-            const last = messages.length ? messages[messages.length - 1] : null
-            const text =
-              last && isAssistantMessage(last) ? extractAssistantText(last) : ''
-            if (text) {
+            const lastMsg = messages.length ? messages[messages.length - 1] : null
+            /* 末尾若是本轮 user，尚无 assistant，不能取更早的 ai（会把上一轮回答灌进当前气泡） */
+            let lastAi = null
+            if (lastMsg && !isHumanMessage(lastMsg)) {
+              lastAi = findLastAssistantMessage(messages)
+            }
+            const text = lastAi ? extractAssistantText(lastAi) : ''
+            const prevFinal = finalText
+            if (text && !streamTextFromMessages) {
               const next = accumulateStreamAssistantText(finalText, text)
-              if (next !== finalText) {
-                finalText = next
-                this._emitEvent('chat', {
-                  sessionKey: key,
-                  runId,
-                  state: 'delta',
-                  message: { role: 'assistant', content: [{ type: 'text', text: finalText }] },
-                })
-              }
+              if (next !== finalText) finalText = next
+            }
+            const textChanged = finalText !== prevFinal
+            const calls =
+              lastMsg && !isHumanMessage(lastMsg)
+                ? collectToolCallsForTurnAfterLastUser(messages)
+                : null
+            const hasToolCalls = Array.isArray(calls) && calls.length > 0
+            const sig = hasToolCalls ? JSON.stringify(calls) : ''
+            const toolCallsChanged = sig !== lastValuesToolCallsSig
+            if (toolCallsChanged) lastValuesToolCallsSig = sig
+            /* values 快照常带完整 tool_calls+args（LangGraph 用 args 而非 function.arguments） */
+            if (textChanged || toolCallsChanged) {
+              this._emitEvent('chat', {
+                sessionKey: key,
+                runId,
+                state: 'delta',
+                message: {
+                  role: 'assistant',
+                  content: [{ type: 'text', text: finalText }],
+                  ...(hasToolCalls ? { tool_calls: calls } : {}),
+                },
+              })
             }
             emitThreadStateFull(this, key, runId, data)
           } else if (eventName === 'messages' || eventName === 'messages-tuple') {
             const root = unwrapMessagesTupleRoot(data)
+
+            /** AI 片段里带 tool_calls 时尽早展示「正在调用 xxx」（否则只有 tool 节点到达时才有 UI） */
+            const emitAiToolCallsIfAny = (aiPart) => {
+              if (!aiPart || typeof aiPart !== 'object') return
+              const calls = aiPart.tool_calls || aiPart.toolCalls
+              if (!Array.isArray(calls) || !calls.length) return
+              for (const tc of calls) {
+                const id = tc.id || tc.tool_call_id
+                if (!id && !tc.name && !(tc.function && tc.function.name)) continue
+                this._emitEvent('chat', {
+                  sessionKey: key,
+                  runId,
+                  state: 'tool',
+                  data: { tool_calls: [tc] },
+                  toolCallId: id,
+                  name: tc.name || (tc.function && tc.function.name) || '工具',
+                })
+              }
+            }
 
             const emitToolFromObj = (t, tupleToolId) => {
               if (!t || typeof t !== 'object') return
@@ -524,6 +807,7 @@ export class WsClient {
 
             const emitAssistantChunkIfNew = (piece) => {
               if (piece == null || piece === '') return
+              streamTextFromMessages = true
               const next = accumulateStreamAssistantText(finalText, piece)
               if (next === finalText) return
               finalText = next
@@ -539,6 +823,7 @@ export class WsClient {
               if (root.type === 'tool' || root.role === 'tool') {
                 emitToolFromObj(root, root.tool_call_id)
               } else if (isLangGraphStreamAiPart(root)) {
+                emitAiToolCallsIfAny(root)
                 emitAssistantChunkIfNew(textFromLangGraphStreamPart(root))
               }
             } else if (Array.isArray(root)) {
@@ -551,6 +836,7 @@ export class WsClient {
                 !Array.isArray(root[1]) &&
                 (root[1].run_id != null || root[1].langgraph_step != null || root[1].langgraph_node != null)
               ) {
+                emitAiToolCallsIfAny(root[0])
                 emitAssistantChunkIfNew(textFromLangGraphStreamPart(root[0]))
               } else {
               for (const msg of root) {
@@ -558,11 +844,13 @@ export class WsClient {
                   if (msg.type === 'tool' || msg.role === 'tool') {
                     emitToolFromObj(msg, msg.tool_call_id)
                   } else if (isLangGraphStreamAiPart(msg)) {
+                    emitAiToolCallsIfAny(msg)
                     emitAssistantChunkIfNew(textFromLangGraphStreamPart(msg))
                   }
                 } else if (Array.isArray(msg)) {
                   if (typeof msg[0] === 'object' && msg[0] !== null && 'content' in msg[0]) {
                     if (isLangGraphStreamAiPart(msg[0])) {
+                      emitAiToolCallsIfAny(msg[0])
                       emitAssistantChunkIfNew(textFromLangGraphStreamPart(msg[0]))
                     } else if (msg[0].type === 'tool' || msg[0].role === 'tool') {
                       emitToolFromObj(msg[0], msg[0].tool_call_id)
@@ -780,10 +1068,11 @@ export class WsClient {
     if (!map[key]) {
       map[key] = { context: { ...DEFAULT_SESSION_CONTEXT } }
     }
-    map[key].context = {
-      ...(map[key].context || {}),
-      ...context,
+    const merged = { ...(map[key].context || {}), ...context }
+    for (const k of Object.keys(context)) {
+      if (context[k] === null) delete merged[k]
     }
+    map[key].context = merged
     saveSessionMap(map)
   }
 

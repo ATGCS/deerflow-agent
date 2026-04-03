@@ -9,13 +9,20 @@ import { toast } from './toast.js'
 import { version as APP_VERSION } from '../../package.json'
 const isTauri = !!window.__TAURI_INTERNALS__
 
+function _chatNavItems() {
+  return [
+    { route: '/chat', label: '实时聊天', icon: 'chat' },
+    { route: '/chat-legacy', label: '经典聊天', icon: 'chat' },
+  ]
+}
+
 const NAV_ITEMS_FULL = [
   {
     section: '概览',
     items: [
       { route: '/dashboard', label: '仪表盘', icon: 'dashboard' },
       { route: '/assistant', label: '晴辰助手', icon: 'assistant' },
-      { route: '/chat', label: '实时聊天', icon: 'chat' },
+      ..._chatNavItems(),
       { route: '/services', label: '服务管理', icon: 'services' },
       { route: '/logs', label: '日志查看', icon: 'logs' },
     ]
@@ -44,6 +51,7 @@ const NAV_ITEMS_FULL = [
     items: [
       { route: '/skills', label: 'Skills', icon: 'skills' },
       { route: '/tools', label: '工具管理', icon: 'tools' },
+      { route: '/tasks', label: '任务中心', icon: 'projects' },
     ]
   },
   {
@@ -77,6 +85,7 @@ const ICONS = {
   'bar-chart': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/></svg>',
   settings: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>',
   debug: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/><circle cx="12" cy="12" r="3"/></svg>',
+  projects: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/><line x1="12" y1="14" x2="12" y2="14"/></svg>',
 }
 
 let _delegated = false
