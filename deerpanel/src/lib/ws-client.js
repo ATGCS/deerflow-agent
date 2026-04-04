@@ -706,6 +706,8 @@ export class WsClient {
       const reader = resp.body.getReader()
       const decoder = new TextDecoder()
       let buffer = ''
+      /** messages 通道里同一 tool_call 会在多帧重复携带，避免重复 emit 导致列表闪动/重复合并 */
+      const lastTupleToolCallEmitSig = new Map()
 
       const dispatchSseFrame = (frameText) => {
           const lines = frameText.split('\n')
@@ -732,6 +734,8 @@ export class WsClient {
             }
             const text = lastAi ? extractAssistantText(lastAi) : ''
             const prevFinal = finalText
+            // 只要 messages-tuple 开始产出正文，就不要再用 values 快照去“拼正文”
+            // 否则两路 delta 会交错，导致前端 accumulate 发生重复追加。
             if (text && !streamTextFromMessages) {
               const next = accumulateStreamAssistantText(finalText, text)
               if (next !== finalText) finalText = next
@@ -746,16 +750,20 @@ export class WsClient {
             const toolCallsChanged = sig !== lastValuesToolCallsSig
             if (toolCallsChanged) lastValuesToolCallsSig = sig
             /* values 快照常带完整 tool_calls+args（LangGraph 用 args 而非 function.arguments） */
-            if (textChanged || toolCallsChanged) {
+            if ((textChanged && !streamTextFromMessages) || toolCallsChanged) {
               this._emitEvent('chat', {
                 sessionKey: key,
                 runId,
-                state: 'delta',
-                message: {
-                  role: 'assistant',
-                  content: [{ type: 'text', text: finalText }],
-                  ...(hasToolCalls ? { tool_calls: calls } : {}),
-                },
+                state: toolCallsChanged ? 'tool' : 'delta',
+                ...(toolCallsChanged
+                  ? { data: { tool_calls: calls || [] } }
+                  : {
+                      message: {
+                        role: 'assistant',
+                        content: [{ type: 'text', text: finalText }],
+                        ...(hasToolCalls ? { tool_calls: calls } : {}),
+                      },
+                    }),
               })
             }
             emitThreadStateFull(this, key, runId, data)
@@ -770,6 +778,15 @@ export class WsClient {
               for (const tc of calls) {
                 const id = tc.id || tc.tool_call_id
                 if (!id && !tc.name && !(tc.function && tc.function.name)) continue
+                const idKey = id != null && id !== '' ? String(id) : `anon:${tc.name || ''}`
+                let sig = ''
+                try {
+                  sig = JSON.stringify(tc)
+                } catch {
+                  sig = String(idKey)
+                }
+                if (lastTupleToolCallEmitSig.get(idKey) === sig) continue
+                lastTupleToolCallEmitSig.set(idKey, sig)
                 this._emitEvent('chat', {
                   sessionKey: key,
                   runId,
@@ -823,8 +840,9 @@ export class WsClient {
               if (root.type === 'tool' || root.role === 'tool') {
                 emitToolFromObj(root, root.tool_call_id)
               } else if (isLangGraphStreamAiPart(root)) {
-                emitAiToolCallsIfAny(root)
+                /* 先推正文再推 tool_calls，避免前端先封存 tools 段时 S.text 仍为空 → 工具块跑到正文上方、整块像「空白」 */
                 emitAssistantChunkIfNew(textFromLangGraphStreamPart(root))
+                emitAiToolCallsIfAny(root)
               }
             } else if (Array.isArray(root)) {
               // LangGraph 1.x：["event: messages"] 常为 [AIMessageChunk, run 元数据]
@@ -836,22 +854,22 @@ export class WsClient {
                 !Array.isArray(root[1]) &&
                 (root[1].run_id != null || root[1].langgraph_step != null || root[1].langgraph_node != null)
               ) {
-                emitAiToolCallsIfAny(root[0])
                 emitAssistantChunkIfNew(textFromLangGraphStreamPart(root[0]))
+                emitAiToolCallsIfAny(root[0])
               } else {
               for (const msg of root) {
                 if (msg && typeof msg === 'object' && !Array.isArray(msg) && (msg.type || msg.role)) {
                   if (msg.type === 'tool' || msg.role === 'tool') {
                     emitToolFromObj(msg, msg.tool_call_id)
                   } else if (isLangGraphStreamAiPart(msg)) {
-                    emitAiToolCallsIfAny(msg)
                     emitAssistantChunkIfNew(textFromLangGraphStreamPart(msg))
+                    emitAiToolCallsIfAny(msg)
                   }
                 } else if (Array.isArray(msg)) {
                   if (typeof msg[0] === 'object' && msg[0] !== null && 'content' in msg[0]) {
                     if (isLangGraphStreamAiPart(msg[0])) {
-                      emitAiToolCallsIfAny(msg[0])
                       emitAssistantChunkIfNew(textFromLangGraphStreamPart(msg[0]))
+                      emitAiToolCallsIfAny(msg[0])
                     } else if (msg[0].type === 'tool' || msg[0].role === 'tool') {
                       emitToolFromObj(msg[0], msg[0].tool_call_id)
                     }

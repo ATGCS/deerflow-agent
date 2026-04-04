@@ -99,18 +99,21 @@ def _format_invocation_error(agent: str, cmd: str, exc: Exception) -> str:
     return f"{message} Install the agent binary or update `acp_agents.{agent}.command` in config.yaml."
 
 
-def build_invoke_acp_agent_tool(agents: dict) -> BaseTool:
+def build_invoke_acp_agent_tool() -> BaseTool:
     """Create the ``invoke_acp_agent`` tool with a description generated from configured agents.
 
     The tool description includes the list of available agents so that the LLM
     knows which agents it can invoke without requiring hardcoded names.
 
-    Args:
-        agents: Mapping of agent name -> ``ACPAgentConfig``.
-
     Returns:
         A LangChain ``BaseTool`` ready to be included in the tool list.
     """
+    # Load ACP agents from filesystem
+    from deerflow.config.agents_config import list_acp_agents
+    
+    acp_agent_configs = list_acp_agents()
+    agents = {cfg.name: cfg for cfg in acp_agent_configs}
+    
     agent_lines = "\n".join(f"- {name}: {cfg.description}" for name, cfg in agents.items())
     description = (
         "Invoke an external ACP-compatible agent and return its final response.\n\n"

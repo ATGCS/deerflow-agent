@@ -73,28 +73,21 @@ export function MessageRow({ row, isStreaming }: { row: DisplayRow; isStreaming?
 function AssistantBody({ row, isStreaming }: { row: DisplayRow; isStreaming?: boolean }) {
   const tools = row.tools || []
   const segments = row.segments as MessageSegment[] | undefined
-  const showTail = !!(row.text?.trim() || isStreaming)
-
-  const interleaved = useMemo(() => {
-    if (!segments?.length) return null
-    return segments.map((seg, i) =>
-      seg.kind === 'text' ? (
-        <MarkdownHtml key={`seg-t-${i}`} text={seg.text} />
-      ) : (
-        <ToolCallList key={`seg-k-${i}`} tools={tools} filterIds={seg.ids} />
-      ),
-    )
-  }, [segments, tools])
+  const text = row.text || ''
 
   if (segments?.length) {
     return (
       <>
-        {interleaved}
-        {showTail && (
-          <>
-            <MarkdownHtml text={row.text || ''} />
-            {isStreaming && <span className="stream-cursor" aria-hidden />}
-          </>
+        {segments.map((seg, i) => {
+          if (seg.kind === 'text') {
+            return <MarkdownHtml key={`seg-t-${i}`} text={seg.text} />
+          }
+          return <ToolCallList key={`seg-k-${i}`} tools={tools} filterIds={seg.ids} />
+        })}
+        {isStreaming ? <span className="stream-cursor" aria-hidden /> : null}
+        {/* 历史消息：如果 segments 中没有 text 但 row.text 有内容，也要显示 */}
+        {!isStreaming && text && !segments.some(s => s.kind === 'text') && (
+          <MarkdownHtml text={text} />
         )}
       </>
     )
@@ -102,13 +95,13 @@ function AssistantBody({ row, isStreaming }: { row: DisplayRow; isStreaming?: bo
 
   return (
     <>
-      {(row.text || isStreaming) && (
+      {(text || isStreaming) && (
         <>
-          <MarkdownHtml text={row.text || ''} />
+          <MarkdownHtml text={text || ''} />
           {isStreaming && <span className="stream-cursor" aria-hidden />}
         </>
       )}
-      <ToolCallList tools={tools} />
+      {!isStreaming && <ToolCallList tools={tools} />}
     </>
   )
 }

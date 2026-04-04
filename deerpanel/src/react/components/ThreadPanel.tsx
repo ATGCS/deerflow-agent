@@ -27,40 +27,42 @@ function parseActivityDetail(detail: string) {
   return { lead, calls }
 }
 
-export function ThreadPanel({ state }: { state: ThreadPanelState }) {
+export function ThreadPanel({ state, sessionKey }: { state: ThreadPanelState; sessionKey?: string }) {
   const titleText = (state.title || '').trim()
   const showTitle = !!titleText
   const showReasoning = !!(state.reasoningPreview || '').trim()
   const showClarify = !!(state.clarification?.preview || '').trim()
   const showTodos = Array.isArray(state.todos) && state.todos.length > 0
-  const showActivity = !!(state.activityDetail || '').trim() && state.activityKind !== 'idle'
-  const activity = parseActivityDetail(state.activityDetail || '')
 
-  if (!showTitle && !showReasoning && !showClarify && !showTodos && !showActivity) return null
+  // 如果没有任何内容，不显示面板
+  if (!showTitle && !showReasoning && !showClarify && !showTodos) return null
+
+  const handleTitleClick = () => {
+    if (!sessionKey || !titleText) return
+    try {
+      localStorage.setItem('clawpanel-chat-session-names', JSON.stringify({
+        ...JSON.parse(localStorage.getItem('clawpanel-chat-session-names') || '{}'),
+        [sessionKey]: titleText
+      }))
+      // 触发一个自定义事件，通知 ChatApp 刷新
+      window.dispatchEvent(new CustomEvent('session-name-updated'))
+    } catch {
+      // ignore
+    }
+  }
 
   return (
     <div className="react-chat-thread-panel">
-      {showTitle && <div className="react-chat-thread-title">{titleText}</div>}
-
-      <div className="react-chat-thread-section">
-        <div className="react-chat-thread-label">进行状态</div>
-        <div className="react-chat-thread-activity">
-          <span className="react-chat-thread-activity-icon">{iconForActivityKind(state.activityKind)}</span>
-          <span className={`react-chat-thread-activity-kind react-chat-thread-activity-kind--${state.activityKind || 'idle'}`}>
-            {state.activityKind || 'idle'}
-          </span>
-          <span className="react-chat-thread-activity-detail">{activity.lead || '处理中'}</span>
-          {activity.calls.length ? (
-            <span className="react-chat-thread-activity-calls">
-              {activity.calls.map((name, idx) => (
-                <span key={`${name}-${idx}`} className="react-chat-thread-activity-call-chip">
-                  {name}
-                </span>
-              ))}
-            </span>
-          ) : null}
+      {showTitle && (
+        <div 
+          className="react-chat-thread-title" 
+          onClick={handleTitleClick}
+          title="点击保存为会话名称"
+          style={{ cursor: 'pointer' }}
+        >
+          {titleText}
         </div>
-      </div>
+      )}
 
       {showReasoning && (
         <div className="react-chat-thread-section">

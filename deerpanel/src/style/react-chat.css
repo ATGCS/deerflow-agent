@@ -502,6 +502,7 @@
 
 .react-chat-processing-bar {
   flex-shrink: 0;
+  min-width: 0;
   height: 26px;
   border-radius: 999px;
   display: flex;
@@ -525,7 +526,7 @@
   flex-shrink: 0;
   padding: 4px 12px 0;
   display: flex;
-  justify-content: flex-end;
+  justify-content: flex-start;
 }
 
 .react-chat-processing-bar--thread {
@@ -534,14 +535,19 @@
   right: auto;
   top: auto;
   transform: none;
-  width: 240px;
-  max-width: min(360px, 100%);
+  width: min(100%, 420px);
+  max-width: 100%;
 }
 
 .react-chat-processing-text {
+  flex: 1;
   font-size: 12px;
   font-weight: 700;
   color: var(--text-primary, #111827);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .react-chat-processing-cursor {
@@ -818,6 +824,11 @@
   font-family: inherit;
   background: transparent;
   color: var(--text-primary, #111827);
+}
+
+/* 工具/正文切换时避免气泡高度塌成一条线，减轻「闪一下像没了」 */
+.msg-ai-streaming .msg-bubble {
+  min-height: 2.75rem;
 }
 
 .msg-ai-streaming .stream-cursor {

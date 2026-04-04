@@ -303,7 +303,6 @@ function toolEntryId(t) {
 
 function buildInitialSegments(c, tools) {
   const segs = []
-  if (c.text) segs.push({ kind: 'text', text: c.text })
   const ids = (tools || []).map((t) => toolEntryId(t)).filter(Boolean)
   if (ids.length) segs.push({ kind: 'tools', ids })
   return segs.length ? segs : undefined
@@ -321,7 +320,14 @@ export function flattenStreamDisplayText(segments, tailText) {
 
 export function dedupeHistory(messages) {
   const deduped = []
+  const seenMessageIds = new Set()
   for (const msg of messages) {
+    const msgId = msg && typeof msg === 'object' ? (msg.id || msg.message_id || msg.messageId) : null
+    if (msgId) {
+      const key = String(msgId)
+      if (seenMessageIds.has(key)) continue
+      seenMessageIds.add(key)
+    }
     const role = normalizeHistoryRole(msg)
     const c = extractContent(msg)
     if (!c.text && !c.images.length && !c.videos.length && !c.audios.length && !c.files.length && !c.tools.length)
@@ -346,9 +352,22 @@ export function dedupeHistory(messages) {
           }
         }
         if (c.text) {
-          if (!last.segments) last.segments = []
-          last.segments.push({ kind: 'text', text: c.text })
-          last.text = [last.text, c.text].filter(Boolean).join('\n')
+          const prevText = String(last.text || '')
+          const nextText = String(c.text || '')
+          // Web 工程做法：assistant 的累计快照应“覆盖更新”，而不是不断 append 造成重复。
+          // - next 包含 prev：用 next 覆盖
+          // - prev 包含 next：忽略更短旧快照
+          // - 其他情况：才按段落追加（保留语义差异）
+          if (!prevText) {
+            last.text = nextText
+          } else if (nextText && nextText.startsWith(prevText)) {
+            last.text = nextText
+            // 覆盖型更新不再重复写入 segments，避免历史回放出现“同一段话两遍”
+          } else if (prevText && prevText.startsWith(nextText)) {
+            // ignore
+          } else {
+            last.text = [prevText, nextText].filter(Boolean).join('\n')
+          }
         }
         for (const t of tools) {
           upsertTool(last.tools, t)
@@ -566,6 +585,8 @@ export function accumulateStreamAssistantText(prev, incoming) {
   const inc = typeof incoming === 'string' ? incoming : ''
   if (!inc) return prev || ''
   if (!prev) return inc
+  // 有些链路会重复发送同一段增量，避免重复追加
+  if (prev.endsWith(inc)) return prev
   /* 丢弃比当前更短的旧快照，避免与增量拼接成重复段落 */
   if (inc.length < prev.length && prev.startsWith(inc)) return prev
   if (inc.length >= prev.length && inc.startsWith(prev)) return inc
@@ -685,8 +706,10 @@ export function messagesToDisplayRows(rawMessages) {
       .replace(/[`*_#>-]+/g, ' ') // 去掉常见 markdown 符号
       .replace(/\s+/g, ' ')
       .trim()
+    // 只对“明显是解释段落”的长文本做指纹去重，避免把合法的短回复（如 abc/ccc）误判为重复。
+    if (t.length < 80) return ''
     // 用开头片段作为指纹：相同开头的“解释型回复”保留最新一条
-    return t.slice(0, 80)
+    return t.slice(0, 120)
   }
 
   // 先做一次“完全相同连续项”去重（保守）

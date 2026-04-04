@@ -49,10 +49,10 @@ describe('extractContent + dedupeHistory', () => {
     ]
     const d = dedupeHistory(raw)
     expect(d.length).toBe(1)
-    expect(d[0].segments?.map((s) => s.kind)).toEqual(['text', 'tools', 'text'])
-    expect(d[0].segments[0].kind).toBe('text')
-    expect(d[0].segments[0].text).toContain('先说明')
-    expect(d[0].segments[2].text).toContain('再总结')
+    // segments 仅用于标注工具块，避免刷新历史时把“段落快照”渲染两遍
+    expect(d[0].segments?.map((s) => s.kind)).toEqual(['tools'])
+    expect(d[0].text).toContain('先说明')
+    expect(d[0].text).toContain('再总结')
   })
   it('extracts text from string content', () => {
     const c = extractContent({ role: 'user', content: 'hello' })

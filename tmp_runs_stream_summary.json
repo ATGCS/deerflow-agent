@@ -1,0 +1,98 @@
+{
+  "url": "http://localhost:1420/api/langgraph/threads/7f0fe712-3094-44fb-89c4-4ab962e981b2/runs/stream",
+  "thread_id": "7f0fe712-3094-44fb-89c4-4ab962e981b2",
+  "user_message": "请只回复一行：STREAMTEST-PROBE-OK",
+  "total_bytes_read": 115999,
+  "frame_count": 12,
+  "event_counts": {
+    "metadata": 1,
+    "values": 3,
+    "messages": 8
+  },
+  "first_40_frames": [
+    {
+      "event": "metadata",
+      "raw_len": 61,
+      "frame_idx": 0
+    },
+    {
+      "event": "values",
+      "raw_len": 32135,
+      "frame_idx": 1
+    },
+    {
+      "event": "values",
+      "raw_len": 32135,
+      "frame_idx": 2
+    },
+    {
+      "event": "messages",
+      "raw_len": 1337,
+      "data_keys": "non-dict",
+      "first_type": "AIMessageChunk",
+      "first_text_preview": " STREAM",
+      "frame_idx": 3
+    },
+    {
+      "event": "messages",
+      "raw_len": 1334,
+      "data_keys": "non-dict",
+      "first_type": "AIMessageChunk",
+      "first_text_preview": "TEST",
+      "frame_idx": 4
+    },
+    {
+      "event": "messages",
+      "raw_len": 1331,
+      "data_keys": "non-dict",
+      "first_type": "AIMessageChunk",
+      "first_text_preview": "-",
+      "frame_idx": 5
+    },
+    {
+      "event": "messages",
+      "raw_len": 1335,
+      "data_keys": "non-dict",
+      "first_type": "AIMessageChunk",
+      "first_text_preview": "PROBE",
+      "frame_idx": 6
+    },
+    {
+      "event": "messages",
+      "raw_len": 1331,
+      "data_keys": "non-dict",
+      "first_type": "AIMessageChunk",
+      "first_text_preview": "-",
+      "frame_idx": 7
+    },
+    {
+      "event": "messages",
+      "raw_len": 1332,
+      "data_keys": "non-dict",
+      "first_type": "AIMessageChunk",
+      "first_text_preview": "OK",
+      "frame_idx": 8
+    },
+    {
+      "event": "messages",
+      "raw_len": 1378,
+      "data_keys": "non-dict",
+      "first_type": "AIMessageChunk",
+      "first_text_preview": "",
+      "frame_idx": 9
+    },
+    {
+      "event": "messages",
+      "raw_len": 1307,
+      "data_keys": "non-dict",
+      "first_type": "AIMessageChunk",
+      "first_text_preview": "",
+      "frame_idx": 10
+    },
+    {
+      "event": "values",
+      "raw_len": 32427,
+      "frame_idx": 11
+    }
+  ]
+}

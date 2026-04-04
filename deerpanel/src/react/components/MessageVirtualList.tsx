@@ -31,30 +31,45 @@ export function MessageVirtualList({
 
   const items = useMemo((): VItem[] => {
     const list: VItem[] = rows.map((row, i) => ({ kind: 'row', row, i }))
-    const s = streamRef?.current
-    if (
-      s &&
-      (s.text ||
-        (s.segments && s.segments.length) ||
-        (s.tools && s.tools.length) ||
-        (s.images && s.images.length))
-    ) {
-      list.push({
-        kind: 'stream',
-        row: {
-          role: '_stream',
-          text: s.text,
-          segments: s.segments || [],
-          tools: s.tools || [],
-          images: s.images || [],
-          videos: s.videos || [],
-          audios: s.audios || [],
-          files: s.files || [],
-        },
-      })
+    console.log('[MessageVirtualList] useMemo:', {
+      rowsLength: rows.length,
+      streamTick,
+      lastRowRole: rows[rows.length - 1]?.role
+    })
+    // 只在最后一条消息是 user 消息时显示 stream（避免 AI 消息重复显示）
+    const lastRow = rows[rows.length - 1]
+    if (lastRow?.role === 'user') {
+      const s = streamRef?.current
+      if (
+        s &&
+        (s.text ||
+          (s.segments && s.segments.length) ||
+          (s.tools && s.tools.length) ||
+          (s.images && s.images.length))
+      ) {
+        list.push({
+          kind: 'stream',
+          row: {
+            role: '_stream',
+            text: s.text,
+            segments: s.segments || [],
+            tools: s.tools || [],
+            images: s.images || [],
+            videos: s.videos || [],
+            audios: s.audios || [],
+            files: s.files || [],
+          },
+        })
+        console.log('[MessageVirtualList] added stream item')
+      } else {
+        console.log('[MessageVirtualList] no stream content')
+      }
+    } else {
+      console.log('[MessageVirtualList] lastRow is not user, skipping stream')
     }
+    console.log('[MessageVirtualList] total items:', list.length)
     return list
-  }, [rows, streamRef, streamTick])
+  }, [rows, streamTick])  // 只依赖 rows 和 streamTick，不依赖 streamRef（引用不变）
 
   const scrollToBottom = useCallback(() => {
     const el = parentRef.current
@@ -113,7 +128,7 @@ export function MessageVirtualList({
           const isUser = item.row.role === 'user'
           return (
             <div
-              key={item.kind === 'row' ? `row-${item.i}` : `stream-${i}`}
+              key={item.kind === 'row' ? `row-${item.i}` : 'react-chat-stream-bubble'}
               data-index={i}
               className={isUser ? 'react-vlist-item react-vlist-item--user' : 'react-vlist-item'}
               style={{ width: '100%' }}

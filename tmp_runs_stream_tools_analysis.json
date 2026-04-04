@@ -1,0 +1,380 @@
+{
+  "path": "D:/github/deerflaw/tmp_runs_stream_tools.txt",
+  "event_counts": {
+    "metadata": 1,
+    "values": 5,
+    "messages": 46
+  },
+  "steps": [
+    {
+      "kind": "metadata"
+    },
+    {
+      "kind": "values",
+      "n_msgs": 98,
+      "last_type": "human",
+      "last_len": 52,
+      "last_ai_len": 16,
+      "last_tool_calls": 0,
+      "last_preview": "请对路径 /mnt/user-data/workspace 执行一次 ls（只列目录），然后一句话总结。"
+    },
+    {
+      "kind": "values",
+      "n_msgs": 98,
+      "last_type": "human",
+      "last_len": 52,
+      "last_ai_len": 16,
+      "last_tool_calls": 0,
+      "last_preview": "请对路径 /mnt/user-data/workspace 执行一次 ls（只列目录），然后一句话总结。"
+    },
+    {
+      "kind": "messages",
+      "m_type": "AIMessageChunk",
+      "chunk_len": 0,
+      "chunk_preview": "",
+      "tool_calls": 1
+    },
+    {
+      "kind": "messages",
+      "m_type": "AIMessageChunk",
+      "chunk_len": 0,
+      "chunk_preview": "",
+      "tool_calls": 1
+    },
+    {
+      "kind": "messages",
+      "m_type": "AIMessageChunk",
+      "chunk_len": 0,
+      "chunk_preview": "",
+      "tool_calls": 0
+    },
+    {
+      "kind": "messages",
+      "m_type": "AIMessageChunk",
+      "chunk_len": 0,
+      "chunk_preview": "",
+      "tool_calls": 0
+    },
+    {
+      "kind": "messages",
+      "m_type": "AIMessageChunk",
+      "chunk_len": 0,
+      "chunk_preview": "",
+      "tool_calls": 0
+    },
+    {
+      "kind": "messages",
+      "m_type": "AIMessageChunk",
+      "chunk_len": 0,
+      "chunk_preview": "",
+      "tool_calls": 0
+    },
+    {
+      "kind": "messages",
+      "m_type": "AIMessageChunk",
+      "chunk_len": 0,
+      "chunk_preview": "",
+      "tool_calls": 0
+    },
+    {
+      "kind": "messages",
+      "m_type": "AIMessageChunk",
+      "chunk_len": 0,
+      "chunk_preview": "",
+      "tool_calls": 0
+    },
+    {
+      "kind": "messages",
+      "m_type": "AIMessageChunk",
+      "chunk_len": 0,
+      "chunk_preview": "",
+      "tool_calls": 0
+    },
+    {
+      "kind": "messages",
+      "m_type": "AIMessageChunk",
+      "chunk_len": 0,
+      "chunk_preview": "",
+      "tool_calls": 0
+    },
+    {
+      "kind": "messages",
+      "m_type": "AIMessageChunk",
+      "chunk_len": 0,
+      "chunk_preview": "",
+      "tool_calls": 0
+    },
+    {
+      "kind": "messages",
+      "m_type": "AIMessageChunk",
+      "chunk_len": 0,
+      "chunk_preview": "",
+      "tool_calls": 0
+    },
+    {
+      "kind": "messages",
+      "m_type": "AIMessageChunk",
+      "chunk_len": 0,
+      "chunk_preview": "",
+      "tool_calls": 0
+    },
+    {
+      "kind": "messages",
+      "m_type": "AIMessageChunk",
+      "chunk_len": 0,
+      "chunk_preview": "",
+      "tool_calls": 0
+    },
+    {
+      "kind": "messages",
+      "m_type": "AIMessageChunk",
+      "chunk_len": 0,
+      "chunk_preview": "",
+      "tool_calls": 0
+    },
+    {
+      "kind": "messages",
+      "m_type": "AIMessageChunk",
+      "chunk_len": 0,
+      "chunk_preview": "",
+      "tool_calls": 0
+    },
+    {
+      "kind": "messages",
+      "m_type": "AIMessageChunk",
+      "chunk_len": 0,
+      "chunk_preview": "",
+      "tool_calls": 0
+    },
+    {
+      "kind": "messages",
+      "m_type": "AIMessageChunk",
+      "chunk_len": 0,
+      "chunk_preview": "",
+      "tool_calls": 0
+    },
+    {
+      "kind": "messages",
+      "m_type": "AIMessageChunk",
+      "chunk_len": 0,
+      "chunk_preview": "",
+      "tool_calls": 0
+    },
+    {
+      "kind": "messages",
+      "m_type": "AIMessageChunk",
+      "chunk_len": 0,
+      "chunk_preview": "",
+      "tool_calls": 0
+    },
+    {
+      "kind": "messages",
+      "m_type": "AIMessageChunk",
+      "chunk_len": 0,
+      "chunk_preview": "",
+      "tool_calls": 0
+    },
+    {
+      "kind": "values",
+      "n_msgs": 99,
+      "last_type": "ai",
+      "last_len": 0,
+      "last_ai_len": 0,
+      "last_tool_calls": 1,
+      "last_preview": ""
+    },
+    {
+      "kind": "messages",
+      "m_type": "tool",
+      "chunk_len": 1785,
+      "chunk_preview": "D:\\github\\deerflaw\\backend\\.deer-flow\\threads\\7f0fe712-3094-44fb-89c4-4ab962e981",
+      "tool_calls": 0
+    },
+    {
+      "kind": "values",
+      "n_msgs": 100,
+      "last_type": "tool",
+      "last_len": 1785,
+      "last_ai_len": 0,
+      "last_tool_calls": 0,
+      "last_preview": "D:\\github\\deerflaw\\backend\\.deer-flow\\threads\\7f0fe712-3094-44fb-89c4-4ab962e981b2\\user-data\\workspa"
+    },
+    {
+      "kind": "messages",
+      "m_type": "AIMessageChunk",
+      "chunk_len": 10,
+      "chunk_preview": " workspace",
+      "tool_calls": 0
+    },
+    {
+      "kind": "messages",
+      "m_type": "AIMessageChunk",
+      "chunk_len": 1,
+      "chunk_preview": " ",
+      "tool_calls": 0
+    },
+    {
+      "kind": "messages",
+      "m_type": "AIMessageChunk",
+      "chunk_len": 2,
+      "chunk_preview": "目录",
+      "tool_calls": 0
+    },
+    {
+      "kind": "messages",
+      "m_type": "AIMessageChunk",
+      "chunk_len": 1,
+      "chunk_preview": "共",
+      "tool_calls": 0
+    },
+    {
+      "kind": "messages",
+      "m_type": "AIMessageChunk",
+      "chunk_len": 2,
+      "chunk_preview": "包含",
+      "tool_calls": 0
+    },
+    {
+      "kind": "messages",
+      "m_type": "AIMessageChunk",
+      "chunk_len": 1,
+      "chunk_preview": " ",
+      "tool_calls": 0
+    },
+    {
+      "kind": "messages",
+      "m_type": "AIMessageChunk",
+      "chunk_len": 2,
+      "chunk_preview": "16",
+      "tool_calls": 0
+    },
+    {
+      "kind": "messages",
+      "m_type": "AIMessageChunk",
+      "chunk_len": 1,
+      "chunk_preview": " ",
+      "tool_calls": 0
+    },
+    {
+      "kind": "messages",
+      "m_type": "AIMessageChunk",
+      "chunk_len": 1,
+      "chunk_preview": "个",
+      "tool_calls": 0
+    },
+    {
+      "kind": "messages",
+      "m_type": "AIMessageChunk",
+      "chunk_len": 2,
+      "chunk_preview": "测试",
+      "tool_calls": 0
+    },
+    {
+      "kind": "messages",
+      "m_type": "AIMessageChunk",
+      "chunk_len": 2,
+      "chunk_preview": "文件",
+      "tool_calls": 0
+    },
+    {
+      "kind": "messages",
+      "m_type": "AIMessageChunk",
+      "chunk_len": 1,
+      "chunk_preview": "，",
+      "tool_calls": 0
+    },
+    {
+      "kind": "messages",
+      "m_type": "AIMessageChunk",
+      "chunk_len": 2,
+      "chunk_preview": "均为",
+      "tool_calls": 0
+    },
+    {
+      "kind": "messages",
+      "m_type": "AIMessageChunk",
+      "chunk_len": 2,
+      "chunk_preview": "本次",
+      "tool_calls": 0
+    },
+    {
+      "kind": "messages",
+      "m_type": "AIMessageChunk",
+      "chunk_len": 2,
+      "chunk_preview": "会话",
+      "tool_calls": 0
+    },
+    {
+      "kind": "messages",
+      "m_type": "AIMessageChunk",
+      "chunk_len": 1,
+      "chunk_preview": "中",
+      "tool_calls": 0
+    },
+    {
+      "kind": "messages",
+      "m_type": "AIMessageChunk",
+      "chunk_len": 1,
+      "chunk_preview": "按",
+      "tool_calls": 0
+    },
+    {
+      "kind": "messages",
+      "m_type": "AIMessageChunk",
+      "chunk_len": 2,
+      "chunk_preview": "顺序",
+      "tool_calls": 0
+    },
+    {
+      "kind": "messages",
+      "m_type": "AIMessageChunk",
+      "chunk_len": 3,
+      "chunk_preview": "创建的",
+      "tool_calls": 0
+    },
+    {
+      "kind": "messages",
+      "m_type": "AIMessageChunk",
+      "chunk_len": 2,
+      "chunk_preview": "测试",
+      "tool_calls": 0
+    },
+    {
+      "kind": "messages",
+      "m_type": "AIMessageChunk",
+      "chunk_len": 2,
+      "chunk_preview": "文件",
+      "tool_calls": 0
+    },
+    {
+      "kind": "messages",
+      "m_type": "AIMessageChunk",
+      "chunk_len": 1,
+      "chunk_preview": "。",
+      "tool_calls": 0
+    },
+    {
+      "kind": "messages",
+      "m_type": "AIMessageChunk",
+      "chunk_len": 0,
+      "chunk_preview": "",
+      "tool_calls": 0
+    },
+    {
+      "kind": "messages",
+      "m_type": "AIMessageChunk",
+      "chunk_len": 0,
+      "chunk_preview": "",
+      "tool_calls": 0
+    },
+    {
+      "kind": "values",
+      "n_msgs": 101,
+      "last_type": "ai",
+      "last_len": 44,
+      "last_ai_len": 44,
+      "last_tool_calls": 0,
+      "last_preview": " workspace 目录共包含 16 个测试文件，均为本次会话中按顺序创建的测试文件。"
+    }
+  ]
+}

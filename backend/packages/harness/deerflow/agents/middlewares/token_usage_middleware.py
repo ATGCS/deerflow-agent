@@ -11,17 +11,17 @@ logger = logging.getLogger(__name__)
 
 
 class TokenUsageMiddleware(AgentMiddleware):
-    """Logs token usage from model response usage_metadata."""
+    """Logs token usage from model response usage_metadata and saves it to the message."""
 
     @override
     def after_model(self, state: AgentState, runtime: Runtime) -> dict | None:
-        return self._log_usage(state)
+        return self._save_usage(state)
 
     @override
     async def aafter_model(self, state: AgentState, runtime: Runtime) -> dict | None:
-        return self._log_usage(state)
+        return self._save_usage(state)
 
-    def _log_usage(self, state: AgentState) -> None:
+    def _save_usage(self, state: AgentState) -> dict | None:
         messages = state.get("messages", [])
         if not messages:
             return None
@@ -34,4 +34,7 @@ class TokenUsageMiddleware(AgentMiddleware):
                 usage.get("output_tokens", "?"),
                 usage.get("total_tokens", "?"),
             )
+            # Save usage_metadata to the message so it persists in the database
+            # This ensures the frontend can display token statistics
+            return {"messages": [last]}
         return None

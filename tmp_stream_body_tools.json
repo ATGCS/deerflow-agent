@@ -1,0 +1,23 @@
+{
+  "assistant_id": "lead_agent",
+  "input": {
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          { "type": "text", "text": "请对路径 /mnt/user-data/workspace 执行一次 ls（只列目录），然后一句话总结。" }
+        ]
+      }
+    ]
+  },
+  "stream_mode": ["values", "messages-tuple"],
+  "streamSubgraphs": true,
+  "streamResumable": true,
+  "config": { "recursion_limit": 1000 },
+  "context": {
+    "thinking_enabled": false,
+    "is_plan_mode": false,
+    "subagent_enabled": false,
+    "thread_id": "7f0fe712-3094-44fb-89c4-4ab962e981b2"
+  }
+}

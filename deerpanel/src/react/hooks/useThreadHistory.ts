@@ -31,7 +31,11 @@ export function useThreadHistory(sessionKey: string | null) {
         },
         { input: 0, output: 0, total: 0 },
       )
-      setTokenTotals(usageTotals.total ? usageTotals : null)
+      if (usageTotals.total > 0) {
+        setTokenTotals(usageTotals)
+      } else {
+        setTokenTotals(null)
+      }
       setRows(messagesToDisplayRows(raw) as DisplayRow[])
     } catch (e) {
       setError(String((e as Error)?.message || e))

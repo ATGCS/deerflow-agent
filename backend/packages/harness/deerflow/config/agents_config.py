@@ -2,10 +2,10 @@
 
 import logging
 import re
-from typing import Any
+from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from deerflow.config.paths import get_paths
 
@@ -16,12 +16,45 @@ AGENT_NAME_PATTERN = re.compile(r"^[A-Za-z0-9-]+$")
 
 
 class AgentConfig(BaseModel):
-    """Configuration for a custom agent."""
+    """Unified configuration for all types of agents.
+    
+    Attributes:
+        name: Unique identifier for the agent.
+        description: What the agent does.
+        model: Model to use (optional).
+        tool_groups: Optional tool group whitelist.
+        agent_type: Type of agent - 'custom', 'subagent', or 'acp'.
+        system_prompt: For subagents - the system prompt.
+        tools: For subagents - optional tool whitelist.
+        disallowed_tools: For subagents - optional tool blacklist.
+        max_turns: For subagents - maximum number of turns.
+        timeout_seconds: For subagents/ACP - timeout in seconds.
+        command: For ACP - command to execute.
+        args: For ACP - command arguments.
+        env: For ACP - environment variables.
+        auto_approve_permissions: For ACP - auto-approve permission requests.
+    """
 
     name: str
     description: str = ""
     model: str | None = None
     tool_groups: list[str] | None = None
+    
+    # Agent type discriminator
+    agent_type: Literal["custom", "subagent", "acp"] = "custom"
+    
+    # Subagent-specific fields
+    system_prompt: str | None = None
+    tools: list[str] | None = None
+    disallowed_tools: list[str] | None = None
+    max_turns: int = 50
+    timeout_seconds: int = 900
+    
+    # ACP-specific fields
+    command: str | None = None
+    args: list[str] | None = None
+    env: dict[str, str] | None = None
+    auto_approve_permissions: bool = False
 
 
 def load_agent_config(name: str | None) -> AgentConfig | None:
@@ -109,6 +142,102 @@ def list_custom_agents() -> list[AgentConfig]:
         config_file = entry / "config.yaml"
         if not config_file.exists():
             logger.debug(f"Skipping {entry.name}: no config.yaml")
+            continue
+
+        try:
+            agent_cfg = load_agent_config(entry.name)
+            # Only return custom agents (not subagents or ACP agents)
+            if agent_cfg.agent_type == "custom":
+                agents.append(agent_cfg)
+        except Exception as e:
+            logger.warning(f"Skipping agent '{entry.name}': {e}")
+
+    return agents
+
+
+def list_subagents() -> list[AgentConfig]:
+    """Scan the agents directory and return all subagent configurations.
+
+    Returns:
+        List of AgentConfig for each subagent found.
+    """
+    agents_dir = get_paths().agents_dir
+
+    if not agents_dir.exists():
+        return []
+
+    agents: list[AgentConfig] = []
+
+    for entry in sorted(agents_dir.iterdir()):
+        if not entry.is_dir():
+            continue
+
+        config_file = entry / "config.yaml"
+        if not config_file.exists():
+            continue
+
+        try:
+            agent_cfg = load_agent_config(entry.name)
+            # Only return subagents
+            if agent_cfg.agent_type == "subagent":
+                agents.append(agent_cfg)
+        except Exception as e:
+            logger.warning(f"Skipping agent '{entry.name}': {e}")
+
+    return agents
+
+
+def list_acp_agents() -> list[AgentConfig]:
+    """Scan the agents directory and return all ACP agent configurations.
+
+    Returns:
+        List of AgentConfig for each ACP agent found.
+    """
+    agents_dir = get_paths().agents_dir
+
+    if not agents_dir.exists():
+        return []
+
+    agents: list[AgentConfig] = []
+
+    for entry in sorted(agents_dir.iterdir()):
+        if not entry.is_dir():
+            continue
+
+        config_file = entry / "config.yaml"
+        if not config_file.exists():
+            continue
+
+        try:
+            agent_cfg = load_agent_config(entry.name)
+            # Only return ACP agents
+            if agent_cfg.agent_type == "acp":
+                agents.append(agent_cfg)
+        except Exception as e:
+            logger.warning(f"Skipping agent '{entry.name}': {e}")
+
+    return agents
+
+
+def list_all_agents() -> list[AgentConfig]:
+    """Scan the agents directory and return all agent configurations.
+
+    Returns:
+        List of AgentConfig for all agents found (custom + subagent + ACP).
+    """
+    agents_dir = get_paths().agents_dir
+
+    if not agents_dir.exists():
+        return []
+
+    agents: list[AgentConfig] = []
+
+    for entry in sorted(agents_dir.iterdir()):
+        if not entry.is_dir():
+            continue
+
+        config_file = entry / "config.yaml"
+        if not config_file.exists():
             continue
 
         try:

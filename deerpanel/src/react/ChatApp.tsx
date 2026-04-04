@@ -32,6 +32,9 @@ const STORAGE_MODEL_KEY = 'clawpanel-chat-selected-model'
 const STORAGE_SESSION_NAMES_KEY = 'clawpanel-chat-session-names'
 const STORAGE_SELECTED_SESSION_KEY = 'clawpanel-chat-selected-session'
 
+// 状态过期时间：5 分钟（300 秒）
+const THREAD_STATE_EXPIRY_MS = 5 * 60 * 1000
+
 type SessionMode = 'flash' | 'thinking' | 'pro' | 'ultra'
 
 const SESSION_MODES: Array<{ value: SessionMode; label: string }> = [
@@ -202,25 +205,49 @@ function collectNewToolIds(tools: unknown[], entries: unknown[]): string[] {
 
 function noteNewToolIds(S: StreamState, newIds: string[]) {
   if (!newIds.length) return
-  if (S.text.trim()) {
-    S.segments.push({ kind: 'text', text: S.text })
-    S.text = ''
+  for (const e of newIds) {
+    if (!S.tools.some((t) => String((t as Record<string, unknown>).id || (t as Record<string, unknown>).tool_call_id || '') === e)) {
+      S.tools.push({ id: e, name: '工具', input: null, output: null, status: 'pending' } as any)
+    }
   }
-  S.segments.push({ kind: 'tools', ids: newIds })
 }
 
 function finalizeAssistantSegments(S: StreamState): MessageSegment[] | undefined {
-  if (!S.segments.length && !S.tools.length) return undefined
   const seg: MessageSegment[] = [...S.segments]
   if (S.text.trim()) seg.push({ kind: 'text', text: S.text })
-  if (seg.length) return seg
+  
   if (S.tools.length) {
     const ids = S.tools
       .map((t) => String((t as Record<string, unknown>).id || (t as Record<string, unknown>).tool_call_id || ''))
       .filter(Boolean)
-    return ids.length ? [{ kind: 'tools', ids }] : undefined
+    if (ids.length) {
+      seg.push({ kind: 'tools', ids })
+    }
   }
-  return undefined
+  
+  return seg.length ? seg : undefined
+}
+
+/**
+ * 简化版：直接累积所有文本，不使用 segments 封存机制
+ * 流式阶段只显示文本，工具调用信息在 final 时一次性显示
+ */
+function applyAssistantTextDelta(S: StreamState, incoming: string): boolean {
+  const inc = String(incoming || '')
+  if (!inc) return false
+  
+  const prevText = S.text || ''
+  if (inc.startsWith(prevText)) {
+    const nextText = inc.slice(prevText.length)
+    if (nextText) {
+      S.text = inc
+      return true
+    }
+    return false
+  }
+  
+  S.text = prevText + inc
+  return true
 }
 
 export default function ChatApp() {
@@ -250,6 +277,8 @@ export default function ChatApp() {
   const unsubRef = useRef<(() => void) | null>(null)
   const [moreMenuKey, setMoreMenuKey] = useState<string | null>(null)
   const [pendingRefreshKey, setPendingRefreshKey] = useState<string | null>(null)
+  const [sessionNamesTick, setSessionNamesTick] = useState(0)  // 用于强制刷新会话名称显示
+  const lastActivityRef = useRef<Record<string, number>>({})  // 记录每个会话的最后活跃时间
   const [modelOptions, setModelOptions] = useState<string[]>([])
   const [modelName, setModelName] = useState<string>(() => localStorage.getItem(STORAGE_MODEL_KEY) || '')
   const [modelsLoading, setModelsLoading] = useState(false)
@@ -384,7 +413,20 @@ export default function ChatApp() {
     try {
       const { api } = await import('../lib/tauri-api.js')
       const data = await api.chatSessionsList(50)
-      setSessions((data?.sessions || []) as ChatSessionRow[])
+      const nextSessions = (data?.sessions || []) as ChatSessionRow[]
+      setSessions(nextSessions)
+
+      const keys = new Set(nextSessions.map((s) => String(s.sessionKey || '')).filter(Boolean))
+      if (keys.size > 0 && !keys.has(sessionRef.current)) {
+        const stored = localStorage.getItem(STORAGE_SELECTED_SESSION_KEY) || ''
+        if (stored && keys.has(stored)) {
+          setSelectedSessionKey(stored)
+        } else if (keys.has(CHAT_MAIN_SESSION_KEY)) {
+          setSelectedSessionKey(CHAT_MAIN_SESSION_KEY)
+        } else {
+          setSelectedSessionKey(nextSessions[0]?.sessionKey || CHAT_MAIN_SESSION_KEY)
+        }
+      }
     } catch (e) {
       console.warn('[ChatApp] sessions', e)
     } finally {
@@ -395,14 +437,14 @@ export default function ChatApp() {
   const sortedSessions = useMemo(() => {
     const sorted = [...sessions]
     sorted.sort((a, b) => {
-      const da = ((b.updatedAt ?? b.lastActivity ?? b.createdAt) || 0) - ((a.updatedAt ?? a.lastActivity ?? a.createdAt) || 0)
+      const da = ((b.updatedAt ?? b.lastActivity ?? b.createdAt) || 0) - ((a.updatedAt ?? a.lastActivity ?? b.createdAt) || 0)
       if (da !== 0) return da
       const ka = String(a.sessionKey || '')
       const kb = String(b.sessionKey || '')
       return ka < kb ? -1 : ka > kb ? 1 : 0
     })
     return sorted
-  }, [sessions])
+  }, [sessions, sessionNamesTick])  // 添加 sessionNamesTick 依赖，名称更新时重新排序
 
   async function getApi() {
     if (apiRef.current) return apiRef.current
@@ -576,8 +618,17 @@ export default function ChatApp() {
     const u1 = wsClient.onReady(() => {
       void refreshSessions()
     })
+    
+    // 监听会话名称更新事件
+    const onNameUpdate = () => {
+      setSessionNamesTick((t) => t + 1)  // 增加 tick，强制重新计算 sortedSessions
+      void refreshSessions()
+    }
+    window.addEventListener('session-name-updated', onNameUpdate)
+    
     return () => {
       u1()
+      window.removeEventListener('session-name-updated', onNameUpdate)
     }
   }, [refreshSessions])
 
@@ -669,9 +720,12 @@ export default function ChatApp() {
   }, [])
 
   useEffect(() => {
+    // 切换会话时彻底重置流式状态
     streamRef.current = emptyStream()
     seenRunIdsRef.current = new Set()
     setThreadPanelState(emptyThreadPanel())
+    // 清除新会话的活跃时间，让它立即过期
+    delete lastActivityRef.current[selectedSessionKey]
     setSessionMode(getSessionModeFromMeta(selectedSessionKey))
     setCollabOn(getSessionCollabModeFromMeta(selectedSessionKey))
     setModeMenuOpen(false)
@@ -688,8 +742,24 @@ export default function ChatApp() {
         const p = msg.payload as any
         if (!p) return
         if (p.sessionKey && p.sessionKey !== sessionRef.current) return
+        
+        // 检查状态是否过期：如果当前有活跃对话，忽略过期的状态
+        const now = Date.now()
+        const lastActivity = lastActivityRef.current[sessionRef.current]
+        const timeSinceLastActivity = lastActivity ? now - lastActivity : Infinity
+        
+        // 如果是第一次访问这个会话（lastActivity 不存在），或者超过过期时间，并且当前没有在发送消息，忽略这个状态更新
+        if (!lastActivity || timeSinceLastActivity > THREAD_STATE_EXPIRY_MS) {
+          if (!isSending) {
+            // 静默忽略过期状态，避免显示旧的提示信息
+            return
+          }
+        }
+        
+        const prevTitle = threadPanelState.title
+        const newTitle = typeof p.title === 'string' && p.title.trim() ? p.title.trim() : null
         setThreadPanelState({
-          title: typeof p.title === 'string' && p.title.trim() ? p.title.trim() : null,
+          title: newTitle,
           todos: Array.isArray(p.todos) ? p.todos : [],
           activityKind: String(p.activityKind || 'idle'),
           activityDetail: String(p.activityDetail || ''),
@@ -701,6 +771,17 @@ export default function ChatApp() {
               }
             : null,
         })
+        // 如果是新会话（sessionKey 包含 new-）且之前没有标题，现在有标题了，自动保存
+        if (selectedSessionKey.includes('new-') && !prevTitle && newTitle) {
+          try {
+            const names = JSON.parse(localStorage.getItem('clawpanel-chat-session-names') || '{}')
+            names[selectedSessionKey] = newTitle
+            localStorage.setItem('clawpanel-chat-session-names', JSON.stringify(names))
+            window.dispatchEvent(new CustomEvent('session-name-updated'))
+          } catch {
+            // ignore
+          }
+        }
         return
       }
 
@@ -758,11 +839,7 @@ export default function ChatApp() {
         }
         /* 同一条 delta 内先合并正文再封存工具，避免「工具在说明文字上方」 */
         if (c.text) {
-          const next = accumulateStreamAssistantText(S.text, c.text)
-          if (next !== S.text) {
-            S.text = next
-            changed = true
-          }
+          if (applyAssistantTextDelta(S, c.text)) changed = true
         }
         if (c.tools?.length) {
           const newIds = collectNewToolIds(S.tools, c.tools)
@@ -791,21 +868,15 @@ export default function ChatApp() {
           S.tools = finalTools
         }
         const segmentsOut = finalizeAssistantSegments(S)
-        const assembled = flattenStreamDisplayText(segmentsOut || [], '')
-        // 若已构造出 segments（流式内容、工具等），则主要让 segments 承载展示；
-        // 若 finalText 与 segments 拼接结果一致，则不再单独输出 text，避免重复。
         let textOut: string
         if (segmentsOut && segmentsOut.length) {
-          if (finalText && assembled && finalText.trim() === assembled.trim()) {
-            textOut = ''
-          } else {
-            textOut = finalText || ''
-          }
+          textOut = ''
         } else {
-          textOut = finalText || assembled || S.text
+          textOut = finalText || S.text || ''
         }
         const hasContent =
           textOut ||
+          (segmentsOut && segmentsOut.length) ||
           S.images.length ||
           S.videos.length ||
           S.audios.length ||
@@ -842,26 +913,32 @@ export default function ChatApp() {
         }
 
         // 托管 Agent：捕获本轮 DeerFlow assistant 最终回复，驱动下一步指令或停止。
-        void hosted.hostedCapture.onChatFinal(payload, finalText || assembled || textOut || S.text || '')
+        void hosted.hostedCapture.onChatFinal(payload, finalText || textOut || S.text || '')
 
-        setRows((r) => [
-          ...r,
-          {
-            role: 'assistant' as const,
-            text: textOut,
-            segments: segmentsOut,
-            tools: [...S.tools],
-            images: [...S.images],
-            videos: [...S.videos],
-            audios: [...S.audios],
-            files: [...S.files],
-            timestamp: Date.now(),
-            durationStr: durStr || undefined,
-            tokenStr: tokenStr || undefined,
-          },
-        ])
+        // 添加新消息到 rows
+        setRows((r) => {
+          const newRows = [
+            ...r,
+            {
+              role: 'assistant' as const,
+              text: textOut,
+              segments: segmentsOut,
+              tools: [...S.tools],
+              images: [...S.images],
+              videos: [...S.videos],
+              audios: [...S.audios],
+              files: [...S.files],
+              timestamp: Date.now(),
+              durationStr: durStr || undefined,
+              tokenStr: tokenStr || undefined,
+            },
+          ]
+          return newRows
+        })
 
+        // final 事件后清空 streamRef 和 threadPanelState，停止进度条并清除提示区域
         streamRef.current = emptyStream()
+        setThreadPanelState(emptyThreadPanel())
         setIsSending(false)
         scheduleBump()
         void refreshSessions()
@@ -895,6 +972,7 @@ export default function ChatApp() {
         }
         setRows((r) => [...r, { role: 'system' as const, text: '生成已停止', timestamp: Date.now() }])
         streamRef.current = emptyStream()
+        setThreadPanelState(emptyThreadPanel())
         setIsSending(false)
         scheduleBump()
         return
@@ -910,6 +988,7 @@ export default function ChatApp() {
         toast(errMsg, 'error')
         setIsSending(false)
         streamRef.current = emptyStream()
+        setThreadPanelState(emptyThreadPanel())
         scheduleBump()
       }
     })
@@ -931,6 +1010,9 @@ export default function ChatApp() {
 
   async function handleSend(message: string, attachments?: ChatAttachment[]) {
     if (!selectedSessionKey) return
+    // 更新活跃时间，防止状态被过期
+    lastActivityRef.current[selectedSessionKey] = Date.now()
+    
     setIsSending(true)
     const userRow: DisplayRow = {
       role: 'user',
@@ -964,7 +1046,27 @@ export default function ChatApp() {
   async function handleNewSession() {
     const key = `agent:main:new-${Date.now().toString(36)}`
     setSelectedSessionKey(key)
-    await refreshSessions()
+    // 预先在后端创建线程，确保会话可用
+    try {
+      const { wsClient } = await import('../lib/ws-client.js')
+      await wsClient.ensureChatThread(key)
+    } catch (e) {
+      console.warn('[ChatApp] 预创建线程失败:', e)
+    }
+    // 不要立即刷新会话列表，因为后端还没有这个会话
+    // 等用户发送第一条消息后，后端会自动创建会话
+    // 只在会话列表中临时添加一个条目
+    setSessions((prev) => [
+      {
+        sessionKey: key,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        lastActivity: Date.now(),
+        messageCount: 0,
+        messages: [],
+      } as ChatSessionRow,
+      ...prev,
+    ])
   }
 
   async function handleDeleteSession(key?: string) {
@@ -1127,16 +1229,14 @@ export default function ChatApp() {
                 </svg>
               </button>
               <span className="react-chat-header-title">实时聊天</span>
-              <span
-                className="react-chat-tokens"
-                title={
-                  tokenTotals
-                    ? `当前会话累计 Token 消耗（输入 ${tokenTotals.input}，输出 ${tokenTotals.output}）`
-                    : '当前会话累计 Token 消耗'
-                }
-              >
-                ↑{tokenTotals?.input ?? 0} ↓{tokenTotals?.output ?? 0} · Σ{tokenTotals?.total ?? 0}
-              </span>
+              {tokenTotals && tokenTotals.total > 0 ? (
+                <span
+                  className="react-chat-tokens"
+                  title={`当前会话累计 Token 消耗（输入 ${tokenTotals.input}，输出 ${tokenTotals.output}）`}
+                >
+                  ↑{tokenTotals.input} ↓{tokenTotals.output} · Σ{tokenTotals.total}
+                </span>
+              ) : null}
             </div>
           </header>
           {historyError && <div className="react-chat-error-banner">{historyError}</div>}
@@ -1154,11 +1254,18 @@ export default function ChatApp() {
             <div className="react-chat-processing-row" aria-live="polite">
               <div className="react-chat-processing-bar react-chat-processing-bar--thread">
                 <span className="react-chat-processing-cursor" aria-hidden />
-                <span className="react-chat-processing-text">正在处理中</span>
+                <span className="react-chat-processing-text">
+                  {(() => {
+                    const d = (threadPanelState.activityDetail || '').trim()
+                    const k = threadPanelState.activityKind
+                    if (d && (k === 'tools' || k === 'thinking')) return `正在处理 · ${d}`
+                    return '正在处理中'
+                  })()}
+                </span>
               </div>
             </div>
           ) : null}
-          <ThreadPanel state={threadPanelState} />
+          <ThreadPanel state={threadPanelState} sessionKey={selectedSessionKey} />
           <HostedAgentPanel
             panelOpen={hosted.hosted.panelOpen}
             setPanelOpen={hosted.hosted.setPanelOpen}
