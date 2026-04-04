@@ -14,13 +14,13 @@ def _utc_iso_z() -> str:
 class CollabPhase(str, Enum):
     """Per-thread collaboration state machine phase (design §6.1)."""
 
-    IDLE = "idle"
-    REQ_CONFIRM = "req_confirm"
-    PLANNING = "planning"
-    PLAN_READY = "plan_ready"
-    AWAITING_EXEC = "awaiting_exec"
-    EXECUTING = "executing"
-    DONE = "done"
+    IDLE = "idle"  # 空闲
+    REQ_CONFIRM = "req_confirm"  # 请求确认
+    PLANNING = "planning"  # 规划中
+    PLAN_READY = "plan_ready"  # 规划就绪
+    AWAITING_EXEC = "awaiting_exec"  # 等待执行
+    EXECUTING = "executing"  # 执行中
+    DONE = "done"  # 已完成
 
 
 class ThreadCollabState(BaseModel):
@@ -33,34 +33,35 @@ class ThreadCollabState(BaseModel):
 
 
 class TaskStatus(str, Enum):
-    PENDING = "pending"
-    PLANNING = "planning"
-    PLANNED = "planned"
-    EXECUTING = "executing"
-    PAUSED = "paused"
-    COMPLETED = "completed"
-    FAILED = "failed"
-    CANCELLED = "cancelled"
+    PENDING = "pending"  # 待开始
+    PLANNING = "planning"  # 规划中
+    PLANNED = "planned"  # 已规划
+    EXECUTING = "executing"  # 执行中
+    PAUSED = "paused"  # 已暂停
+    COMPLETED = "completed"  # 已完成
+    FAILED = "failed"  # 失败
+    CANCELLED = "cancelled"  # 已取消
 
 
 class ProjectStatus(str, Enum):
-    PENDING = "pending"
-    PLANNING = "planning"
-    EXECUTING = "executing"
-    PAUSED = "paused"
-    COMPLETED = "completed"
-    FAILED = "failed"
-    CANCELLED = "cancelled"
+    PENDING = "pending"  # 待开始
+    PLANNING = "planning"  # 规划中
+    EXECUTING = "executing"  # 执行中
+    PAUSED = "paused"  # 已暂停
+    COMPLETED = "completed"  # 已完成
+    FAILED = "failed"  # 失败
+    CANCELLED = "cancelled"  # 已取消
 
 
 class WorkerProfile(BaseModel):
     """Per-subtask worker constraints (design §5.2). Stored on subtask as ``worker_profile``."""
 
-    base_subagent: str | None = Field(default=None, description="Subagent template name, e.g. general-purpose")
-    tools: list[str] | None = Field(default=None, description="Allowed tool names (whitelist)")
-    skills: list[str] | None = Field(default=None, description="Allowed skill names for prompt injection")
+    base_subagent: str = Field(..., description="Subagent template name, e.g. general-purpose")
+    model: str | None = Field(default=None, description="Override default model for this task")
     instruction: str | None = Field(default=None, description="Extra system instructions for this worker")
-    depends_on: list[str] | None = Field(default=None, description="Dependent subtask ids (planning hint)")
+    tools: list[str] | None = Field(default=None, description="Override default tools (load from AgentConfig if None)")
+    skills: list[str] | None = Field(default=None, description="Override default skills (load from AgentConfig if None)")
+    depends_on: list[str] = Field(default_factory=list, description="Dependent subtask ids (planning hint)")
 
     def to_storage_dict(self) -> dict[str, Any]:
         return self.model_dump(exclude_none=True)

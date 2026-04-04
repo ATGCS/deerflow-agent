@@ -11,9 +11,8 @@ export const API_TYPES = [
   { value: 'google-generative-ai', label: 'Google Gemini' },
 ]
 
-// 服务商快捷预设
+// 服务商快捷预设（用于添加向导与左侧「厂商」列表）
 export const PROVIDER_PRESETS = [
-  { key: 'qtcool', label: '晴辰云', badge: '推荐', baseUrl: 'https://gpt.qt.cool/v1', api: 'openai-completions', site: 'https://gpt.qt.cool/', desc: '面板用户免费使用部分模型，付费用户享全系列顶级模型支持，全部模型低至 2-3 折' },
   { key: 'shengsuanyun', label: '胜算云', baseUrl: 'https://router.shengsuanyun.com/api/v1', api: 'openai-completions', site: 'https://www.shengsuanyun.com/?from=CH_4BVI0BM2', desc: '国内知名 AI 模型聚合平台，支持多种主流模型' },
   { key: 'siliconflow', label: '硅基流动', baseUrl: 'https://api.siliconflow.cn/v1', api: 'openai-completions', site: 'https://cloud.siliconflow.cn/i/PFrw2an5', desc: '高性价比推理平台，支持 DeepSeek、Qwen 等开源模型' },
   { key: 'volcengine', label: '火山引擎', baseUrl: 'https://ark.cn-beijing.volces.com/api/v3', api: 'openai-completions', site: 'https://volcengine.com/L/Ph1OP5I3_GY', desc: '字节跳动旗下云平台，支持豆包等模型' },
@@ -28,18 +27,8 @@ export const PROVIDER_PRESETS = [
   { key: 'ollama', label: 'Ollama (本地)', baseUrl: 'http://127.0.0.1:11434/v1', api: 'openai-completions' },
 ]
 
-// 晴辰云配置
-export const QTCOOL = {
-  baseUrl: 'https://gpt.qt.cool/v1',
-  defaultKey: 'sk-0JDu7hyc51ZKD4iNebpFu07EUEhXmVVc',
-  site: 'https://gpt.qt.cool/',
-  checkinUrl: 'https://gpt.qt.cool/checkin',
-  usageUrl: 'https://gpt.qt.cool/user?key=',
-  providerKey: 'qtcool',
-  brandName: '晴辰云',
-  api: 'openai-completions',
-  models: []  // 始终从 API 动态获取最新模型列表
-}
+/** 模型配置页左侧展示的厂商（与预设一致，用于选栏） */
+export const VENDOR_PRESETS = PROVIDER_PRESETS
 
 // 胜算云推广配置
 export const SHENGSUANYUN = {
@@ -74,29 +63,4 @@ export const MODEL_PRESETS = {
     { id: 'llama3.2', name: 'Llama 3.2', contextWindow: 8192 },
     { id: 'gemma3', name: 'Gemma 3', contextWindow: 32768 },
   ],
-}
-
-/**
- * 动态获取 QTCOOL 模型列表
- * @param {string} [apiKey] - 自定义密钥，不传则用默认密钥
- * @returns {Promise<Array<{id:string, name:string, contextWindow:number, reasoning?:boolean}>>}
- */
-export async function fetchQtcoolModels(apiKey) {
-  const key = apiKey || QTCOOL.defaultKey
-  try {
-    const resp = await fetch(QTCOOL.baseUrl + '/models', {
-      headers: { 'Authorization': 'Bearer ' + key },
-      signal: AbortSignal.timeout(8000)
-    })
-    if (resp.ok) {
-      const data = await resp.json()
-      if (data.data && data.data.length) {
-        return data.data.map(m => ({
-          id: m.id, name: m.id, contextWindow: 128000,
-          reasoning: m.id.includes('codex')
-        })).sort((a, b) => b.id.localeCompare(a.id))
-      }
-    }
-  } catch { /* use fallback */ }
-  return QTCOOL.models
 }

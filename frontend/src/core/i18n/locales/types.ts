@@ -36,6 +36,23 @@ export interface Translations {
     exportAsMarkdown: string;
     exportAsJSON: string;
     exportSuccess: string;
+    // Task statuses
+    taskStatus: {
+      pending: string;
+      planning: string;
+      planned: string;
+      executing: string;
+      paused: string;
+      completed: string;
+      failed: string;
+      cancelled: string;
+    };
+    // Subtask statuses
+    subtaskStatus: {
+      in_progress: string;
+      completed: string;
+      failed: string;
+    };
   };
 
   // Welcome

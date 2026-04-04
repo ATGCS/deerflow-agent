@@ -1,14 +1,16 @@
 """Memory API router for retrieving and managing global memory data."""
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from deerflow.agents.memory.updater import (
     clear_memory_data,
     delete_memory_fact,
     get_memory_data,
+    list_memory_agent_slots,
     reload_memory_data,
 )
+from deerflow.config.agents_config import AGENT_NAME_PATTERN
 from deerflow.config.memory_config import get_memory_config
 
 router = APIRouter(prefix="/api", tags=["memory"])
@@ -77,13 +79,52 @@ class MemoryStatusResponse(BaseModel):
     data: MemoryResponse
 
 
+class MemoryAgentSlot(BaseModel):
+    """One memory scope (global or per-agent file)."""
+
+    id: str | None = Field(None, description="Agent id; null means global / default lead memory")
+    display_name: str = Field("", description="Short label for UI")
+    description: str = Field("", description="Optional subtitle from agent config")
+    has_memory_file: bool = Field(False, description="Whether a JSON file already exists on disk")
+
+
+class MemoryAgentsListResponse(BaseModel):
+    """List of memory scopes for dashboard / settings UI."""
+
+    agents: list[MemoryAgentSlot]
+
+
+def _normalize_agent_query(agent: str | None) -> str | None:
+    if agent is None:
+        return None
+    stripped = agent.strip()
+    if not stripped:
+        return None
+    if not AGENT_NAME_PATTERN.match(stripped):
+        raise HTTPException(status_code=400, detail=f"Invalid agent id {stripped!r}; must match {AGENT_NAME_PATTERN.pattern}")
+    return stripped
+
+
+@router.get(
+    "/memory/agents",
+    response_model=MemoryAgentsListResponse,
+    summary="List Memory Scopes",
+    description="List global memory plus each agent directory that has config and/or memory.json.",
+)
+async def list_memory_agents() -> MemoryAgentsListResponse:
+    raw = list_memory_agent_slots()
+    return MemoryAgentsListResponse(agents=[MemoryAgentSlot(**row) for row in raw])
+
+
 @router.get(
     "/memory",
     response_model=MemoryResponse,
     summary="Get Memory Data",
-    description="Retrieve the current global memory data including user context, history, and facts.",
+    description="Retrieve memory data for the global store or a specific agent (agents/{id}/memory.json).",
 )
-async def get_memory() -> MemoryResponse:
+async def get_memory(
+    agent: str | None = Query(None, description="Agent id; omit for global memory"),
+) -> MemoryResponse:
     """Get the current global memory data.
 
     Returns:
@@ -117,7 +158,8 @@ async def get_memory() -> MemoryResponse:
         }
         ```
     """
-    memory_data = get_memory_data()
+    agent_name = _normalize_agent_query(agent)
+    memory_data = get_memory_data(agent_name)
     return MemoryResponse(**memory_data)
 
 
@@ -127,7 +169,9 @@ async def get_memory() -> MemoryResponse:
     summary="Reload Memory Data",
     description="Reload memory data from the storage file, refreshing the in-memory cache.",
 )
-async def reload_memory() -> MemoryResponse:
+async def reload_memory(
+    agent: str | None = Query(None, description="Agent id; omit for global memory"),
+) -> MemoryResponse:
     """Reload memory data from file.
 
     This forces a reload of the memory data from the storage file,
@@ -136,7 +180,8 @@ async def reload_memory() -> MemoryResponse:
     Returns:
         The reloaded memory data.
     """
-    memory_data = reload_memory_data()
+    agent_name = _normalize_agent_query(agent)
+    memory_data = reload_memory_data(agent_name)
     return MemoryResponse(**memory_data)
 
 
@@ -144,12 +189,15 @@ async def reload_memory() -> MemoryResponse:
     "/memory",
     response_model=MemoryResponse,
     summary="Clear All Memory Data",
-    description="Delete all saved memory data and reset the memory structure to an empty state.",
+    description="Delete all saved memory for the global store or one agent and reset to an empty structure.",
 )
-async def clear_memory() -> MemoryResponse:
+async def clear_memory(
+    agent: str | None = Query(None, description="Agent id; omit to clear global memory"),
+) -> MemoryResponse:
     """Clear all persisted memory data."""
     try:
-        memory_data = clear_memory_data()
+        agent_name = _normalize_agent_query(agent)
+        memory_data = clear_memory_data(agent_name)
     except OSError as exc:
         raise HTTPException(status_code=500, detail="Failed to clear memory data.") from exc
 
@@ -160,12 +208,16 @@ async def clear_memory() -> MemoryResponse:
     "/memory/facts/{fact_id}",
     response_model=MemoryResponse,
     summary="Delete Memory Fact",
-    description="Delete a single saved memory fact by its fact id.",
+    description="Delete a single saved memory fact by its fact id (global or agent scope).",
 )
-async def delete_memory_fact_endpoint(fact_id: str) -> MemoryResponse:
+async def delete_memory_fact_endpoint(
+    fact_id: str,
+    agent: str | None = Query(None, description="Agent id; omit for global memory"),
+) -> MemoryResponse:
     """Delete a single fact from memory by fact id."""
     try:
-        memory_data = delete_memory_fact(fact_id)
+        agent_name = _normalize_agent_query(agent)
+        memory_data = delete_memory_fact(fact_id, agent_name)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=f"Memory fact '{fact_id}' not found.") from exc
     except OSError as exc:
@@ -217,14 +269,17 @@ async def get_memory_config_endpoint() -> MemoryConfigResponse:
     summary="Get Memory Status",
     description="Retrieve both memory configuration and current data in a single request.",
 )
-async def get_memory_status() -> MemoryStatusResponse:
+async def get_memory_status(
+    agent: str | None = Query(None, description="Agent id; omit for global memory in `data`"),
+) -> MemoryStatusResponse:
     """Get the memory system status including configuration and data.
 
     Returns:
         Combined memory configuration and current data.
     """
     config = get_memory_config()
-    memory_data = get_memory_data()
+    agent_name = _normalize_agent_query(agent)
+    memory_data = get_memory_data(agent_name)
 
     return MemoryStatusResponse(
         config=MemoryConfigResponse(

@@ -38,6 +38,7 @@ def get_available_tools(
     include_mcp: bool = True,
     model_name: str | None = None,
     subagent_enabled: bool = False,
+    include_search: bool = True,
 ) -> list[BaseTool]:
     """Get all available tools from config.
 
@@ -49,6 +50,7 @@ def get_available_tools(
         include_mcp: Whether to include tools from MCP servers (default: True).
         model_name: Optional model name to determine if vision tools should be included.
         subagent_enabled: Whether to include subagent tools (task, task_status).
+        include_search: Whether to include tool_search and MCP tools (default: True).
 
     Returns:
         List of available tools.
@@ -88,7 +90,7 @@ def get_available_tools(
     mcp_tools = []
     # Reset deferred registry upfront to prevent stale state from previous calls
     reset_deferred_registry()
-    if include_mcp:
+    if include_mcp and include_search:
         try:
             from deerflow.config.extensions_config import ExtensionsConfig
             from deerflow.mcp.cache import get_cached_mcp_tools

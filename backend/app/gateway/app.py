@@ -15,6 +15,7 @@ from app.gateway.routers import (
     memory,
     models,
     projects,
+    runs,
     skills,
     suggestions,
     task_memory,
@@ -223,6 +224,9 @@ This gateway provides custom endpoints for models, MCP configuration, skills, an
 
     # Collaboration state API is mounted at /api/collab
     app.include_router(collab.router)
+
+    # Runs API is mounted at /api/langgraph/runs
+    app.include_router(runs.router)
 
     @app.get("/health", tags=["health"])
     async def health_check() -> dict:

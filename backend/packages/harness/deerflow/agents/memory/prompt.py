@@ -14,6 +14,9 @@ except ImportError:
 # Prompt template for updating memory based on conversation
 MEMORY_UPDATE_PROMPT = """You are a memory management system. Your task is to analyze a conversation and update the user's memory profile.
 
+IMPORTANT: The conversation is in Chinese. You MUST generate all memory content in Chinese.
+当前记忆状态和对话都是中文，你必须用中文生成所有记忆内容。
+
 Current Memory State:
 <current_memory>
 {current_memory}
@@ -28,18 +31,24 @@ Instructions:
 1. Analyze the conversation for important information about the user
 2. Extract relevant facts, preferences, and context with specific details (numbers, names, technologies)
 3. Update the memory sections as needed following the detailed length guidelines below
+4. IMPORTANT: All memory content MUST be in Chinese (中文)
 
 Memory Section Guidelines:
 
 **User Context** (Current state - concise summaries):
 - workContext: Professional role, company, key projects, main technologies (2-3 sentences)
   Example: Core contributor, project names with metrics (16k+ stars), technical stack
+  示例：核心贡献者，项目名称和指标（16k+ stars），技术栈
 - personalContext: Languages, communication preferences, key interests (1-2 sentences)
   Example: Bilingual capabilities, specific interest areas, expertise domains
+  示例：双语能力，特定兴趣领域，专业领域
 - topOfMind: Multiple ongoing focus areas and priorities (3-5 sentences, detailed paragraph)
   Example: Primary project work, parallel technical investigations, ongoing learning/tracking
+  示例：主要项目工作，并行技术调研，持续学习/跟踪
   Include: Active implementation work, troubleshooting issues, market/research interests
+  包括：积极的实现工作，故障排除，市场/研究兴趣
   Note: This captures SEVERAL concurrent focus areas, not just one task
+  注意：这里应该包含多个并行的关注领域，而不仅仅是一个任务
 
 **History** (Temporal context - rich paragraphs):
 - recentMonths: Detailed summary of recent activities (4-6 sentences or 1-2 paragraphs)
@@ -58,28 +67,46 @@ Memory Section Guidelines:
 - Preserve technical terminology and version numbers
 - Categories:
   * preference: Tools, styles, approaches user prefers/dislikes
-  * knowledge: Specific expertise, technologies mastered, domain knowledge
+    偏好：用户喜欢/不喜欢的工具、风格、方法
+  * knowledge: Specific expertise, technologies, domain knowledge
+    知识：具体专业技能、技术、领域知识
   * context: Background facts (job title, projects, locations, languages)
+    背景：背景事实（职位、项目、地点、语言）
   * behavior: Working patterns, communication habits, problem-solving approaches
+    行为：工作模式、沟通习惯、解决问题的方法
   * goal: Stated objectives, learning targets, project ambitions
+    目标：声明的目标、学习目标、项目抱负
 - Confidence levels:
   * 0.9-1.0: Explicitly stated facts ("I work on X", "My role is Y")
+    明确声明的事实（"我在做 X"，"我的角色是 Y"）
   * 0.7-0.8: Strongly implied from actions/discussions
+    从行为/讨论中强烈暗示
   * 0.5-0.6: Inferred patterns (use sparingly, only for clear patterns)
+    推断的模式（谨慎使用，仅用于清晰模式）
 
 **What Goes Where**:
 - workContext: Current job, active projects, primary tech stack
+  当前工作、活跃项目、主要技术栈
 - personalContext: Languages, personality, interests outside direct work tasks
+  语言、性格、直接工作任务之外的兴趣
 - topOfMind: Multiple ongoing priorities and focus areas user cares about recently (gets updated most frequently)
+  用户最近关心的多个优先事项和关注领域（更新最频繁）
   Should capture 3-5 concurrent themes: main work, side explorations, learning/tracking interests
+  应该包含 3-5 个并行主题：主要工作、副业探索、学习/跟踪兴趣
 - recentMonths: Detailed account of recent technical explorations and work
+  最近技术探索和工作的详细记录
 - earlierContext: Patterns from slightly older interactions still relevant
+  较早但仍相关的互动模式
 - longTermBackground: Unchanging foundational facts about the user
+  关于用户的不变基础事实
 
 **Multilingual Content**:
 - Preserve original language for proper nouns and company names
+  保留专有名词和公司名称的原始语言
 - Keep technical terms in their original form (DeepSeek, LangGraph, etc.)
+  保持技术术语的原始形式（DeepSeek、LangGraph 等）
 - Note language capabilities in personalContext
+  在 personalContext 中注明语言能力
 
 Output Format (JSON):
 {{
@@ -113,6 +140,9 @@ Important Rules:
 - IMPORTANT: Do NOT record file upload events in memory. Uploaded files are
   session-specific and ephemeral — they will not be accessible in future sessions.
   Recording upload events causes confusion in subsequent conversations.
+- CRITICAL: ALL memory content MUST be in Chinese (中文). Only keep proper nouns
+  and technical terms in their original form (e.g., DeepSeek, LangGraph, GitHub).
+  关键要求：所有记忆内容必须使用中文。只保留专有名词和技术术语的原始形式。
 
 Return ONLY valid JSON, no explanation or markdown."""
 

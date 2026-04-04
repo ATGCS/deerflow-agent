@@ -16,10 +16,23 @@ export async function render() {
         <p class="page-desc">创建复杂任务，AI 自动拆解并协调多 Agent 执行</p>
       </div>
       <div class="page-actions">
+        <button class="btn btn-secondary" id="btn-batch-select">批量选择</button>
         <button class="btn btn-primary" id="btn-new-task">新建任务</button>
         <button class="btn btn-secondary" id="btn-refresh">刷新</button>
       </div>
     </div>
+    
+    <!-- 批量操作工具栏 -->
+    <div class="batch-toolbar" id="batch-toolbar" style="display:none;margin-bottom:12px;padding:12px;background:var(--bg-card);border:1px solid var(--border-primary);border-radius:var(--radius-md);align-items:center;gap:12px;">
+      <span class="batch-count" id="batch-count" style="font-size:13px;color:var(--text-secondary)">已选择 0 项</span>
+      <div class="batch-actions" style="display:flex;gap:8px;">
+        <button class="btn btn-sm btn-primary" id="btn-batch-start">批量启动</button>
+        <button class="btn btn-sm btn-secondary" id="btn-batch-stop">批量暂停</button>
+        <button class="btn btn-sm btn-danger" id="btn-batch-delete">批量删除</button>
+        <button class="btn btn-sm btn-ghost" id="btn-batch-cancel">取消选择</button>
+      </div>
+    </div>
+    
     <div class="page-content">
       <div style="margin-bottom:12px;display:flex;gap:8px;align-items:center">
         <input class="form-input" id="tasks-search" placeholder="搜索任务名称 / 描述" style="max-width:360px">
@@ -29,8 +42,121 @@ export async function render() {
     </div>
   `
 
-  const state = { tasks: [], filter: '' }
+  const state = { 
+    tasks: [], 
+    filter: '',
+    batchMode: false,
+    selectedTasks: new Set()
+  }
   loadTasks(page, state)
+
+  // 页面初始化时绑定一次事件委托
+  attachTaskEvents(page, state)
+
+  // 批量选择按钮
+  page.querySelector('#btn-batch-select').addEventListener('click', () => {
+    state.batchMode = !state.batchMode
+    renderTasks(page, state)
+    if (!state.batchMode) {
+      state.selectedTasks.clear()
+      updateBatchToolbar(page, state)
+    }
+  })
+
+  // 批量启动
+  page.querySelector('#btn-batch-start').addEventListener('click', async () => {
+    if (state.selectedTasks.size === 0) {
+      toast('请先选择任务', 'warning')
+      return
+    }
+    
+    const yes = await showConfirm(`确定要启动选中的 ${state.selectedTasks.size} 个任务吗？`)
+    if (!yes) return
+    
+    try {
+      let successCount = 0
+      for (const taskId of state.selectedTasks) {
+        try {
+          await api.startTaskPlanning(taskId)
+          successCount++
+        } catch (e) {
+          console.error(`启动任务 ${taskId} 失败:`, e)
+        }
+      }
+      toast(`已成功启动 ${successCount} 个任务`, 'success')
+      state.selectedTasks.clear()
+      state.batchMode = false
+      await loadTasks(page, state)
+    } catch (e) {
+      toast('批量启动失败：' + e, 'error')
+    }
+  })
+
+  // 批量暂停
+  page.querySelector('#btn-batch-stop').addEventListener('click', async () => {
+    if (state.selectedTasks.size === 0) {
+      toast('请先选择任务', 'warning')
+      return
+    }
+    
+    const yes = await showConfirm(`确定要暂停选中的 ${state.selectedTasks.size} 个任务吗？`)
+    if (!yes) return
+    
+    try {
+      let successCount = 0
+      for (const taskId of state.selectedTasks) {
+        try {
+          await api.stopTaskExecution(taskId)
+          successCount++
+        } catch (e) {
+          console.error(`暂停任务 ${taskId} 失败:`, e)
+        }
+      }
+      toast(`已成功暂停 ${successCount} 个任务`, 'success')
+      state.selectedTasks.clear()
+      state.batchMode = false
+      await loadTasks(page, state)
+    } catch (e) {
+      toast('批量暂停失败：' + e, 'error')
+    }
+  })
+
+  // 批量删除
+  page.querySelector('#btn-batch-delete').addEventListener('click', async () => {
+    if (state.selectedTasks.size === 0) {
+      toast('请先选择任务', 'warning')
+      return
+    }
+    
+    const yes = await showConfirm(`确定要删除选中的 ${state.selectedTasks.size} 个任务吗？\n\n此操作将删除任务及其所有子任务，且不可恢复！`)
+    if (!yes) return
+    
+    try {
+      let successCount = 0
+      for (const taskId of state.selectedTasks) {
+        try {
+          await api.deleteTask(taskId)
+          successCount++
+        } catch (e) {
+          console.error(`删除任务 ${taskId} 失败:`, e)
+        }
+      }
+      toast(`已成功删除 ${successCount} 个任务`, 'success')
+      state.selectedTasks.clear()
+      state.batchMode = false
+      await loadTasks(page, state)
+    } catch (e) {
+      toast('批量删除失败：' + e, 'error')
+    }
+  })
+
+  // 取消选择
+  page.querySelector('#btn-batch-cancel').addEventListener('click', () => {
+    state.selectedTasks.clear()
+    state.batchMode = false
+    renderTasks(page, state)
+    updateBatchToolbar(page, state)
+  })
 
   page.querySelector('#btn-new-task').addEventListener('click', () => {
     showCreateTaskDialog(page, state)
@@ -71,9 +197,9 @@ async function loadTasks(page, state) {
     state.tasks = tasks || []
     renderTasks(page, state)
   } catch (e) {
-    container.innerHTML = `<div style="color:var(--error);padding:20px">加载失败: ${escapeHtml(String(e))}</div>`
+    container.innerHTML = `<div style="color:var(--error);padding:20px">加载失败：${escapeHtml(String(e))}</div>`
     if (countEl) countEl.textContent = '加载失败'
-    toast('加载任务列表失败: ' + e, 'error')
+    toast('加载任务列表失败：' + e, 'error')
   }
 }
 
@@ -91,6 +217,7 @@ function renderTasks(page, state) {
 
   if (!list.length) {
     container.innerHTML = '<div style="color:var(--text-tertiary);padding:40px;text-align:center"><p>暂无任务</p><p style="margin-top:8px;font-size:12px">点击「新建任务」创建一个复杂任务，AI 将自动拆解执行</p></div>'
+    updateBatchToolbar(page, state)
     return
   }
 
@@ -100,11 +227,16 @@ function renderTasks(page, state) {
     const completedCount = t.subtasks?.filter(s => s.status === 'completed').length || 0
     const progress = subtaskCount > 0 ? Math.round((completedCount / subtaskCount) * 100) : (t.progress || 0)
     const progressBar = progress > 0 ? `<div class="task-progress-bar"><div class="task-progress-fill" style="width:${progress}%"></div></div>` : ''
+    const isSelected = state.selectedTasks.has(t.id)
 
     return `
-      <div class="task-card" data-id="${t.id}">
+      <div class="task-card ${state.batchMode ? 'task-card-selectable' : ''}" data-id="${t.id}">
         <div class="task-card-header">
           <div class="task-card-title">
+            ${state.batchMode ? `<label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;margin-right:8px;">
+              <input type="checkbox" data-task-id="${t.id}" ${isSelected ? 'checked' : ''} 
+                onclick="event.stopPropagation();window.__handleBatchSelect(event,'${t.id}')">
+            </label>` : ''}
             <span class="task-name">${escapeHtml(t.name || '未命名')}</span>
             ${statusBadge}
           </div>
@@ -112,7 +244,7 @@ function renderTasks(page, state) {
         <div class="task-card-body">
           <p class="task-desc">${escapeHtml(t.description || '无描述')}</p>
           ${progressBar}
-          ${subtaskCount > 0 ? `<div class="task-subtask-info">子任务: ${completedCount}/${subtaskCount}</div>` : ''}
+          ${subtaskCount > 0 ? `<div class="task-subtask-info">子任务：${completedCount}/${subtaskCount}</div>` : ''}
         </div>
         <div class="task-card-footer">
           <button class="btn btn-sm btn-primary" data-action="open" data-id="${t.id}">查看详情</button>
@@ -123,6 +255,9 @@ function renderTasks(page, state) {
       </div>
     `
   }).join('')}</div>`
+
+  window.__currentTaskState = state
+  updateBatchToolbar(page, state)
 }
 
 function attachTaskEvents(page, state) {
@@ -167,7 +302,7 @@ function showCreateTaskDialog(page, state) {
         toast('任务已创建，Supervisor 正在分析并拆解...', 'success')
         await loadTasks(page, state)
       } catch (e) {
-        toast('创建失败: ' + e, 'error')
+        toast('创建失败：' + e, 'error')
       }
     }
   })
@@ -182,7 +317,7 @@ async function startTaskExecution(taskId) {
       window.dispatchEvent(new HashChangeEvent('hashchange'))
     }, 100)
   } catch (e) {
-    toast('启动失败: ' + e, 'error')
+    toast('启动失败：' + e, 'error')
   }
 }
 
@@ -192,7 +327,7 @@ async function stopTaskExecution(taskId) {
     toast('任务已暂停', 'info')
     await loadTasks(document.querySelector('.page'), { tasks: [], filter: '' })
   } catch (e) {
-    toast('暂停失败: ' + e, 'error')
+    toast('暂停失败：' + e, 'error')
   }
 }
 
@@ -205,7 +340,7 @@ async function deleteTask(page, state, taskId) {
     toast('已删除', 'success')
     await loadTasks(page, state)
   } catch (e) {
-    toast('删除失败: ' + e, 'error')
+    toast('删除失败：' + e, 'error')
   }
 }
 
@@ -228,4 +363,57 @@ function escapeHtml(value) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
+}
+
+// 更新批量工具栏状态
+function updateBatchToolbar(page, state) {
+  const toolbar = page.querySelector('#batch-toolbar')
+  const countEl = page.querySelector('#batch-count')
+  
+  if (!toolbar || !countEl) return
+  
+  const selectedCount = state.selectedTasks.size
+  
+  if (state.batchMode && selectedCount > 0) {
+    toolbar.style.display = 'flex'
+    countEl.textContent = `已选择 ${selectedCount} 项`
+  } else if (state.batchMode) {
+    toolbar.style.display = 'flex'
+    countEl.textContent = '未选择任何任务'
+  } else {
+    toolbar.style.display = 'none'
+  }
+  
+  // 更新按钮状态
+  const hasSelection = selectedCount > 0
+  page.querySelector('#btn-batch-start').disabled = !hasSelection
+  page.querySelector('#btn-batch-stop').disabled = !hasSelection
+  page.querySelector('#btn-batch-delete').disabled = !hasSelection
+}
+
+// 全局批量选择处理函数
+window.__handleBatchSelect = function(event, taskId) {
+  event.stopPropagation()
+  const page = document.querySelector('.page')
+  if (!page) return
+  
+  const checkbox = event.target
+  const isChecked = checkbox.checked
+  
+  // 获取当前渲染的任务列表状态
+  const taskCards = page.querySelectorAll('.task-card')
+  const selectedTaskIds = new Set()
+  taskCards.forEach(card => {
+    const cb = card.querySelector(`input[data-task-id="${card.dataset.id}"]`)
+    if (cb && cb.checked) {
+      selectedTaskIds.add(card.dataset.id)
+    }
+  })
+  
+  // 更新状态
+  const state = window.__currentTaskState || { selectedTasks: new Set(), batchMode: true }
+  state.selectedTasks = selectedTaskIds
+  window.__currentTaskState = state
+  
+  updateBatchToolbar(page, state)
 }

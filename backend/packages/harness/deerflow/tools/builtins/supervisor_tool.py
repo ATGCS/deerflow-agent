@@ -18,6 +18,8 @@ from deerflow.collab.storage import (
     load_task_memory_for_task_id,
     new_project_bundle_root_task,
 )
+from deerflow.config.agents_config import load_agent_config, list_all_agents
+from deerflow.config.paths import get_paths
 from deerflow.subagents import get_available_subagent_names
 
 logger = logging.getLogger(__name__)
@@ -634,4 +636,254 @@ Subtasks ({len(subtasks)}):
 
         return f"Error: Task '{task_id}' not found"
 
-    return f"Error: Unknown action '{action}'. Available actions: create_task, create_subtask, assign_subtask, update_progress, complete_subtask, start_execution, get_status, get_task_memory, list_subtasks"
+    elif action == "create_agent":
+        """Create a new agent configuration.
+        
+        Args:
+            agent_name: Unique identifier for the agent (required)
+            agent_type: Type of agent - 'custom', 'subagent', or 'acp' (default: 'subagent')
+            description: Agent description (optional)
+            model: Model to use (optional)
+            system_prompt: System prompt for subagents (required for subagent type)
+            tools: List of tool names (optional)
+            skills: List of skill names (optional)
+            disallowed_tools: List of disallowed tool names (optional)
+            max_turns: Maximum number of turns (default: 50)
+            timeout_seconds: Timeout in seconds (default: 900)
+        """
+        agent_name = runtime.context.get("agent_name") if runtime.context else None
+        if not agent_name:
+            agent_name = runtime.config.get("configurable", {}).get("agent_name")
+        
+        if not agent_name:
+            return "Error: agent_name is required for create_agent action (pass in context or configurable)"
+        
+        agent_type = runtime.context.get("agent_type", "subagent") if runtime.context else "subagent"
+        if not agent_type:
+            agent_type = runtime.config.get("configurable", {}).get("agent_type", "subagent")
+        
+        description = runtime.context.get("description", "") if runtime.context else ""
+        if not description:
+            description = runtime.config.get("configurable", {}).get("description", "")
+        
+        model = runtime.context.get("model") if runtime.context else None
+        if not model:
+            model = runtime.config.get("configurable", {}).get("model")
+        
+        system_prompt = runtime.context.get("system_prompt") if runtime.context else None
+        if not system_prompt:
+            system_prompt = runtime.config.get("configurable", {}).get("system_prompt")
+        
+        tools = runtime.context.get("tools") if runtime.context else None
+        if not tools:
+            tools = runtime.config.get("configurable", {}).get("tools")
+        
+        skills = runtime.context.get("skills") if runtime.context else None
+        if not skills:
+            skills = runtime.config.get("configurable", {}).get("skills")
+        
+        disallowed_tools = runtime.context.get("disallowed_tools") if runtime.context else None
+        if not disallowed_tools:
+            disallowed_tools = runtime.config.get("configurable", {}).get("disallowed_tools")
+        
+        max_turns = runtime.context.get("max_turns", 50) if runtime.context else 50
+        if not max_turns:
+            max_turns = runtime.config.get("configurable", {}).get("max_turns", 50)
+        
+        timeout_seconds = runtime.context.get("timeout_seconds", 900) if runtime.context else 900
+        if not timeout_seconds:
+            timeout_seconds = runtime.config.get("configurable", {}).get("timeout_seconds", 900)
+        
+        # Validate agent type
+        if agent_type not in ["custom", "subagent", "acp"]:
+            return f"Error: Invalid agent_type '{agent_type}'. Must be 'custom', 'subagent', or 'acp'"
+        
+        # Validate subagent requires system_prompt
+        if agent_type == "subagent" and not system_prompt:
+            return "Error: system_prompt is required for subagent type"
+        
+        # Check if agent already exists
+        try:
+            existing = load_agent_config(agent_name)
+            if existing:
+                return f"Error: Agent '{agent_name}' already exists"
+        except FileNotFoundError:
+            pass  # Expected - agent doesn't exist yet
+        
+        # Create agent directory and config file
+        import yaml
+        from pathlib import Path
+        
+        agents_dir = get_paths().agents_dir
+        agent_dir = agents_dir / agent_name
+        
+        try:
+            agent_dir.mkdir(parents=True, exist_ok=True)
+            
+            config_data = {
+                "name": agent_name,
+                "description": description,
+                "agent_type": agent_type,
+            }
+            
+            if model:
+                config_data["model"] = model
+            if system_prompt:
+                config_data["system_prompt"] = system_prompt
+            if tools:
+                config_data["tools"] = tools
+            if skills:
+                config_data["skills"] = skills
+            if disallowed_tools:
+                config_data["disallowed_tools"] = disallowed_tools
+            if max_turns != 50:
+                config_data["max_turns"] = max_turns
+            if timeout_seconds != 900:
+                config_data["timeout_seconds"] = timeout_seconds
+            
+            config_file = agent_dir / "config.yaml"
+            with open(config_file, "w", encoding="utf-8") as f:
+                yaml.dump(config_data, f, default_flow_style=False, allow_unicode=True)
+            
+            logger.info(f"Created agent '{agent_name}' ({agent_type}) at {agent_dir}")
+            return f"Agent '{agent_name}' created successfully at {agent_dir}"
+        
+        except Exception as e:
+            logger.error(f"Failed to create agent '{agent_name}': {e}", exc_info=True)
+            return f"Error: Failed to create agent '{agent_name}': {e}"
+
+    elif action == "update_agent":
+        """Update an existing agent configuration.
+        
+        Args:
+            agent_name: Name of the agent to update (required)
+            description: New description (optional)
+            model: New model (optional)
+            system_prompt: New system prompt (optional)
+            tools: New tool list (optional)
+            skills: New skill list (optional)
+            disallowed_tools: New disallowed tools list (optional)
+            max_turns: New max turns (optional)
+            timeout_seconds: New timeout (optional)
+        """
+        agent_name = runtime.context.get("agent_name") if runtime.context else None
+        if not agent_name:
+            agent_name = runtime.config.get("configurable", {}).get("agent_name")
+        
+        if not agent_name:
+            return "Error: agent_name is required for update_agent action"
+        
+        # Load existing agent config
+        try:
+            existing_cfg = load_agent_config(agent_name)
+            if not existing_cfg:
+                return f"Error: Agent '{agent_name}' not found"
+        except FileNotFoundError:
+            return f"Error: Agent '{agent_name}' not found"
+        
+        # Get update parameters
+        updates = {}
+        
+        description = runtime.context.get("description") if runtime.context else None
+        if description is not None:
+            updates["description"] = description
+        elif runtime.config.get("configurable", {}).get("description") is not None:
+            updates["description"] = runtime.config.get("configurable", {}).get("description")
+        
+        model = runtime.context.get("model") if runtime.context else None
+        if model is not None:
+            updates["model"] = model
+        elif runtime.config.get("configurable", {}).get("model") is not None:
+            updates["model"] = runtime.config.get("configurable", {}).get("model")
+        
+        system_prompt = runtime.context.get("system_prompt") if runtime.context else None
+        if system_prompt is not None:
+            updates["system_prompt"] = system_prompt
+        elif runtime.config.get("configurable", {}).get("system_prompt") is not None:
+            updates["system_prompt"] = runtime.config.get("configurable", {}).get("system_prompt")
+        
+        tools = runtime.context.get("tools") if runtime.context else None
+        if tools is not None:
+            updates["tools"] = tools
+        elif runtime.config.get("configurable", {}).get("tools") is not None:
+            updates["tools"] = runtime.config.get("configurable", {}).get("tools")
+        
+        skills = runtime.context.get("skills") if runtime.context else None
+        if skills is not None:
+            updates["skills"] = skills
+        elif runtime.config.get("configurable", {}).get("skills") is not None:
+            updates["skills"] = runtime.config.get("configurable", {}).get("skills")
+        
+        disallowed_tools = runtime.context.get("disallowed_tools") if runtime.context else None
+        if disallowed_tools is not None:
+            updates["disallowed_tools"] = disallowed_tools
+        elif runtime.config.get("configurable", {}).get("disallowed_tools") is not None:
+            updates["disallowed_tools"] = runtime.config.get("configurable", {}).get("disallowed_tools")
+        
+        max_turns = runtime.context.get("max_turns") if runtime.context else None
+        if max_turns is not None:
+            updates["max_turns"] = max_turns
+        elif runtime.config.get("configurable", {}).get("max_turns") is not None:
+            updates["max_turns"] = runtime.config.get("configurable", {}).get("max_turns")
+        
+        timeout_seconds = runtime.context.get("timeout_seconds") if runtime.context else None
+        if timeout_seconds is not None:
+            updates["timeout_seconds"] = timeout_seconds
+        elif runtime.config.get("configurable", {}).get("timeout_seconds") is not None:
+            updates["timeout_seconds"] = runtime.config.get("configurable", {}).get("timeout_seconds")
+        
+        if not updates:
+            return "Error: No update parameters provided"
+        
+        # Update config file
+        import yaml
+        from pathlib import Path
+        
+        agents_dir = get_paths().agents_dir
+        agent_dir = agents_dir / agent_name
+        config_file = agent_dir / "config.yaml"
+        
+        try:
+            # Read existing config
+            with open(config_file, "r", encoding="utf-8") as f:
+                config_data = yaml.safe_load(f) or {}
+            
+            # Apply updates
+            config_data.update(updates)
+            
+            # Write back
+            with open(config_file, "w", encoding="utf-8") as f:
+                yaml.dump(config_data, f, default_flow_style=False, allow_unicode=True)
+            
+            logger.info(f"Updated agent '{agent_name}' with: {list(updates.keys())}")
+            return f"Agent '{agent_name}' updated successfully. Updated fields: {', '.join(updates.keys())}"
+        
+        except Exception as e:
+            logger.error(f"Failed to update agent '{agent_name}': {e}", exc_info=True)
+            return f"Error: Failed to update agent '{agent_name}': {e}"
+
+    elif action == "list_agents":
+        """List all available agents.
+        
+        Returns:
+            List of agents with their types and descriptions
+        """
+        try:
+            agents = list_all_agents()
+            if not agents:
+                return "No agents found"
+            
+            agent_lines = []
+            for agent in agents:
+                agent_type = agent.agent_type
+                model = agent.model or "default"
+                desc = agent.description or "No description"
+                agent_lines.append(f"  - {agent.name} ({agent_type}) | Model: {model} | {desc}")
+            
+            return f"Available agents ({len(agents)}):\n" + "\n".join(agent_lines)
+        
+        except Exception as e:
+            logger.error(f"Failed to list agents: {e}", exc_info=True)
+            return f"Error: Failed to list agents: {e}"
+
+    return f"Error: Unknown action '{action}'. Available actions: create_task, create_subtask, assign_subtask, update_progress, complete_subtask, start_execution, get_status, get_task_memory, list_subtasks, create_agent, update_agent, list_agents"

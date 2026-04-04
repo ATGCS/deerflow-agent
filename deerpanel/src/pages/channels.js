@@ -12,40 +12,96 @@ function esc(str) {
 
 let _loadSeq = 0
 
-export async function render() {
-  const page = document.createElement('div')
-  page.className = 'page'
-
-  page.innerHTML = `
+function channelsShellHtml(settingsModal) {
+  if (settingsModal) {
+    return `
+      <div class="settings-modal-pane-toolbar settings-modal-pane-toolbar--channels">
+        <div class="channels-toolbar-meta">
+          <span class="channels-toolbar-title">渠道状态</span>
+          <span class="channels-toolbar-hint">飞书 / Slack / Telegram 等</span>
+        </div>
+        <button type="button" class="btn btn-sm btn-secondary" id="btn-reload">刷新</button>
+      </div>
+      <div class="settings-modal-pane-body settings-modal-pane-body--channels">
+        <div id="channels-loading" class="settings-modal-pane-loading" role="status"><span>加载渠道状态…</span></div>
+        <div id="channels-content" class="settings-modal-pane-fill channels-page-inner" hidden></div>
+        <div id="channels-error" class="settings-modal-pane-fill settings-modal-pane-error" hidden></div>
+      </div>
+    `
+  }
+  return `
     <div class="page-header">
       <div>
         <h1 class="page-title">消息渠道</h1>
-        <p class="page-desc">管理 DeerFlaw 多渠道接入（飞书、Slack、Telegram）</p>
+        <p class="page-desc">管理 DeerFlaw 多渠道接入（飞书、Slack、Telegram 等）</p>
       </div>
       <div class="page-actions">
-        <button class="btn btn-sm btn-secondary" id="btn-reload">刷新</button>
+        <button type="button" class="btn btn-secondary btn-sm" id="btn-reload">刷新</button>
       </div>
     </div>
-    <div class="page-content">
-      <div id="channels-loading" style="padding:40px;text-align:center;color:var(--text-tertiary)">加载中...</div>
-      <div id="channels-content" style="display:none"></div>
-      <div id="channels-error" style="display:none;padding:40px;text-align:center;color:var(--error)"></div>
+    <div class="page-content channels-page">
+      <div id="channels-loading" class="channels-phase-loading" role="status">加载渠道状态…</div>
+      <div id="channels-content" class="channels-page-inner" style="display:none"></div>
+      <div id="channels-error" class="channels-phase-error" style="display:none"></div>
     </div>
   `
+}
 
+function setChannelsPhase(page, phase) {
+  const loadingEl = page.querySelector('#channels-loading')
+  const contentEl = page.querySelector('#channels-content')
+  const errorEl = page.querySelector('#channels-error')
+  const modal = !!page.querySelector('.settings-modal-pane-body--channels')
+  if (modal) {
+    if (phase === 'loading') {
+      loadingEl?.removeAttribute('hidden')
+      contentEl?.setAttribute('hidden', '')
+      errorEl?.setAttribute('hidden', '')
+    } else if (phase === 'content') {
+      loadingEl?.setAttribute('hidden', '')
+      contentEl?.removeAttribute('hidden')
+      errorEl?.setAttribute('hidden', '')
+    } else if (phase === 'error') {
+      loadingEl?.setAttribute('hidden', '')
+      contentEl?.setAttribute('hidden', '')
+      errorEl?.removeAttribute('hidden')
+    }
+    return
+  }
+  if (loadingEl) loadingEl.style.display = phase === 'loading' ? 'block' : 'none'
+  if (contentEl) contentEl.style.display = phase === 'content' ? 'block' : 'none'
+  if (errorEl) errorEl.style.display = phase === 'error' ? 'block' : 'none'
+}
+
+/**
+ * @param {boolean} settingsModal
+ */
+export function createChannelsRoot(settingsModal) {
+  const root = document.createElement('div')
+  root.className = settingsModal ? 'settings-modal-pane settings-modal-pane--channels' : 'page channels-page'
+  root.innerHTML = channelsShellHtml(settingsModal)
+  return root
+}
+
+export async function render() {
+  const page = createChannelsRoot(false)
   bindEvents(page)
   loadChannels(page)
   return page
 }
 
+/** 设置弹窗：固定高度内容区 + 覆盖式加载，避免切换 Tab 时布局塌缩 */
+export function mountChannelsForSettingsModal(container) {
+  const root = createChannelsRoot(true)
+  container.replaceChildren(root)
+  bindEvents(root)
+  loadChannels(root)
+}
+
 async function loadChannels(page) {
-  const loadingEl = page.querySelector('#channels-loading')
-  const contentEl = page.querySelector('#channels-content')
   const errorEl = page.querySelector('#channels-error')
 
-  loadingEl.style.display = 'block'
-  contentEl.style.display = 'none'
-  errorEl.style.display = 'none'
+  setChannelsPhase(page, 'loading')
 
   const seq = ++_loadSeq
 
@@ -53,14 +109,12 @@ async function loadChannels(page) {
     const data = await api.getChannelsStatus()
     if (seq !== _loadSeq) return
 
-    loadingEl.style.display = 'none'
-    contentEl.style.display = 'block'
+    setChannelsPhase(page, 'content')
     renderChannels(page, data)
   } catch (e) {
     if (seq !== _loadSeq) return
-    loadingEl.style.display = 'none'
-    errorEl.textContent = '加载失败: ' + e
-    errorEl.style.display = 'block'
+    setChannelsPhase(page, 'error')
+    if (errorEl) errorEl.textContent = '加载失败: ' + e
     toast('加载渠道状态失败: ' + e, 'error')
   }
 }
@@ -74,31 +128,37 @@ function renderChannels(page, data) {
   const runningCount = channelList.filter(([, c]) => c.running).length
   const enabledCount = channelList.filter(([, c]) => c.enabled).length
 
+  const svcClass = serviceRunning ? 'is-up' : 'is-down'
   let html = `
-    <div style="margin-bottom:var(--space-lg)">
-      <div style="display:flex;align-items:center;gap:var(--space-sm);margin-bottom:var(--space-md)">
-        <span style="font-weight:500">渠道服务:</span>
-        <span style="color:${serviceRunning ? 'var(--success)' : 'var(--error)'}">${serviceRunning ? '● 运行中' : '○ 未运行'}</span>
+    <section class="channels-summary" aria-label="渠道服务概览">
+      <div class="channels-summary-main">
+        <span class="channels-summary-label">渠道服务</span>
+        <span class="channels-summary-service ${svcClass}">
+          <span class="channels-status-dot" aria-hidden="true"></span>
+          ${serviceRunning ? '运行中' : '未运行'}
+        </span>
       </div>
-      <div style="color:var(--text-secondary);font-size:var(--font-size-sm)">
-        共 ${channelList.length} 个渠道: ${enabledCount} 已启用 / ${runningCount} 运行中
-      </div>
-    </div>
+      <p class="channels-summary-meta">
+        共 <strong>${channelList.length}</strong> 个渠道 ·
+        <span class="channels-stat-on">${enabledCount} 已启用</span>
+        ·
+        <span class="channels-stat-run">${runningCount} 进程运行中</span>
+      </p>
+    </section>
   `
 
   if (!channelList.length) {
     html += `
-      <div style="padding:40px;text-align:center;color:var(--text-tertiary)">
-        暂无渠道配置。请在 config.yaml 中配置 channels。
+      <div class="channels-empty">
+        <p class="channels-empty-title">暂无渠道</p>
+        <p class="channels-empty-desc">请在配置文件的 <code>channels</code> 段添加渠道后刷新本页。</p>
       </div>
     `
     contentEl.innerHTML = html
     return
   }
 
-  html += `
-    <div style="display:flex;flex-direction:column;gap:var(--space-md)">
-  `
+  html += `<div class="channels-grid" role="list">`
 
   const channelIcons = {
     feishu: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M8 12h8M12 8v8"/></svg>',
@@ -118,31 +178,34 @@ function renderChannels(page, data) {
     const enabled = status.enabled
     const running = status.running
 
+    const runClass = running ? 'channels-runtime--on' : 'channels-runtime--off'
     html += `
-      <div style="background:var(--bg-tertiary);border:1px solid var(--border);border-radius:var(--radius-md);padding:var(--space-md)">
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:var(--space-md)">
-          <div style="display:flex;align-items:center;gap:var(--space-sm)">
-            <span style="color:var(--text-secondary)">${icon}</span>
-            <div>
-              <div style="font-weight:500">${esc(label)}</div>
-              <div style="font-size:var(--font-size-xs);color:var(--text-tertiary)">${esc(name)}</div>
+      <article class="channels-card" role="listitem">
+        <div class="channels-card-head">
+          <div class="channels-card-brand">
+            <div class="channels-card-icon" aria-hidden="true">${icon}</div>
+            <div class="channels-card-titles">
+              <div class="channels-card-name">${esc(label)}</div>
+              <div class="channels-card-id"><code>${esc(name)}</code></div>
             </div>
           </div>
-          <div style="display:flex;align-items:center;gap:var(--space-sm)">
-            <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
-              <input type="checkbox" class="channel-toggle" data-channel="${esc(name)}" ${enabled ? 'checked' : ''}>
-              <span style="font-size:var(--font-size-sm);color:${enabled ? 'var(--success)' : 'var(--text-tertiary)'}">${enabled ? '启用' : '禁用'}</span>
-            </label>
+          <label class="channels-enable">
+            <input type="checkbox" class="channel-toggle channels-enable-input" data-channel="${esc(name)}" ${enabled ? 'checked' : ''}>
+            <span class="channels-enable-track" aria-hidden="true"></span>
+            <span class="channels-toggle-label ${enabled ? 'is-on' : ''}">${enabled ? '已启用' : '已禁用'}</span>
+          </label>
+        </div>
+        <div class="channels-card-foot">
+          <span class="channels-runtime ${runClass}">
+            <span class="channels-status-dot" aria-hidden="true"></span>
+            ${running ? '运行中' : '已停止'}
+          </span>
+          <div class="channels-card-btns">
+            <button type="button" class="btn btn-sm btn-secondary" data-action="restart" data-channel="${esc(name)}" ${!running ? '' : 'disabled'}>重启</button>
+            <button type="button" class="btn btn-sm btn-secondary" data-action="config" data-channel="${esc(name)}">配置</button>
           </div>
         </div>
-        <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:var(--space-sm)">
-          <span style="font-size:var(--font-size-xs)">
-            状态: <span style="color:${running ? 'var(--success)' : 'var(--text-tertiary)'}">${running ? '● 运行中' : '○ 已停止'}</span>
-          </span>
-          <button class="btn btn-xs btn-secondary" data-action="restart" data-channel="${esc(name)}" ${!running ? '' : 'disabled'} style="padding:2px 8px;font-size:11px">重启</button>
-          <button class="btn btn-xs btn-secondary" data-action="config" data-channel="${esc(name)}" style="padding:2px 8px;font-size:11px">配置</button>
-        </div>
-      </div>
+      </article>
     `
   }
 
@@ -154,16 +217,16 @@ function renderChannels(page, data) {
     checkbox.onchange = async () => {
       const name = checkbox.dataset.channel
       const enabled = checkbox.checked
-      const label = checkbox.nextElementSibling
+      const label = checkbox.closest('.channels-enable')?.querySelector('.channels-toggle-label')
 
       try {
         const result = await api.enableChannel(name, enabled)
         if (result.success) {
           toast(`渠道 ${name} 已${enabled ? '启用' : '禁用'}`, 'success')
-          // 更新 UI
-          label.textContent = enabled ? '启用' : '禁用'
-          label.style.color = enabled ? 'var(--success)' : 'var(--text-tertiary)'
-          // 更新状态
+          if (label) {
+            label.textContent = enabled ? '已启用' : '已禁用'
+            label.classList.toggle('is-on', enabled)
+          }
           loadChannels(page)
         } else {
           toast(result.message || '操作失败', 'error')

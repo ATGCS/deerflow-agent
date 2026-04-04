@@ -1,0 +1,14 @@
+﻿node : D:\github\deerflaw\deerpanel\src\locales\modules\chat-debug.js:6
+所在位置 C:\Users\jingyt_ebiz\AppData\Local\Temp\ps-script-eb0b3666-aef5-48c7-bd3f-37681c6f2b98.ps1:115 字符: 1
++ node --check D:\github\deerflaw\deerpanel\src\locales\modules\chat-de ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (D:\github\deerf...chat-debug.js:6:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  sectionAppState: _('搴旂敤鐘讹拷?, 'App State', '鎳夌敤鐙€锟?),
+                     ^^^^^^^^^
+
+SyntaxError: missing ) after argument list
+    at checkSyntax (node:internal/main/check_syntax:74:5)
+
+Node.js v22.22.2

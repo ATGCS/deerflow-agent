@@ -14,7 +14,10 @@ import { MessageVirtualList } from './components/MessageVirtualList.js'
 import { ChatComposer } from './components/ChatComposer.js'
 import { ThreadPanel } from './components/ThreadPanel.js'
 import { HostedAgentPanel } from './components/HostedAgentPanel.js'
+import { TaskSidebar } from './components/TaskSidebar.js'
+import { RunManager } from './components/RunManager.js'
 import { toast } from '../components/toast.js'
+import { openMobileShellAside, toggleShellAsideCollapsed } from '../components/shell-aside.js'
 import { useHostedAgent } from './hooks/useHostedAgent.js'
 import { getBackendBaseURL } from '../lib/tauri-api.js'
 import type {
@@ -130,6 +133,25 @@ function formatSessionTime(ts: number) {
   if (diffMs < 86400000) return Math.floor(diffMs / 3600000) + ' 小时前'
   if (diffMs < 604800000) return Math.floor(diffMs / 86400000) + ' 天前'
   return `${(d.getMonth() + 1).toString().padStart(2, '0')}-${d.getDate().toString().padStart(2, '0')}`
+}
+
+function getSessionMessageCount(s: ChatSessionRow): number {
+  if (typeof s.messageCount === 'number') return s.messageCount
+  if (typeof s.messages === 'number') return s.messages
+  return 0
+}
+
+function formatSessionRecordMeta(
+  s: ChatSessionRow,
+  opts: { isSelectedStreaming: boolean },
+): string {
+  const n = getSessionMessageCount(s)
+  const ts = s.updatedAt ?? s.lastActivity ?? s.createdAt ?? 0
+  const timeStr = ts ? formatSessionTime(ts) : ''
+  let status = '已完成'
+  if (opts.isSelectedStreaming) status = '进行中'
+  else if (!n) status = '草稿'
+  return timeStr ? `${timeStr} · ${status}` : status
 }
 
 function safeWriteSessionMetaMap(map: Record<string, any>) {
@@ -268,7 +290,9 @@ export default function ChatApp() {
   const [collabOn, setCollabOn] = useState<boolean>(() => getSessionCollabModeFromMeta(selectedSessionKey))
   const [modeMenuOpen, setModeMenuOpen] = useState(false)
   const [collabBusy, setCollabBusy] = useState(false)
-  const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [taskSidebarOpen, setTaskSidebarOpen] = useState(false)
+  const [runManagerOpen, setRunManagerOpen] = useState(false)
+  const [hasReceivedTodos, setHasReceivedTodos] = useState(false)
   const [streamTick, bumpStream] = useReducer((x: number) => x + 1, 0)
   const rafRef = useRef<number | null>(null)
   const seenRunIdsRef = useRef(new Set<string>())
@@ -296,6 +320,20 @@ export default function ChatApp() {
   const bottomAgentRootRef = useRef<HTMLDivElement | null>(null)
   const bottomCreativeRootRef = useRef<HTMLDivElement | null>(null)
   const newAgentNameInputRef = useRef<HTMLInputElement | null>(null)
+  const [sessionFilter, setSessionFilter] = useState('')
+
+  /** 从 MCP/技能等页点侧栏任务记录进入聊天时，shell-aside 写入待选会话 */
+  useEffect(() => {
+    try {
+      const pending = sessionStorage.getItem('deerpanel_pending_shell_session')
+      if (pending) {
+        sessionStorage.removeItem('deerpanel_pending_shell_session')
+        setSelectedSessionKey(pending)
+      }
+    } catch {
+      /* ignore */
+    }
+  }, [])
 
   useEffect(() => {
     sessionRef.current = selectedSessionKey
@@ -347,12 +385,6 @@ export default function ChatApp() {
     document.addEventListener('mousedown', onDown)
     return () => document.removeEventListener('mousedown', onDown)
   }, [moreMenuKey])
-
-  useEffect(() => {
-    if (sidebarOpen) return
-    setMoreMenuKey(null)
-    setPendingRefreshKey(null)
-  }, [sidebarOpen])
 
   // 底部下拉（模型/智能体）：点击空白处关闭
   useEffect(() => {
@@ -445,6 +477,12 @@ export default function ChatApp() {
     })
     return sorted
   }, [sessions, sessionNamesTick])  // 添加 sessionNamesTick 依赖，名称更新时重新排序
+
+  const filteredSessions = useMemo(() => {
+    const q = sessionFilter.trim().toLowerCase()
+    if (!q) return sortedSessions
+    return sortedSessions.filter((s) => getDisplayLabel(s.sessionKey).toLowerCase().includes(q))
+  }, [sortedSessions, sessionFilter, sessionNamesTick])
 
   async function getApi() {
     if (apiRef.current) return apiRef.current
@@ -720,10 +758,29 @@ export default function ChatApp() {
   }, [])
 
   useEffect(() => {
-    // 切换会话时彻底重置流式状态
+    // 切换会话时彻底重置流式状态并停止之前的请求
+    const prevSessionKey = sessionRef.current
+    if (prevSessionKey && prevSessionKey !== selectedSessionKey) {
+      // 1. 停止旧会话的流式请求（前端）
+      const api = apiRef.current
+      if (api) {
+        api.chatAbort(prevSessionKey).catch(() => {
+          // 忽略错误，可能请求已经结束了
+        })
+      }
+      
+      // 2. 取消所有全局运行（释放后端 worker 资源，避免新会话被旧任务阻塞）
+      import('../lib/ws-client.js').then(({ wsClient }) => {
+        wsClient.cancelAllGlobalRunsBestEffort().catch(() => {
+          // 忽略错误
+        })
+      })
+    }
+    
     streamRef.current = emptyStream()
     seenRunIdsRef.current = new Set()
     setThreadPanelState(emptyThreadPanel())
+    setHasReceivedTodos(false)  // 重置 todos 接收标志
     // 清除新会话的活跃时间，让它立即过期
     delete lastActivityRef.current[selectedSessionKey]
     setSessionMode(getSessionModeFromMeta(selectedSessionKey))
@@ -758,9 +815,17 @@ export default function ChatApp() {
         
         const prevTitle = threadPanelState.title
         const newTitle = typeof p.title === 'string' && p.title.trim() ? p.title.trim() : null
+        const newTodos = Array.isArray(p.todos) ? p.todos : []
+        
+        // 自动打开任务侧边栏：当首次收到 todos 且不为空时
+        if (newTodos.length > 0 && !hasReceivedTodos) {
+          setHasReceivedTodos(true)
+          setTaskSidebarOpen(true)
+        }
+        
         setThreadPanelState({
           title: newTitle,
-          todos: Array.isArray(p.todos) ? p.todos : [],
+          todos: newTodos,
           activityKind: String(p.activityKind || 'idle'),
           activityDetail: String(p.activityDetail || ''),
           reasoningPreview: typeof p.reasoningPreview === 'string' ? p.reasoningPreview : null,
@@ -1005,6 +1070,47 @@ export default function ChatApp() {
     streamRef.current.segments?.length ||
     streamRef.current.tools?.length
   )
+  const hasTodos = Array.isArray(threadPanelState.todos) && threadPanelState.todos.length > 0
+
+  const shellSyncPayload = useMemo(() => {
+    const rows = filteredSessions.map((s) => {
+      const mode = getSessionModeFromMeta(s.sessionKey)
+      const modePill = mode === 'pro' ? null : modeLabel(mode)
+      return {
+        sessionKey: s.sessionKey,
+        title: getDisplayLabel(s.sessionKey),
+        meta: formatSessionRecordMeta(s, {
+          isSelectedStreaming: selectedSessionKey === s.sessionKey && (streaming || isSending),
+        }),
+        active: selectedSessionKey === s.sessionKey,
+        modePill,
+        canDelete: s.sessionKey !== CHAT_MAIN_SESSION_KEY,
+      }
+    })
+    return {
+      listLoading,
+      sessionFilter,
+      moreMenuKey,
+      newTaskActive: selectedSessionKey.includes(':new-'),
+      rows,
+    }
+  }, [
+    filteredSessions,
+    listLoading,
+    sessionFilter,
+    moreMenuKey,
+    selectedSessionKey,
+    streaming,
+    isSending,
+    sessionNamesTick,
+  ])
+
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent('deerpanel:chat-sidebar-sync', { detail: shellSyncPayload }))
+    return () => {
+      window.dispatchEvent(new CustomEvent('deerpanel:chat-sidebar-sync', { detail: null }))
+    }
+  }, [shellSyncPayload])
 
   // 底部操作区不依赖对话中是否已出现用户/助手消息：保持“创意”按钮常驻
 
@@ -1063,8 +1169,7 @@ export default function ChatApp() {
         updatedAt: Date.now(),
         lastActivity: Date.now(),
         messageCount: 0,
-        messages: [],
-      } as ChatSessionRow,
+      },
       ...prev,
     ])
   }
@@ -1086,146 +1191,97 @@ export default function ChatApp() {
     }
   }
 
+  useEffect(() => {
+    const onSelect = (ev: Event) => {
+      const k = (ev as CustomEvent<{ sessionKey?: string }>).detail?.sessionKey
+      if (k) setSelectedSessionKey(k)
+    }
+    const onNew = () => {
+      void handleNewSession()
+    }
+    const onFilter = (ev: Event) => {
+      const v = (ev as CustomEvent<{ value?: string }>).detail?.value
+      if (typeof v === 'string') setSessionFilter(v)
+    }
+    const onDelete = (ev: Event) => {
+      const k = (ev as CustomEvent<{ sessionKey?: string }>).detail?.sessionKey
+      if (k) void handleDeleteSession(k)
+    }
+    const onRefresh = (ev: Event) => {
+      const k = (ev as CustomEvent<{ sessionKey?: string }>).detail?.sessionKey
+      if (!k) return
+      setMoreMenuKey(null)
+      setPendingRefreshKey(k)
+      setSelectedSessionKey((cur) => (cur !== k ? k : cur))
+    }
+    const onMoreToggle = (ev: Event) => {
+      const k = (ev as CustomEvent<{ sessionKey?: string }>).detail?.sessionKey
+      if (!k) return
+      setMoreMenuKey((cur) => (cur === k ? null : k))
+    }
+    window.addEventListener('deerpanel:shell-select-session', onSelect as EventListener)
+    window.addEventListener('deerpanel:shell-new-session', onNew)
+    window.addEventListener('deerpanel:shell-session-filter', onFilter as EventListener)
+    window.addEventListener('deerpanel:shell-delete-session', onDelete as EventListener)
+    window.addEventListener('deerpanel:shell-refresh-session', onRefresh as EventListener)
+    window.addEventListener('deerpanel:shell-more-toggle', onMoreToggle as EventListener)
+    return () => {
+      window.removeEventListener('deerpanel:shell-select-session', onSelect as EventListener)
+      window.removeEventListener('deerpanel:shell-new-session', onNew)
+      window.removeEventListener('deerpanel:shell-session-filter', onFilter as EventListener)
+      window.removeEventListener('deerpanel:shell-delete-session', onDelete as EventListener)
+      window.removeEventListener('deerpanel:shell-refresh-session', onRefresh as EventListener)
+      window.removeEventListener('deerpanel:shell-more-toggle', onMoreToggle as EventListener)
+    }
+  }, [handleNewSession, handleDeleteSession])
+
   return (
     <div className="chat-react-full">
-      <div className="react-chat-workspace">
-        <aside
-          className={`react-chat-session-aside${sidebarOpen ? '' : ' collapsed'}`}
-          aria-label="会话列表"
-          aria-hidden={!sidebarOpen}
-        >
-          <div className="react-chat-aside-head">
-            <span className="react-chat-aside-head-title">会话列表</span>
-            <div className="react-chat-aside-head-actions">
-              <button
-                type="button"
-                className="react-chat-aside-icon-btn"
-                title="折叠/展开会话列表"
-                onClick={() => setSidebarOpen((v) => !v)}
-              >
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
-                  <line x1="3" y1="6" x2="21" y2="6" />
-                  <line x1="3" y1="12" x2="21" y2="12" />
-                  <line x1="3" y1="18" x2="21" y2="18" />
-                </svg>
-              </button>
-              <button
-                type="button"
-                className="react-chat-aside-icon-btn"
-                title="新建会话"
-                onClick={() => void handleNewSession()}
-              >
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
-                  <line x1="12" y1="5" x2="12" y2="19" />
-                  <line x1="5" y1="12" x2="19" y2="12" />
-                </svg>
-              </button>
-            </div>
-          </div>
-          {listLoading && <div className="react-chat-muted">加载会话…</div>}
-          <ul className="react-chat-session-list">
-            {sortedSessions.map((s) => (
-              <li key={s.sessionKey}>
-                <div
-                  role="button"
-                  tabIndex={0}
-                  className={`react-chat-session-card${selectedSessionKey === s.sessionKey ? ' active' : ''}`}
-                  onClick={() => setSelectedSessionKey(s.sessionKey)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') setSelectedSessionKey(s.sessionKey)
-                  }}
-                >
-                  <div className="react-chat-session-card-header">
-                    <span className="react-chat-session-key" title={getDisplayLabel(s.sessionKey)}>
-                      {getDisplayLabel(s.sessionKey)}
-                    </span>
-                    <div data-session-more-root className="react-chat-session-more-wrap">
-                      <button
-                        type="button"
-                        className="react-chat-session-more-btn"
-                        title="更多操作"
-                        aria-haspopup="menu"
-                        aria-expanded={moreMenuKey === s.sessionKey}
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          setMoreMenuKey((cur) => (cur === s.sessionKey ? null : s.sessionKey))
-                        }}
-                      >
-                        ...
-                      </button>
-                      {moreMenuKey === s.sessionKey ? (
-                        <div className="react-chat-session-more-menu" role="menu">
-                          {s.sessionKey !== CHAT_MAIN_SESSION_KEY ? (
-                            <button
-                              type="button"
-                              className="react-chat-session-more-item react-chat-session-more-item--danger"
-                              role="menuitem"
-                              onClick={async (e) => {
-                                e.stopPropagation()
-                                setMoreMenuKey(null)
-                                void handleDeleteSession(s.sessionKey)
-                              }}
-                            >
-                              删除会话
-                            </button>
-                          ) : null}
-                          <button
-                            type="button"
-                            className="react-chat-session-more-item"
-                            role="menuitem"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              setMoreMenuKey(null)
-                              setPendingRefreshKey(s.sessionKey)
-                              if (selectedSessionKey !== s.sessionKey) setSelectedSessionKey(s.sessionKey)
-                            }}
-                          >
-                            刷新
-                          </button>
-                        </div>
-                      ) : null}
-                    </div>
-                  </div>
-                  <div className="react-chat-session-card-meta">
-                    {(() => {
-                      const mode = getSessionModeFromMeta(s.sessionKey)
-                      const modeText = modeLabel(mode)
-                      return <span className="react-chat-session-tag">{modeText}</span>
-                    })()}
-                    {(() => {
-                      const agentId = parseSessionAgent(s.sessionKey)
-                      if (!agentId || agentId === 'main') return null
-                      return <span className="react-chat-session-tag">{agentId}</span>
-                    })()}
-                    {(() => {
-                      const msgCount = s.messageCount ?? s.messages ?? 0
-                      if (!msgCount) return null
-                      return <span>{msgCount} 条消息</span>
-                    })()}
-                    {(() => {
-                      const ts = s.updatedAt ?? s.lastActivity ?? s.createdAt ?? 0
-                      const t = ts ? formatSessionTime(ts) : ''
-                      return t ? <span>{t}</span> : null
-                    })()}
-                  </div>
-                </div>
-              </li>
-            ))}
-          </ul>
-        </aside>
+      <div className="react-chat-workspace react-chat-workspace--no-aside">
         <div className="chat-main react-chat-main-col">
           <header className="react-chat-header">
             <div className="react-chat-header-left">
               <button
                 type="button"
                 className="react-chat-toggle-sidebar-btn"
-                title="会话列表"
-                onClick={() => setSidebarOpen((v) => !v)}
+                title="主导航"
+                onClick={() => {
+                  if (typeof window !== 'undefined' && window.matchMedia('(max-width: 768px)').matches) {
+                    openMobileShellAside()
+                  } else {
+                    toggleShellAsideCollapsed()
+                  }
+                }}
               >
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
                   <line x1="3" y1="6" x2="21" y2="6" />
                   <line x1="3" y1="12" x2="21" y2="12" />
                   <line x1="3" y1="18" x2="21" y2="18" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                className="react-chat-toggle-sidebar-btn"
+                title="任务进度"
+                onClick={() => setTaskSidebarOpen((v) => !v)}
+                disabled={!hasTodos && !threadPanelState.title}
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
+                  <path d="M9 11l3 3L22 4" />
+                  <path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                className="react-chat-toggle-sidebar-btn"
+                title="任务管理器"
+                onClick={() => setRunManagerOpen((v) => !v)}
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
+                  <rect x="3" y="3" width="18" height="18" rx="2" />
+                  <path d="M9 9h6" />
+                  <path d="M9 13h6" />
+                  <path d="M9 17h6" />
                 </svg>
               </button>
               <span className="react-chat-header-title">实时聊天</span>
@@ -1266,6 +1322,15 @@ export default function ChatApp() {
             </div>
           ) : null}
           <ThreadPanel state={threadPanelState} sessionKey={selectedSessionKey} />
+          <TaskSidebar
+            state={threadPanelState}
+            isOpen={taskSidebarOpen}
+            onClose={() => setTaskSidebarOpen(false)}
+          />
+          <RunManager
+            isOpen={runManagerOpen}
+            onClose={() => setRunManagerOpen(false)}
+          />
           <HostedAgentPanel
             panelOpen={hosted.hosted.panelOpen}
             setPanelOpen={hosted.hosted.setPanelOpen}

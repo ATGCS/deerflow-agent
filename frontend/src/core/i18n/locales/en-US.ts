@@ -47,6 +47,23 @@ export const enUS: Translations = {
     exportAsMarkdown: "Export as Markdown",
     exportAsJSON: "Export as JSON",
     exportSuccess: "Conversation exported",
+    // Task statuses
+    taskStatus: {
+      pending: "Pending",
+      planning: "Planning",
+      planned: "Planned",
+      executing: "Executing",
+      paused: "Paused",
+      completed: "Completed",
+      failed: "Failed",
+      cancelled: "Cancelled",
+    },
+    // Subtask statuses
+    subtaskStatus: {
+      in_progress: "In Progress",
+      completed: "Completed",
+      failed: "Failed",
+    },
   },
 
   // Welcome

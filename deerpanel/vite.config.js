@@ -46,10 +46,15 @@ export default defineConfig({
     port: 1420,
     strictPort: true,
     proxy: {
-      '/api': {
-        target: process.env.DEERFLOW_GATEWAY_URL || 'http://localhost:2026',
+      '/api/langgraph': {
+        target: 'http://localhost:2024',
         changeOrigin: true,
-        // 避免 dev 代理对长连接 / SSE 过早超时（runs/stream 等）
+        timeout: 600000,
+        proxyTimeout: 600000,
+      },
+      '/api': {
+        target: process.env.DEERFLOW_GATEWAY_URL || 'http://localhost:8012',
+        changeOrigin: true,
         timeout: 600000,
         proxyTimeout: 600000,
       },

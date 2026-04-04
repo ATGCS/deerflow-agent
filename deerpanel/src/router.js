@@ -8,7 +8,7 @@ let _loadId = 0
 let _currentCleanup = null
 let _initialized = false
 
-let _defaultRoute = '/dashboard'
+let _defaultRoute = '/chat'
 
 export function registerRoute(path, loader) {
   routes[path] = loader
@@ -39,12 +39,19 @@ export function initRouter(contentEl) {
   loadRoute()
 }
 
+export function closeAppSidebarDrawer() {
+  document.getElementById('app-shell-aside')?.classList.remove('shell-aside-open')
+  document.getElementById('shell-aside-overlay')?.classList.remove('visible')
+}
+
 async function loadRoute() {
   const hash = window.location.hash.slice(1) || _defaultRoute
   // 忽略查询参数，只取路径部分
   const path = hash.split('?')[0]
   const loader = resolveLoader(path)
-  if (!loader || !_contentEl) return
+  if (!loader || !_contentEl) {
+    return
+  }
 
   // 竞态防护：记录本次加载 ID
   const thisLoad = ++_loadId
@@ -58,8 +65,8 @@ async function loadRoute() {
   // 立即移除旧页面（不等退出动画，消除切换卡顿）
   _contentEl.innerHTML = ''
 
-  // 已缓存的模块：跳过 spinner，直接渲染
-  let mod = _moduleCache[hash]
+  // 已缓存的模块：跳过 spinner，直接渲染（按 path 缓存，避免 #/settings?tab= 仅查询串变化时重复拉取同一路由）
+  let mod = _moduleCache[path]
   if (!mod) {
     _contentEl.innerHTML = ''
     // 仅首次加载显示 spinner
@@ -78,7 +85,7 @@ async function loadRoute() {
       if (thisLoad === _loadId) showLoadError(_contentEl, hash, e)
       return
     }
-    _moduleCache[hash] = mod
+    _moduleCache[path] = mod
   } else {
     _contentEl.innerHTML = ''
   }
@@ -93,7 +100,7 @@ async function loadRoute() {
   } catch (e) {
     console.error('[router] 页面渲染失败:', hash, e)
     // 渲染失败时清除缓存，下次重试时重新加载模块
-    delete _moduleCache[hash]
+    delete _moduleCache[path]
     if (thisLoad === _loadId) showLoadError(_contentEl, hash, e)
     return
   }

@@ -1,0 +1,14 @@
+﻿node : D:\github\deerflaw\deerpanel\src\locales\modules\chat-debug.js:37
+所在位置 C:\Users\jingyt_ebiz\AppData\Local\Temp\ps-script-03bbe816-38eb-499e-96c8-23312dc15588.ps1:115 字符: 52
++ ... ug_bulk.py; node --check D:\github\deerflaw\deerpanel\src\locales\mod ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (D:\github\deerf...hat-debug.js:37:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  installed: _('宸插畨瑁?, 'Installed', '宸插畨锟?),
+                                   ^^^^^^^
+
+SyntaxError: Invalid or unexpected token
+    at checkSyntax (node:internal/main/check_syntax:74:5)
+
+Node.js v22.22.2

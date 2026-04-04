@@ -36,7 +36,7 @@ export default {
   customBadge: _('自定�?, 'Custom', '自定�?, 'カスタム', '사용�?정의'),
   dirPlaceholder: _('留空使用默认路径 ~/.deerpanel', 'Leave empty for default path ~/.deerpanel', '留空使用預設路徑 ~/.deerpanel', 'デフォルトパ�?~/.deerpanel を使用するには空欄のまま'),
   resetDefault: _('恢复默认', 'Reset Default', '恢復預設', 'デフォルトに戻す', '기본값으�?복원', 'Khôi phục mặc định', 'Restaurar predeterminado', 'Restaurar padrão', 'Восстановить по умолчанию', 'Restaurer les paramètres par défaut', 'Standard wiederherstellen'),
-  dirHint: _('自定�?DeerPanel 配置目录路径。修改后需要重启面板生效。目标目录必须存在且包含 deerpanel.json�?', 'Custom DeerPanel config directory path. Restart required after changes. Target directory must exist and contain deerpanel.json.', '自定�?DeerPanel 設定目錄路徑。修改后需要重啟面板生效。目標目錄必須存在且包含 deerpanel.json�?, 'カスタム DeerPanel 設定ディレクトリパス。変更後は再起動が必要です。対象ディレクトリは存在し、openclaw.json を含む必要があります�?),
+  dirHint: _('自定�?DeerPanel 配置目录路径。修改后需要重启面板生效。目标目录必须存在且包含 deerpanel.json�?', 'Custom DeerPanel config directory path. Restart required after changes. Target directory must exist and contain deerpanel.json.', '自定�?DeerPanel 設定目錄路徑。修改后需要重啟面板生效。目標目錄必須存在且包含 deerpanel.json�?, 'カスタム DeerPanel 設定ディレクトリパス。変更後は再起動が必要です。対象ディレクトリは存在し、deerpanel.json を含む必要があります�?),
   customPathSaved: _('自定义路径已保存', 'Custom path saved', '自定義路徑已儲存', 'カスタムパス保存済み', '사용�?정의 경로 저장됨'),
   defaultRestored: _('已恢复默认路�?, 'Default path restored', '已恢復預設路�?, 'デフォルトパスに戻しまし�?, '기본 경로�?복원�?),
   restartConfirm: _('需要重启面板才能生效，是否立即重启�?, 'Restart required for changes to take effect. Restart now?', '需要重啟面板才能生效，是否立即重啟�?, '変更を反映するにはパネルの再起動が必要です。今すぐ再起動しますか？'),

@@ -34,6 +34,7 @@ const DEFAULT_SESSION_CONTEXT = {
   thinking_enabled: true,
   is_plan_mode: false,
   subagent_enabled: false,
+  include_search: false,  // 禁用搜索工具，避免外部 API 超时导致请求卡住
   reasoning_effort: undefined,
 }
 

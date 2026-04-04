@@ -19,16 +19,6 @@ fi
 # ── Argument parsing ─────────────────────────────────────────────────────────
 
 DEV_MODE=true
-for arg in "$@"; do
-    case "$arg" in
-        --dev)  DEV_MODE=true ;;
-        --prod) DEV_MODE=false ;;
-        *) echo "Unknown argument: $arg"; echo "Usage: $0 [--dev|--prod]"; exit 1 ;;
-    esac
-done
-
-# Non-login shells (e.g. WSL automation) often omit /usr/sbin; nginx is usually there on Debian/Ubuntu.
-export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/sbin:/bin:${PATH}"
 
 UV_BIN="${UV_BIN:-uv}"
 if [ -x "$HOME/.local/bin/uv" ]; then
@@ -69,35 +59,7 @@ if [ -x "${HOME}/.local/nodejs/bin/node" ]; then
     fi
 fi
 
-if $DEV_MODE; then
-    FRONTEND_CMD="pnpm run dev"
-else
-    FRONTEND_CMD="env BETTER_AUTH_SECRET=$(python3 -c 'import secrets; print(secrets.token_hex(16))') pnpm run preview"
-fi
-
-if [ -n "${NGINX_BIN:-}" ] && [ -x "$NGINX_BIN" ]; then
-    :
-elif command -v nginx >/dev/null 2>&1; then
-    NGINX_BIN=$(command -v nginx)
-elif [ -x /usr/sbin/nginx ]; then
-    NGINX_BIN=/usr/sbin/nginx
-else
-    NGINX_BIN=nginx
-fi
-
-# ── Stop existing services ────────────────────────────────────────────────────
-
-echo "Stopping existing services if any..."
-pkill -f "langgraph dev" 2>/dev/null || true
-pkill -f "uvicorn app.gateway.app:app" 2>/dev/null || true
-pkill -f "next dev" 2>/dev/null || true
-pkill -f "next-server" 2>/dev/null || true
-"$NGINX_BIN" -c "$REPO_ROOT/docker/nginx/nginx.local.conf" -p "$REPO_ROOT" -s quit 2>/dev/null || true
-sleep 1
-pkill -9 nginx 2>/dev/null || true
-killall -9 nginx 2>/dev/null || true
-./scripts/cleanup-containers.sh deer-flow-sandbox 2>/dev/null || true
-sleep 1
+mkdir -p logs
 
 # ── Banner ────────────────────────────────────────────────────────────────────
 
@@ -116,8 +78,6 @@ fi
 echo ""
 echo "Services starting up..."
 echo "  → Backend: LangGraph + Gateway"
-echo "  → Frontend: Next.js"
-echo "  → Nginx: Reverse Proxy"
 echo ""
 
 # ── Config check ─────────────────────────────────────────────────────────────
@@ -153,18 +113,6 @@ cleanup() {
     echo "Shutting down services..."
     pkill -f "langgraph dev" 2>/dev/null || true
     pkill -f "uvicorn app.gateway.app:app" 2>/dev/null || true
-    pkill -f "next dev" 2>/dev/null || true
-    pkill -f "next start" 2>/dev/null || true
-    pkill -f "next-server" 2>/dev/null || true
-    # Kill nginx using the captured PID first (most reliable),
-    # then fall back to pkill/killall for any stray nginx workers.
-    if [ -n "${NGINX_PID:-}" ] && kill -0 "$NGINX_PID" 2>/dev/null; then
-        kill -TERM "$NGINX_PID" 2>/dev/null || true
-        sleep 1
-        kill -9 "$NGINX_PID" 2>/dev/null || true
-    fi
-    pkill -9 nginx 2>/dev/null || true
-    killall -9 nginx 2>/dev/null || true
     echo "Cleaning up sandbox containers..."
     ./scripts/cleanup-containers.sh deer-flow-sandbox 2>/dev/null || true
     echo "✓ All services stopped"
@@ -218,29 +166,6 @@ echo "Starting Gateway API..."
 }
 echo "✓ Gateway API started on localhost:$GATEWAY_PORT"
 
-echo "Starting Frontend..."
-(cd frontend && $FRONTEND_CMD > ../logs/frontend.log 2>&1) &
-./scripts/wait-for-port.sh 3000 120 "Frontend" || {
-    echo "  See logs/frontend.log for details"
-    tail -20 logs/frontend.log
-    cleanup
-}
-echo "✓ Frontend started on localhost:3000"
-
-if ! command -v "$NGINX_BIN" >/dev/null 2>&1 && [ ! -x "$NGINX_BIN" ]; then
-    echo "✗ nginx not found (install: sudo apt install nginx on Debian/Ubuntu/WSL)."
-    cleanup
-fi
-echo "Starting Nginx reverse proxy..."
-"$NGINX_BIN" -g 'daemon off;' -c "$REPO_ROOT/docker/nginx/nginx.local.conf" -p "$REPO_ROOT" > logs/nginx.log 2>&1 &
-NGINX_PID=$!
-./scripts/wait-for-port.sh 2026 10 "Nginx" || {
-    echo "  See logs/nginx.log for details"
-    tail -10 logs/nginx.log
-    cleanup
-}
-echo "✓ Nginx started on localhost:2026"
-
 # ── Ready ─────────────────────────────────────────────────────────────────────
 
 echo ""
@@ -252,15 +177,12 @@ else
 fi
 echo "=========================================="
 echo ""
-echo "  🌐 Application: http://localhost:2026"
-echo "  📡 API Gateway: http://localhost:2026/api/*"
-echo "  🤖 LangGraph:   http://localhost:2026/api/langgraph/*"
+echo "  🌐 LangGraph:   http://localhost:2024"
+echo "  📡 Gateway:     http://localhost:$GATEWAY_PORT"
 echo ""
 echo "  📋 Logs:"
 echo "     - LangGraph: logs/langgraph.log"
 echo "     - Gateway:   logs/gateway.log"
-echo "     - Frontend:  logs/frontend.log"
-echo "     - Nginx:     logs/nginx.log"
 echo ""
 echo "Press Ctrl+C to stop all services"
 

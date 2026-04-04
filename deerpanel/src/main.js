@@ -1,9 +1,9 @@
 /**
  * DeerPanel 入口
  */
-import { registerRoute, initRouter, navigate } from './router.js'
-import { renderSidebar, openMobileSidebar } from './components/sidebar.js'
-import { initTheme } from './lib/theme.js'
+import { registerRoute, initRouter, navigate, setDefaultRoute } from './router.js'
+import { initShellAside, openMobileShellAside } from './components/shell-aside.js'
+import { initTheme, attachSystemThemeListener } from './lib/theme.js'
 import { onGuardianGiveUp, resetAutoRestart, loadActiveInstance, getActiveInstance, onInstanceChange } from './lib/app-state.js'
 import { wsClient } from './lib/ws-client.js'
 import { api, checkBackendHealth, isBackendOnline, onBackendStatusChange } from './lib/tauri-api.js'
@@ -23,11 +23,12 @@ import './style/chat.css'
 import './style/react-chat.css'
 import './style/agents.css'
 import './style/debug.css'
-import './style/assistant.css'
+import './style/reset.css'
 import './style/ai-drawer.css'
 
 // 初始化主题
 initTheme()
+attachSystemThemeListener()
 
 // === 访问密码保护（Web + 桌面端通用） ===
 const isTauri = !!window.__TAURI_INTERNALS__
@@ -91,8 +92,7 @@ function showBackendDownOverlay() {
       </button>
       <div id="backend-retry-status" style="font-size:12px;color:var(--text-tertiary);margin-top:12px"></div>
       <div style="margin-top:16px;font-size:11px;color:#aaa">
-        <a href="https://claw.qt.cool" target="_blank" rel="noopener" style="color:#aaa;text-decoration:none">claw.qt.cool</a>
-        <span style="margin:0 6px">&middot;</span>v${APP_VERSION}
+        v${APP_VERSION}
       </div>
     </div>
   `
@@ -180,8 +180,7 @@ function showLoginOverlay(defaultPw) {
         </div>
       </details>` : ''}
       <div style="margin-top:${hasDefault ? '20' : '12'}px;font-size:11px;color:#aaa;text-align:center">
-        <a href="https://claw.qt.cool" target="_blank" rel="noopener" style="color:#aaa;text-decoration:none">claw.qt.cool</a>
-        <span style="margin:0 6px">·</span>v${APP_VERSION}
+        v${APP_VERSION}
       </div>
     </div>
   `
@@ -286,12 +285,11 @@ window.__clawpanel_show_login = async function() {
   location.reload()
 }
 
-const sidebar = document.getElementById('sidebar')
 const content = document.getElementById('content')
 
 async function boot() {
+  setDefaultRoute('/chat')
   // 先注册所有路由，立即渲染 UI（不等后端检测）
-  registerRoute('/dashboard', () => import('./pages/dashboard.js'))
   registerRoute('/chat-legacy', () => import('./pages/chat.js'))
   /** 默认 React 聊天；设 VITE_USE_REACT_CHAT=0 或 false 则 #/chat 仍走经典 chat.js */
   const legacyChatDefault =
@@ -301,27 +299,33 @@ async function boot() {
     () => (legacyChatDefault ? import('./pages/chat.js') : Promise.resolve(chatReactPage)),
   )
   registerRoute('/chat-react', () => Promise.resolve(chatReactPage))
-  registerRoute('/chat-debug', () => import('./pages/chat-debug.js'))
-  registerRoute('/services', () => import('./pages/services.js'))
-  registerRoute('/logs', () => import('./pages/logs.js'))
   registerRoute('/models', () => import('./pages/models.js'))
   registerRoute('/agents', () => import('./pages/agents.js'))
-  registerRoute('/gateway', () => import('./pages/gateway.js'))
   registerRoute('/memory', () => import('./pages/memory.js'))
   registerRoute('/skills', () => import('./pages/skills.js'))
   registerRoute('/tools', () => import('./pages/tools.js'))
-  registerRoute('/security', () => import('./pages/security.js'))
-  registerRoute('/about', () => import('./pages/about.js'))
-  registerRoute('/assistant', () => import('./pages/assistant.js'))
+  registerRoute('/about', () =>
+    Promise.resolve({
+      render() {
+        setTimeout(() => {
+          const path = (window.location.hash.slice(1) || '').split('?')[0]
+          if (path === '/about') window.location.hash = '/settings'
+        }, 0)
+        const el = document.createElement('div')
+        el.hidden = true
+        return el
+      },
+    }),
+  )
   registerRoute('/channels', () => import('./pages/channels.js'))
   registerRoute('/cron', () => import('./pages/cron.js'))
-  registerRoute('/usage', () => import('./pages/usage.js'))
-  registerRoute('/communication', () => import('./pages/communication.js'))
+  registerRoute('/general', () => import('./pages/general.js'))
+  registerRoute('/mail', () => import('./pages/mail.js'))
   registerRoute('/settings', () => import('./pages/settings.js'))
   registerRoute('/tasks', () => import('./pages/tasks.js'))
   registerRoute('/task/:id', () => import('./pages/task-detail.js'))
 
-  renderSidebar(sidebar)
+  initShellAside(document.getElementById('app-shell-aside'))
   initRouter(content)
 
   // 移动端顶栏（汉堡菜单 + 标题）
@@ -335,7 +339,7 @@ async function boot() {
     </button>
     <span class="mobile-topbar-title">DeerPanel</span>
   `
-  topbar.querySelector('.mobile-hamburger').addEventListener('click', openMobileSidebar)
+  topbar.querySelector('.mobile-hamburger').addEventListener('click', openMobileShellAside)
   mainCol.prepend(topbar)
 
   // 隐藏启动加载屏
@@ -346,18 +350,6 @@ async function boot() {
   }
 
   // 默认密码提醒横幅
-  if (sessionStorage.getItem('clawpanel_must_change_pw') === '1') {
-    const banner = document.createElement('div')
-    banner.id = 'pw-change-banner'
-    banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:999;background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;padding:10px 20px;display:flex;align-items:center;justify-content:center;gap:12px;font-size:13px;font-weight:500;box-shadow:0 2px 8px rgba(0,0,0,0.15)'
-    banner.innerHTML = `
-      <span>${statusIcon('warn', 14)} 当前使用的是系统生成的默认密码，为了安全请尽快修改</span>
-      <a href="#/security" style="color:#fff;background:rgba(255,255,255,0.2);padding:4px 14px;border-radius:6px;text-decoration:none;font-size:12px;font-weight:600" onclick="document.getElementById('pw-change-banner').remove();sessionStorage.removeItem('clawpanel_must_change_pw')">前往安全设置</a>
-      <button onclick="this.parentElement.remove()" style="background:none;border:none;color:rgba(255,255,255,0.7);cursor:pointer;font-size:16px;padding:0 4px;margin-left:4px">✕</button>
-    `
-    document.body.prepend(banner)
-  }
-
   // Tauri 模式：确保 web session 存在（页面刷新后 cookie 可能丢失），然后加载实例和检测状态
   const ensureWebSession = isTauri
     ? api.readPanelConfig().then(cfg => {
@@ -372,9 +364,7 @@ async function boot() {
     : Promise.resolve()
 
   ensureWebSession.then(() => loadActiveInstance()).then(() => {
-    // deerflaw 前端不做 openclaw/gateway 就绪检查，直接渲染业务菜单
-    renderSidebar(sidebar)
-    if (window.location.hash === '#/setup') navigate('/dashboard')
+    if (window.location.hash === '#/setup' || window.location.hash === '#/dashboard') navigate('/chat')
     // deerflaw 前端不再执行 openclaw/gateway 状态检查与自动连接逻辑
 
     // 守护放弃时，弹出恢复选项
@@ -406,10 +396,8 @@ async function boot() {
           // 清除 API 缓存，确保拿到最新状态
           const { invalidate } = await import('./lib/tauri-api.js')
           invalidate('get_version_info')
-          renderSidebar(sidebar)
-          // setup 页面已停用：若仍停留其路由，统一跳回仪表盘
-          if (window.location.hash === '#/setup') {
-            navigate('/dashboard')
+          if (window.location.hash === '#/setup' || window.location.hash === '#/dashboard') {
+            navigate('/chat')
           }
         }
         await listen('upgrade-done', refreshAfterTask)
@@ -678,55 +666,7 @@ function startUpdateChecker() {
     const { initAIFab, registerPageContext, openAIDrawerWithError } = await import('./components/ai-drawer.js')
     initAIFab()
 
-    // 注册各页面上下文提供器
-    registerPageContext('/chat-debug', async () => {
-      const { isOpenclawReady, isGatewayRunning } = await import('./lib/app-state.js')
-      const { wsClient } = await import('./lib/ws-client.js')
-      const { api } = await import('./lib/tauri-api.js')
-      const lines = ['## 系统诊断快照']
-      lines.push(`- OpenClaw: ${isOpenclawReady() ? '就绪' : '未就绪'}`)
-      lines.push(`- Gateway: ${isGatewayRunning() ? '运行中' : '未运行'}`)
-      lines.push(`- WebSocket: ${wsClient.connected ? '已连接' : '未连接'}`)
-      try {
-        const node = await api.checkNode()
-        lines.push(`- Node.js: ${node?.version || '未知'}`)
-      } catch {}
-      try {
-        const ver = await api.systemVersion()
-        lines.push(`- 版本: 当前 ${ver?.current || '?'} / 推荐 ${ver?.recommended || '?'} / 最新 ${ver?.latest || '?'}${ver?.ahead_of_recommended ? ' / 当前版本高于推荐版' : ''}`)
-      } catch {}
-      return { detail: lines.join('\n') }
-    })
-
-    registerPageContext('/services', async () => {
-      const { isGatewayRunning } = await import('./lib/app-state.js')
-      const { api } = await import('./lib/tauri-api.js')
-      const lines = ['## 服务状态']
-      lines.push(`- Gateway: ${isGatewayRunning() ? '运行中' : '未运行'}`)
-      try {
-        const svc = await api.getServicesStatus()
-        if (svc?.[0]) {
-          lines.push(`- CLI: ${svc[0].cli_installed ? '已安装' : '未安装'}`)
-          lines.push(`- PID: ${svc[0].pid || '无'}`)
-        }
-      } catch {}
-      return { detail: lines.join('\n') }
-    })
-
-    registerPageContext('/gateway', async () => {
-      const { api } = await import('./lib/tauri-api.js')
-      try {
-        const config = await api.readOpenclawConfig()
-        const gw = config?.gateway || {}
-        const lines = ['## Gateway 配置']
-        lines.push(`- 端口: ${gw.port || 18789}`)
-        lines.push(`- 模式: ${gw.mode || 'local'}`)
-        lines.push(`- Token: ${gw.auth?.token ? '已设置' : '未设置'}`)
-        if (gw.controlUi?.allowedOrigins) lines.push(`- Origins: ${JSON.stringify(gw.controlUi.allowedOrigins)}`)
-        return { detail: lines.join('\n') }
-      } catch { return null }
-    })
-
+    
     // 挂到全局，供安装/升级失败时调用
     window.__openAIDrawerWithError = openAIDrawerWithError
   }, 500)

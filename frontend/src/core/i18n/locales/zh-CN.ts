@@ -47,6 +47,23 @@ export const zhCN: Translations = {
     exportAsMarkdown: "导出为 Markdown",
     exportAsJSON: "导出为 JSON",
     exportSuccess: "对话已导出",
+    // Task statuses
+    taskStatus: {
+      pending: "待开始",
+      planning: "规划中",
+      planned: "已规划",
+      executing: "执行中",
+      paused: "已暂停",
+      completed: "已完成",
+      failed: "失败",
+      cancelled: "已取消",
+    },
+    // Subtask statuses
+    subtaskStatus: {
+      in_progress: "进行中",
+      completed: "已完成",
+      failed: "失败",
+    },
   },
 
   // Welcome

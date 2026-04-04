@@ -33,6 +33,68 @@ def get_memory_data(agent_name: str | None = None) -> dict[str, Any]:
     return get_memory_storage().load(agent_name)
 
 
+def list_memory_agent_slots() -> list[dict[str, Any]]:
+    """List memory slots for UI: global plus each ``agents/{id}/`` with config or memory file.
+
+    Global path follows the same rules as ``FileMemoryStorage`` (``storage_path`` vs ``memory_file``).
+    """
+    from pathlib import Path
+
+    from deerflow.config.agents_config import AGENT_NAME_PATTERN, load_agent_config
+    from deerflow.config.paths import get_paths
+
+    paths = get_paths()
+    config = get_memory_config()
+    if config.storage_path:
+        p = Path(config.storage_path)
+        global_path = p if p.is_absolute() else paths.base_dir / p
+    else:
+        global_path = paths.memory_file
+
+    rows: list[dict[str, Any]] = [
+        {
+            "id": None,
+            "display_name": "全局",
+            "description": "默认主助手（未选自定义 Agent）使用的记忆文件",
+            "has_memory_file": global_path.exists(),
+        }
+    ]
+
+    agents_dir = paths.agents_dir
+    if not agents_dir.exists():
+        return rows
+
+    for entry in sorted(agents_dir.iterdir(), key=lambda p: p.name.lower()):
+        if not entry.is_dir():
+            continue
+        name = entry.name
+        if not AGENT_NAME_PATTERN.match(name):
+            continue
+        has_mem = (entry / "memory.json").exists()
+        has_cfg = (entry / "config.yaml").exists()
+        if not has_mem and not has_cfg:
+            continue
+        disp = name
+        desc = ""
+        if has_cfg:
+            try:
+                cfg = load_agent_config(name)
+                disp = cfg.name or name
+                desc = (cfg.description or "")[:240]
+            except Exception:
+                pass
+        rows.append(
+            {
+                "id": name,
+                "display_name": disp,
+                "description": desc,
+                "has_memory_file": has_mem,
+            }
+        )
+
+    return rows
+
+
 def reload_memory_data(agent_name: str | None = None) -> dict[str, Any]:
     """Reload memory data via storage provider."""
     return get_memory_storage().reload(agent_name)

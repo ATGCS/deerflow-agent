@@ -76,4 +76,4 @@ for (const { file, update } of targets) {
   }
 }
 
-console.log(`\n版本 ${version}�?{changed ? `已同�?${changed} 个文件` : '所有文件已是最�?}`)
+console.log(`\n?? ${version}?${changed ? `??? ${changed} ???` : '????????'}`)

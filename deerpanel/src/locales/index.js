@@ -21,19 +21,15 @@ import usage from './modules/usage.js'
 import skills from './modules/skills.js'
 import chat from './modules/chat.js'
 import chatDebug from './modules/chat-debug.js'
-import setup from './modules/setup.js'
-import about from './modules/about.js'
 import ext from './modules/ext.js'
-import logs from './modules/logs.js'
-import assistant from './modules/assistant.js'
 import toast from './modules/toast.js'
 import modal from './modules/modal.js'
 
 const MODULES = {
   common, sidebar, instance, dashboard, services, settings,
   models, agents, gateway, security, communication, channels,
-  memory, cron, usage, skills, chat, chatDebug, setup, about,
-  ext, logs, assistant, toast, modal,
+  memory, cron, usage, skills, chat, chatDebug,
+  ext, toast, modal,
 }
 
 /** 构建所有语言字典 { 'zh-CN': { common: {...}, sidebar: {...}, ... }, ... } */

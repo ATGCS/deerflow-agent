@@ -26,6 +26,5 @@ export default {
   skills: _('Skills', 'Skills'),
   settings: _('面板设置', 'Settings', '面板設定', 'パネル設定', '패널 설정', 'Cài đặt', 'Configuración', 'Configurações', 'Настройки', 'Paramètres', 'Einstellungen'),
   chatDebug: _('系统诊断', 'Diagnostics', '系統诊斷', 'システム診断', '시스템 진단', 'Chẩn đoán', 'Diagnóstico', 'Diagnóstico', 'Диагностика', 'Diagnostic', 'Diagnose'),
-  about: _('关于', 'About', '關於', 'について', '정보', 'Giới thiệu', 'Acerca de', 'Sobre', 'О программе', 'À propos', 'Über'),
   setup: _('初始设置', 'Setup', '初始設定', '初期設定', '초기 설정', 'Thiết lập', 'Configuración inicial', 'Configuração inicial', 'Начальная настройка', 'Configuration initiale', 'Ersteinrichtung'),
 }

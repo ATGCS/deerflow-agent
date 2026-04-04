@@ -1,9 +1,3 @@
-param(
-    [string]$NginxDir = "D:\works\package\nginx",
-    [switch]$NoNginx,
-    [switch]$NoFrontend
-)
-
 $ErrorActionPreference = "Stop"
 
 function Write-Step {
@@ -72,10 +66,8 @@ function Wait-PortClosed {
 
 $ProjectRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $BackendDir = Join-Path $ProjectRoot "backend"
-$FrontendDir = Join-Path $ProjectRoot "frontend"
 $LogsDir = Join-Path $ProjectRoot "logs"
 $TempDir = Join-Path $ProjectRoot "temp"
-$FrontendPort = 3000
 $GatewayPort = 8012
 
 Write-Step "Preparing directories"
@@ -98,22 +90,12 @@ foreach ($cmd in @("uv", "npm")) {
     }
 }
 
-if (-not $NoNginx) {
-    $nginxExe = Join-Path $NginxDir "nginx.exe"
-    if (-not (Test-Path $nginxExe)) {
-        throw "nginx.exe not found: $nginxExe"
-    }
-}
-
 Write-Step "Ensuring config files exist"
 if (-not (Test-Path (Join-Path $ProjectRoot "config.yaml"))) {
     Copy-Item (Join-Path $ProjectRoot "config.example.yaml") (Join-Path $ProjectRoot "config.yaml")
 }
 if (-not (Test-Path (Join-Path $ProjectRoot ".env"))) {
     Copy-Item (Join-Path $ProjectRoot ".env.example") (Join-Path $ProjectRoot ".env")
-}
-if (-not (Test-Path (Join-Path $FrontendDir ".env"))) {
-    Copy-Item (Join-Path $FrontendDir ".env.example") (Join-Path $FrontendDir ".env")
 }
 
 Write-Step "Cleaning stale LangGraph temp files"
@@ -123,16 +105,11 @@ if (Test-Path $langgraphStateDir) {
         Remove-Item -Force -ErrorAction SilentlyContinue
 }
 
-Write-Step "Stopping old processes on ports 2024/$GatewayPort/$FrontendPort/2026"
+Write-Step "Stopping old processes on ports 2024/$GatewayPort"
 Stop-PortProcess -Port 2024
 Stop-PortProcess -Port $GatewayPort
-Stop-PortProcess -Port $FrontendPort
-Stop-PortProcess -Port 2026
-Get-Process -Name nginx -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 $null = Wait-PortClosed -Port 2024 -TimeoutSec 20
 $null = Wait-PortClosed -Port $GatewayPort -TimeoutSec 20
-$null = Wait-PortClosed -Port $FrontendPort -TimeoutSec 20
-$null = Wait-PortClosed -Port 2026 -TimeoutSec 20
 
 $pyExe = Join-Path $BackendDir ".venv\Scripts\python.exe"
 if (-not (Test-Path $pyExe)) {
@@ -193,10 +170,10 @@ $langgraph = Start-Process powershell -ArgumentList @(
 # directory (`backend/`), and `Start-Process` environment inheritance can be flaky.
 # So we explicitly forward it (when provided) into the uvicorn process.
 #
-$gatewayInternalEventsEnv = ""
+$gatewayInternalEventsEnv = "`$env:CORS_ORIGINS='http://localhost:1420,http://localhost:1421'; "
 if (-not [string]::IsNullOrWhiteSpace($internalEventsSecret)) {
     $escaped = ($internalEventsSecret -replace "'", "''")
-    $gatewayInternalEventsEnv = "`$env:INTERNAL_EVENTS_SECRET='$escaped'; "
+    $gatewayInternalEventsEnv += "`$env:INTERNAL_EVENTS_SECRET='$escaped'; "
 }
 
 Write-Step "Starting Gateway ($GatewayPort)"
@@ -206,70 +183,20 @@ $gateway = Start-Process powershell -ArgumentList @(
     "-Command", "cd '$BackendDir'; `$env:PYTHONPATH='$pythonPathValue'; $gatewayInternalEventsEnv & '$pyExe' -m uvicorn app.gateway.app:app --host 0.0.0.0 --port $GatewayPort --reload --reload-include='*.yaml' --reload-include='.env'"
 ) -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $LogsDir "gateway.log") -RedirectStandardError (Join-Path $LogsDir "gateway.err.log")
 
-if (-not $NoFrontend) {
-    Write-Step "Starting Frontend ($FrontendPort)"
-    $frontend = Start-Process powershell -ArgumentList @(
-        "-NoProfile",
-        "-ExecutionPolicy", "Bypass",
-        "-Command", "cd '$FrontendDir'; `$env:PORT='$FrontendPort'; npm run dev"
-    ) -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $LogsDir "frontend.log") -RedirectStandardError (Join-Path $LogsDir "frontend.err.log")
-} else {
-    Write-Step "Skipping Frontend (NoFrontend)"
-    $frontend = $null
-}
-
-$nginx = $null
-if (-not $NoNginx) {
-    Write-Step "Starting Nginx (2026)"
-    $nginx = Start-Process powershell -ArgumentList @(
-        "-NoProfile",
-        "-ExecutionPolicy", "Bypass",
-        "-Command", "`$env:Path='$NginxDir;'+`$env:Path; nginx -g 'daemon off;' -c '$ProjectRoot/docker/nginx/nginx.local.conf' -p '$ProjectRoot'"
-    ) -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $LogsDir "nginx.log") -RedirectStandardError (Join-Path $LogsDir "nginx.err.log")
-}
-
 Write-Step "Waiting for ports"
 $ok2024 = Wait-PortReady -Port 2024 -TimeoutSec 90
 $okGateway = Wait-PortReady -Port $GatewayPort -TimeoutSec 90
-$okFrontend = $true
-if (-not $NoFrontend) {
-    $okFrontend = Wait-PortReady -Port $FrontendPort -TimeoutSec 120
-}
-$ok2026 = $true
-if (-not $NoNginx) {
-    $ok2026 = Wait-PortReady -Port 2026 -TimeoutSec 30
-}
 
 Write-Host ""
 Write-Host "DeerFlow (Windows) startup result:" -ForegroundColor Green
 Write-Host "  2024 LangGraph: $ok2024"
 Write-Host "  $GatewayPort Gateway:   $okGateway"
-if (-not $NoFrontend) {
-    Write-Host "  $FrontendPort Frontend:  $okFrontend"
-} else {
-    Write-Host "  $FrontendPort Frontend:  (skipped)"
-}
-if (-not $NoNginx) {
-    Write-Host "  2026 Nginx:     $ok2026"
-}
 Write-Host ""
 Write-Host "PIDs:"
 Write-Host "  LangGraph: $($langgraph.Id)"
 Write-Host "  Gateway:   $($gateway.Id)"
-if (-not $NoFrontend) {
-    Write-Host "  Frontend:  $($frontend.Id)"
-}
-if ($nginx) {
-    Write-Host "  Nginx:     $($nginx.Id)"
-}
 Write-Host ""
 Write-Host "URLs:"
-if (-not $NoNginx) {
-    Write-Host "  App:       http://localhost:2026"
-}
-if (-not $NoFrontend) {
-    Write-Host "  Frontend:  http://localhost:$FrontendPort"
-}
 Write-Host "  LangGraph: http://localhost:2024"
 Write-Host "  Gateway:   http://localhost:$GatewayPort"
 Write-Host ""

@@ -4,7 +4,7 @@ mod tray;
 mod utils;
 
 use commands::{
-    agent, assistant, config, device, extensions, logs, memory, messaging, pairing, service,
+    agent, assistant, config, device, extensions, gateway, logs, memory, messaging, pairing, service,
     skills, update,
 };
 
@@ -177,6 +177,9 @@ pub fn run() {
             update::download_frontend_update,
             update::rollback_frontend_update,
             update::get_update_status,
+            // Gateway 代理
+            gateway::gateway_proxy,
+            gateway::gateway_health,
         ])
         .build(tauri::generate_context!())
         .expect("启动 ClawPanel 失败")

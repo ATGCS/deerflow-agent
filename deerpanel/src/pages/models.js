@@ -6,52 +6,246 @@ import { api } from '../lib/tauri-api.js'
 import { toast } from '../components/toast.js'
 import { showModal, showConfirm } from '../components/modal.js'
 import { icon, statusIcon } from '../lib/icons.js'
-import { API_TYPES, PROVIDER_PRESETS, QTCOOL, MODEL_PRESETS, fetchQtcoolModels } from '../lib/model-presets.js'
+import { API_TYPES, PROVIDER_PRESETS, VENDOR_PRESETS, MODEL_PRESETS } from '../lib/model-presets.js'
 
-export async function render() {
+function escHtml(s) {
+  return String(s || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+}
+
+function escAttr(s) {
+  return String(s || '')
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+}
+
+/** 左侧厂商列表用：品牌色小图标（简化图形，非官方商标素材） */
+function vendorBrandIcon(key) {
+  const svg = (body) =>
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">${body}</svg>`
+  const disk = (fill) => svg(`<circle cx="12" cy="12" r="10" fill="${fill}"/>`)
+  const rounded = (fill) => svg(`<rect x="3" y="3" width="18" height="18" rx="5" fill="${fill}"/>`)
+  const icons = {
+    shengsuanyun: disk('#ea580c'),
+    siliconflow: rounded('#6366f1'),
+    volcengine: disk('#f97316'),
+    aliyun: rounded('#ff6a00'),
+    zhipu: disk('#2563eb'),
+    minimax: rounded('#0891b2'),
+    openai: disk('#10a37f'),
+    anthropic: rounded('#c4a484'),
+    deepseek: disk('#4d6bfe'),
+    google: rounded('#4285f4'),
+    nvidia: rounded('#76b900'),
+    ollama: svg('<rect x="4" y="4" width="16" height="16" rx="4" fill="#334155"/><circle cx="9" cy="10" r="2" fill="#94a3b8"/><circle cx="15" cy="10" r="2" fill="#94a3b8"/><path stroke="#94a3b8" stroke-width="1.5" fill="none" d="M9 14h6"/>'),
+  }
+  return icons[key] || rounded('#64748b')
+}
+
+function normalizeHost(url) {
+  try {
+    return new URL(url).hostname.replace(/^www\./i, '').toLowerCase()
+  } catch {
+    return ''
+  }
+}
+
+function hostMatchesPresetHost(providerHost, presetHost) {
+  if (!providerHost || !presetHost) return false
+  if (providerHost === presetHost) return true
+  if (providerHost.endsWith('.' + presetHost)) return true
+  if (presetHost.endsWith('.' + providerHost) && providerHost.split('.').length >= 2) return true
+  return false
+}
+
+function findProviderKeyForPreset(providers, preset) {
+  if (providers[preset.key]) return preset.key
+  const target = normalizeHost(preset.baseUrl)
+  if (!target) return null
+  for (const [k, p] of Object.entries(providers)) {
+    const h = normalizeHost(p.baseUrl || '')
+    if (h && hostMatchesPresetHost(h, target)) return k
+  }
+  return null
+}
+
+function getUnmatchedProviderKeys(providers) {
+  const keys = Object.keys(providers)
+  const matched = new Set()
+  for (const pr of VENDOR_PRESETS) {
+    const pk = findProviderKeyForPreset(providers, pr)
+    if (pk) matched.add(pk)
+  }
+  return keys.filter((k) => !matched.has(k)).sort((a, b) => a.localeCompare(b))
+}
+
+function pickDefaultVendorSelection(state, providers) {
+  for (const pr of VENDOR_PRESETS) {
+    const pk = findProviderKeyForPreset(providers, pr)
+    if (pk) {
+      state.selectedVendorPreset = pr.key
+      state.selectedProviderKey = pk
+      return
+    }
+  }
+  const orphans = getUnmatchedProviderKeys(providers)
+  if (orphans.length) {
+    state.selectedVendorPreset = 'custom'
+    state.selectedProviderKey = orphans[0]
+    return
+  }
+  state.selectedVendorPreset = VENDOR_PRESETS[0]?.key || null
+  state.selectedProviderKey = null
+}
+
+/** 保持选中项与配置一致（外部写入 config、删除服务商等） */
+function reconcileModelPageSelection(state, providers) {
+  if (!state.selectedVendorPreset) {
+    pickDefaultVendorSelection(state, providers)
+    return
+  }
+  if (state.selectedVendorPreset === 'custom') {
+    const orphans = getUnmatchedProviderKeys(providers)
+    if (state.selectedProviderKey && orphans.includes(state.selectedProviderKey)) return
+    if (orphans.length) {
+      state.selectedProviderKey = orphans[0]
+      return
+    }
+    pickDefaultVendorSelection(state, providers)
+    return
+  }
+  const pr = VENDOR_PRESETS.find((p) => p.key === state.selectedVendorPreset)
+  if (!pr) {
+    pickDefaultVendorSelection(state, providers)
+    return
+  }
+  state.selectedProviderKey = findProviderKeyForPreset(providers, pr)
+}
+
+function displayTitleForProvider(providerKey, providers) {
+  if (VENDOR_PRESETS.some((p) => p.key === providerKey)) {
+    const pr = VENDOR_PRESETS.find((p) => p.key === providerKey)
+    return pr ? pr.label : providerKey
+  }
+  for (const pr of VENDOR_PRESETS) {
+    if (findProviderKeyForPreset(providers, pr) === providerKey) return pr.label
+  }
+  return providerKey
+}
+
+/** 未配置该厂商时：右侧直接内联填写接口与密钥，不再弹窗或「添加厂商」空状态 */
+function renderVendorInlineSetupForm(preset) {
+  const desc = preset.desc
+    ? `<p class="form-hint models-inline-setup-desc">${escHtml(preset.desc)}</p>`
+    : ''
+  const site =
+    preset.site
+      ? `<a href="${escAttr(preset.site)}" target="_blank" rel="noopener noreferrer" class="models-inline-setup-site">${icon('external-link', 12)} 官网文档</a>`
+      : ''
+  const apiOpts = API_TYPES.map(
+    (t) =>
+      `<option value="${escAttr(t.value)}"${t.value === preset.api ? ' selected' : ''}>${escHtml(t.label)}</option>`
+  ).join('')
+  return `
+    <div class="models-inline-setup" data-inline-preset="${escAttr(preset.key)}">
+      <header class="models-inline-setup-head">
+        <div class="models-inline-setup-title-row">
+          <span class="models-inline-setup-ic" aria-hidden="true">${vendorBrandIcon(preset.key)}</span>
+          <h3 class="models-inline-setup-title">${escHtml(preset.label)}</h3>
+        </div>
+        ${site}
+      </header>
+      ${desc}
+      <div class="models-inline-setup-form">
+        <div class="form-group">
+          <label class="form-label" for="models-inline-key-${escAttr(preset.key)}">配置标识</label>
+          <input id="models-inline-key-${escAttr(preset.key)}" class="form-input" data-inline-field="key" value="${escAttr(preset.key)}" readonly>
+          <div class="form-hint">与左侧厂商对应，一般无需修改</div>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="models-inline-base-${escAttr(preset.key)}">接口地址</label>
+          <input id="models-inline-base-${escAttr(preset.key)}" class="form-input" data-inline-field="baseUrl" value="${escAttr(preset.baseUrl)}" autocomplete="off">
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="models-inline-keyf-${escAttr(preset.key)}">API Key</label>
+          <input id="models-inline-keyf-${escAttr(preset.key)}" class="form-input" data-inline-field="apiKey" type="password" autocomplete="off" placeholder="可留空（无需鉴权的服务）">
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="models-inline-api-${escAttr(preset.key)}">接口类型</label>
+          <select id="models-inline-api-${escAttr(preset.key)}" class="form-input" data-inline-field="api">${apiOpts}</select>
+        </div>
+        <div class="models-inline-setup-actions">
+          <button type="button" class="btn btn-primary" data-action="save-inline-provider">保存配置</button>
+        </div>
+      </div>
+    </div>
+  `
+}
+
+/**
+ * @param {{ settingsModal?: boolean }} [options]
+ */
+export async function render(options = {}) {
+  const settingsModal = !!options.settingsModal
   const page = document.createElement('div')
-  page.className = 'page'
+  page.className = settingsModal
+    ? 'models-twopane-page settings-modal-pane settings-modal-pane--models'
+    : 'page models-twopane-page'
+
+  const fullPageTitle = settingsModal
+    ? ''
+    : `
+      <div class="models-twopane-pagehead">
+        <div class="page-header" style="margin-bottom:var(--space-md)">
+          <h1 class="page-title">模型配置</h1>
+          <p class="page-desc">添加 AI 模型服务商，配置可用模型</p>
+        </div>
+      </div>`
+
+  const toolbarPad = settingsModal ? 'padding:var(--space-md) var(--space-lg)' : ''
+  const hintMb = settingsModal ? 'var(--space-sm)' : 'var(--space-md)'
 
   page.innerHTML = `
-    <div class="page-header">
-      <h1 class="page-title">模型配置</h1>
-      <p class="page-desc">添加 AI 模型服务商，配置可用模型</p>
-    </div>
-    <div class="config-actions">
-      <button class="btn btn-primary btn-sm" id="btn-add-provider">+ 添加服务商</button>
-      <button class="btn btn-secondary btn-sm" id="btn-undo" disabled>↩ 撤销</button>
-    </div>
-    <div class="form-hint" style="margin-bottom:var(--space-md)">
-      服务商是模型的来源（如 OpenAI、DeepSeek 等）。每个服务商下可添加多个模型。
-      标记为「主模型」的将优先使用，其余作为备选自动切换。配置修改后自动保存。
-    </div>
-    <div id="qtcool-promo" style="margin-bottom:var(--space-md);border-radius:var(--radius-lg);background:var(--bg-secondary);border:1px solid var(--border-primary);padding:14px 18px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
-      <div style="flex:1;min-width:200px">
-        <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
-          ${icon('zap', 16)}
-          <span style="font-weight:600;font-size:var(--font-size-sm)">晴辰云</span>
-          <span style="font-size:10px;background:var(--primary);color:#fff;padding:1px 6px;border-radius:8px">推荐</span>
+    <div class="models-twopane-body">
+      <aside class="models-provider-rail" id="models-provider-rail" aria-label="模型厂商">
+        <div class="stat-card loading-placeholder" style="height:80px;margin:12px"></div>
+      </aside>
+      <div class="models-twopane-main">
+        ${fullPageTitle}
+        <div class="models-twopane-toolbar" id="models-twopane-toolbar" style="${toolbarPad}"${settingsModal ? ' data-settings-modal-models-toolbar' : ''}>
+          <div class="config-actions models-toolbar-actions">
+            <button type="button" class="btn btn-primary btn-sm" id="btn-add-provider">+ 自定义服务商</button>
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-undo" disabled>↩ 撤销</button>
+          </div>
+          <div id="models-toolbar-hint-long" class="form-hint" style="margin-bottom:${hintMb}">
+            在左侧选择厂商；已配置后可在下方管理模型。修改后自动保存。
+          </div>
+          <div id="default-model-bar"></div>
+          <div id="models-toolbar-search-wrap">
+            <input class="form-input" id="model-search" placeholder="搜索当前厂商下的模型（按 ID 或名称）" style="max-width:420px">
+          </div>
         </div>
-        <div style="font-size:var(--font-size-xs);color:var(--text-secondary);line-height:1.5">
-          无需自行注册 API，一键添加即可使用。基础模型免费，高级模型低至官方价 2-3 折
+        <div class="models-provider-detail">
+          <div id="models-detail-inner">
+            <div class="stat-card loading-placeholder" style="height:160px"></div>
+          </div>
         </div>
       </div>
-      <div style="display:flex;gap:8px;align-items:center;flex-shrink:0">
-        <button class="btn btn-primary btn-sm" id="btn-qtcool-oneclick">${icon('plus', 14)} 获取模型列表</button>
-        <a href="${QTCOOL.site}" target="_blank" class="btn btn-secondary btn-sm">${icon('external-link', 12)} 了解更多</a>
-      </div>
-    </div>
-    <div id="default-model-bar"></div>
-    <div style="margin-bottom:var(--space-md)">
-      <input class="form-input" id="model-search" placeholder="搜索模型（按 ID 或名称过滤）" style="max-width:360px">
-    </div>
-    <div id="providers-list">
-      <div class="config-section"><div class="stat-card loading-placeholder" style="height:120px"></div></div>
-      <div class="config-section"><div class="stat-card loading-placeholder" style="height:120px"></div></div>
     </div>
   `
 
-  const state = { config: null, search: '', undoStack: [] }
+  const state = {
+    config: null,
+    search: '',
+    undoStack: [],
+    selectedProviderKey: null,
+    selectedVendorPreset: null,
+  }
   // 非阻塞：先返回 DOM，后台加载数据
   loadConfig(page, state)
   bindTopActions(page, state)
@@ -65,8 +259,14 @@ export async function render() {
   return page
 }
 
+/** 设置弹窗专用：无全页 .page 外壳与重复标题区 */
+export async function mountModelsForSettingsModal(container) {
+  const el = await render({ settingsModal: true })
+  container.replaceChildren(el)
+}
+
 async function loadConfig(page, state) {
-  const listEl = page.querySelector('#providers-list')
+  const detailMount = page.querySelector('#models-detail-inner')
   try {
     state.config = await api.readOpenclawConfig()
     // 自动修复现有配置中的 baseUrl（如 Ollama 缺少 /v1），一次性迁移
@@ -81,7 +281,9 @@ async function loadConfig(page, state) {
     renderDefaultBar(page, state)
     renderProviders(page, state)
   } catch (e) {
-    listEl.innerHTML = '<div style="color:var(--error);padding:20px">加载配置失败: ' + e + '</div>'
+    if (detailMount) {
+      detailMount.innerHTML = '<div style="color:var(--error);padding:20px">加载配置失败: ' + e + '</div>'
+    }
     toast('加载配置失败: ' + e, 'error')
   }
 }
@@ -104,6 +306,15 @@ function collectAllModels(config) {
 
 function getApiTypeLabel(apiType) {
   return API_TYPES.find(t => t.value === apiType)?.label || apiType || '未知'
+}
+
+/** 右侧摘要区：不暴露完整密钥 */
+function apiKeySummaryHtml(apiKey) {
+  const s = (apiKey && String(apiKey).trim()) || ''
+  if (!s) {
+    return '<span class="models-apikey-empty">未填写</span><span class="models-apikey-hint">（无需鉴权时可留空）</span>'
+  }
+  return `<span class="models-apikey-saved">已配置</span><span class="models-apikey-meta"> · ${s.length} 字符，点击「编辑连接信息」可查看或修改</span>`
 }
 
 // 渲染当前主模型状态栏
@@ -183,54 +394,33 @@ function sortModels(models, sortBy) {
   return sorted
 }
 
-// 渲染服务商列表（渲染完后直接绑定事件）
-function renderProviders(page, state) {
-  const listEl = page.querySelector('#providers-list')
+/** 右侧详情区：先展示连接与鉴权（具体配置），再展示模型列表 */
+function buildSingleProviderSectionHTML(key, state, primary) {
   const providers = state.config?.models?.providers || {}
-  const keys = Object.keys(providers)
-  const primary = getCurrentPrimary(state.config)
+  const p = providers[key]
+  if (!p) return ''
   const search = state.search || ''
   const sortBy = state.sortBy || 'default'
-
-  if (!keys.length) {
-    listEl.innerHTML = `
-      <div style="color:var(--text-tertiary);padding:20px;text-align:center">
-        暂无服务商，点击「+ 添加服务商」开始配置
-      </div>`
-    return
-  }
-
-  listEl.innerHTML = keys.map(key => {
-    const p = providers[key]
-    const models = p.models || []
-    const filtered = search
-      ? models.filter((m) => {
-          const id = (typeof m === 'string' ? m : m.id).toLowerCase()
-          const name = (m.name || '').toLowerCase()
-          return id.includes(search) || name.includes(search)
-        })
-      : models
-    const sorted = sortModels(filtered, sortBy)
-    const hiddenCount = models.length - sorted.length
-    return `
-      <div class="config-section" data-provider="${key}">
-        <div class="config-section-title" style="display:flex;justify-content:space-between;align-items:center">
-          <span>${key} <span style="font-size:var(--font-size-xs);color:var(--text-tertiary);font-weight:400">${getApiTypeLabel(p.api)} · ${models.length} 个模型</span></span>
-          <div style="display:flex;gap:8px">
-            <button class="btn btn-sm btn-secondary" data-action="edit-provider">编辑</button>
-            <button class="btn btn-sm btn-secondary" data-action="add-model">+ 模型</button>
-            <button class="btn btn-sm btn-secondary" data-action="fetch-models">获取列表</button>
-            <button class="btn btn-sm btn-danger" data-action="delete-provider">删除</button>
-          </div>
-        </div>
-        ${models.length >= 2 ? `
-        <div style="display:flex;gap:6px;margin-bottom:var(--space-sm);align-items:center">
-          <button class="btn btn-sm btn-secondary" data-action="batch-test">批量测试</button>
-          <button class="btn btn-sm btn-secondary" data-action="select-all">全选</button>
-          <button class="btn btn-sm btn-danger" data-action="batch-delete">批量删除</button>
-          <div style="margin-left:auto;display:flex;gap:6px;align-items:center">
-            <span style="font-size:var(--font-size-xs);color:var(--text-tertiary)">排序:</span>
-            <select class="form-input" data-action="sort-models" style="padding:4px 8px;font-size:var(--font-size-xs);width:auto">
+  const models = p.models || []
+  const filtered = search
+    ? models.filter((m) => {
+        const id = (typeof m === 'string' ? m : m.id).toLowerCase()
+        const name = (m.name || '').toLowerCase()
+        return id.includes(search) || name.includes(search)
+      })
+    : models
+  const sorted = sortModels(filtered, sortBy)
+  const hiddenCount = models.length - sorted.length
+  const batchRow =
+    models.length >= 2
+      ? `
+        <div class="models-list-toolbar">
+          <button type="button" class="btn btn-sm btn-secondary" data-action="batch-test">批量测试</button>
+          <button type="button" class="btn btn-sm btn-secondary" data-action="select-all">全选</button>
+          <button type="button" class="btn btn-sm btn-danger" data-action="batch-delete">批量删除</button>
+          <div class="models-list-toolbar-sort">
+            <span class="models-list-toolbar-sort-label">排序</span>
+            <select class="form-input" data-action="sort-models">
               <option value="default">默认顺序 (拖拽调整)</option>
               <option value="name-asc">名称 A-Z (固化到底层)</option>
               <option value="name-desc">名称 Z-A (固化到底层)</option>
@@ -239,25 +429,163 @@ function renderProviders(page, state) {
               <option value="context-asc">上下文 小→大 (固化到底层)</option>
               <option value="context-desc">上下文 大→小 (固化到底层)</option>
             </select>
-            <button class="btn btn-sm btn-secondary" data-action="apply-sort" style="display:none">保存当前排序</button>
+            <button type="button" class="btn btn-sm btn-secondary" data-action="apply-sort" style="display:none">保存当前排序</button>
           </div>
-        </div>` : ''}
-        <div class="provider-models">
-          ${renderModelCards(key, sorted, primary, search)}
-          ${hiddenCount > 0 ? `<div style="font-size:var(--font-size-xs);color:var(--text-tertiary);padding:4px 0">已隐藏 ${hiddenCount} 个不匹配的模型</div>` : ''}
-        </div>
+        </div>`
+      : ''
+
+  return `
+      <div class="models-provider-config-root config-section" data-provider="${escAttr(key)}">
+        <header class="models-provider-config-head">
+          <h3 class="models-provider-config-name">${escHtml(displayTitleForProvider(key, providers))}</h3>
+          <p class="models-provider-config-id">配置标识 <code>${escHtml(key)}</code></p>
+        </header>
+
+        <section class="models-connection-card" aria-labelledby="models-connection-heading">
+          <h4 class="config-section-title models-connection-heading" id="models-connection-heading">连接与鉴权</h4>
+          <dl class="models-connection-dl">
+            <div class="models-connection-dl-row">
+              <dt>接口地址</dt>
+              <dd><code class="models-connection-code">${escHtml(p.baseUrl || '未填写')}</code></dd>
+            </div>
+            <div class="models-connection-dl-row">
+              <dt>接口类型</dt>
+              <dd>${escHtml(getApiTypeLabel(p.api))}</dd>
+            </div>
+            <div class="models-connection-dl-row">
+              <dt>API Key</dt>
+              <dd class="models-connection-dd-key">${apiKeySummaryHtml(p.apiKey)}</dd>
+            </div>
+          </dl>
+          <div class="models-connection-foot">
+            <button type="button" class="btn btn-sm btn-secondary" data-action="edit-provider">编辑连接信息</button>
+            <button type="button" class="btn btn-sm btn-danger" data-action="delete-provider">删除此服务商</button>
+          </div>
+        </section>
+
+        <section class="models-list-section" aria-labelledby="models-list-heading">
+          <div class="config-section-title models-detail-title-row models-list-section-head">
+            <h4 class="models-list-heading" id="models-list-heading">模型列表 <span class="models-list-count">共 ${models.length} 个</span></h4>
+            <div class="models-list-head-actions">
+              <button type="button" class="btn btn-sm btn-secondary" data-action="add-model">+ 添加模型</button>
+              <button type="button" class="btn btn-sm btn-secondary" data-action="fetch-models">从服务获取列表</button>
+            </div>
+          </div>
+          ${batchRow}
+          <div class="provider-models">
+            ${renderModelCards(key, sorted, primary, search)}
+            ${hiddenCount > 0 ? `<div class="models-search-hidden-hint">已隐藏 ${hiddenCount} 个不匹配的模型</div>` : ''}
+          </div>
+        </section>
       </div>
     `
-  }).join('')
+}
 
-  // innerHTML 完成后，直接给每个按钮绑定 onclick
-  bindProviderButtons(listEl, page, state)
+// 渲染左侧厂商目录 + 右侧该厂商下的具体配置
+function renderProviders(page, state) {
+  const railEl = page.querySelector('#models-provider-rail')
+  const detailMount = page.querySelector('#models-detail-inner')
+  if (!railEl || !detailMount) return
+
+  const providers = state.config?.models?.providers || {}
+  const primary = getCurrentPrimary(state.config)
+
+  reconcileModelPageSelection(state, providers)
+
+  const parts = ['<div class="models-vendor-rail-title">模型厂商</div>']
+  for (const pr of VENDOR_PRESETS) {
+    const pk = findProviderKeyForPreset(providers, pr)
+    const active = state.selectedVendorPreset === pr.key
+    const configured = !!pk
+    const n = configured ? (providers[pk].models || []).length : 0
+    parts.push(`<button type="button" class="models-vendor-item${active ? ' active' : ''}${configured ? ' configured' : ''}" data-vendor-preset="${escAttr(pr.key)}">
+      <span class="models-vendor-icon" aria-hidden="true">${vendorBrandIcon(pr.key)}</span>
+      <span class="models-vendor-meta">
+        <span class="models-vendor-label">${escHtml(pr.label)}</span>
+        <span class="models-vendor-sub">${configured ? `${n} 个模型` : '未配置'}</span>
+      </span>
+    </button>`)
+  }
+
+  const orphans = getUnmatchedProviderKeys(providers)
+  if (orphans.length) {
+    parts.push('<div class="models-vendor-rail-subtitle">其它已添加</div>')
+    for (const k of orphans) {
+      const p = providers[k]
+      const models = p.models || []
+      const active = state.selectedVendorPreset === 'custom' && state.selectedProviderKey === k
+      parts.push(`<button type="button" class="models-vendor-item models-vendor-item--custom${active ? ' active' : ''} configured" data-vendor-custom="${escAttr(k)}">
+        <span class="models-vendor-icon models-vendor-icon--neutral" aria-hidden="true">${icon('layers', 20)}</span>
+        <span class="models-vendor-meta">
+          <span class="models-vendor-label">${escHtml(k)}</span>
+          <span class="models-vendor-sub">${escHtml(getApiTypeLabel(p.api))} · ${models.length} 个模型</span>
+        </span>
+      </button>`)
+    }
+  }
+
+  railEl.innerHTML = parts.join('')
+
+  let detailHtml = ''
+  if (state.selectedVendorPreset === 'custom' && state.selectedProviderKey) {
+    detailHtml = `<div id="providers-list">${buildSingleProviderSectionHTML(state.selectedProviderKey, state, primary)}</div>`
+  } else if (state.selectedVendorPreset) {
+    const pr = VENDOR_PRESETS.find((p) => p.key === state.selectedVendorPreset)
+    const pk = pr ? findProviderKeyForPreset(providers, pr) : null
+    if (pk) {
+      detailHtml = `<div id="providers-list">${buildSingleProviderSectionHTML(pk, state, primary)}</div>`
+    } else if (pr) {
+      detailHtml = renderVendorInlineSetupForm(pr)
+    } else {
+      detailHtml =
+        '<div class="models-vendor-empty"><p class="form-hint">请选择左侧厂商。</p></div>'
+    }
+  } else {
+    detailHtml =
+      '<div class="models-vendor-empty"><p class="form-hint">请点击「+ 添加服务商」或选择左侧厂商。</p></div>'
+  }
+
+  detailMount.innerHTML = detailHtml
+  const listEl = detailMount.querySelector('#providers-list')
+  if (listEl) bindProviderButtons(listEl, page, state)
+  updateModelsToolbarMode(page, state)
+}
+
+/** 按右侧内容切换顶部工具栏：内联配置时隐藏搜索、长说明、主模型摘要与「自定义服务商」 */
+function updateModelsToolbarMode(page, state) {
+  const providers = state.config?.models?.providers || {}
+  let mode = 'idle'
+  if (state.selectedVendorPreset === 'custom' && state.selectedProviderKey) {
+    mode = 'detail'
+  } else if (state.selectedVendorPreset) {
+    const pr = VENDOR_PRESETS.find((p) => p.key === state.selectedVendorPreset)
+    if (pr && findProviderKeyForPreset(providers, pr)) mode = 'detail'
+    else if (pr) mode = 'inline-setup'
+    else mode = 'idle'
+  } else {
+    mode = 'idle'
+  }
+
+  const searchWrap = page.querySelector('#models-toolbar-search-wrap')
+  const hintLong = page.querySelector('#models-toolbar-hint-long')
+  const defaultBar = page.querySelector('#default-model-bar')
+  const addBtn = page.querySelector('#btn-add-provider')
+  const inline = mode === 'inline-setup'
+  const showSearch = mode === 'detail'
+
+  if (searchWrap) searchWrap.hidden = !showSearch
+  if (hintLong) hintLong.hidden = inline
+  if (defaultBar) defaultBar.hidden = inline
+  if (addBtn) addBtn.hidden = inline
+
+  const tb = page.querySelector('#models-twopane-toolbar')
+  if (tb) tb.classList.toggle('models-twopane-toolbar--compact', inline)
 }
 
 // 渲染模型卡片（支持搜索高亮和批量选择 checkbox）
 function renderModelCards(providerKey, models, primary, search) {
   if (!models.length) {
-    return '<div style="color:var(--text-tertiary);font-size:var(--font-size-sm);padding:8px 0">暂无模型，点击「+ 模型」添加</div>'
+    return '<div class="models-list-empty">尚未添加模型。请确认上方「连接与鉴权」配置正确，然后使用「从服务获取列表」或「+ 添加模型」。</div>'
   }
   return models.map((m) => {
     const id = typeof m === 'string' ? m : m.id
@@ -595,6 +923,7 @@ async function handleAction(action, btn, card, section, providerKey, provider, p
       if (!yes) return
       pushUndo(state)
       delete state.config.models.providers[providerKey]
+      pickDefaultVendorSelection(state, state.config.models.providers || {})
       renderProviders(page, state)
       renderDefaultBar(page, state)
       updateUndoBtn(page, state)
@@ -707,109 +1036,92 @@ function applyDefaultModel(state) {
   }
 }
 
+function applySelectionAfterProviderAdded(state, key) {
+  const providers = state.config?.models?.providers || {}
+  if (VENDOR_PRESETS.some((p) => p.key === key)) {
+    state.selectedVendorPreset = key
+    state.selectedProviderKey = key
+    return
+  }
+  for (const pr of VENDOR_PRESETS) {
+    if (findProviderKeyForPreset(providers, pr) === key) {
+      state.selectedVendorPreset = pr.key
+      state.selectedProviderKey = key
+      return
+    }
+  }
+  state.selectedVendorPreset = 'custom'
+  state.selectedProviderKey = key
+}
+
 // 顶部按钮事件
 function bindTopActions(page, state) {
   page.querySelector('#btn-add-provider').onclick = () => addProvider(page, state)
   page.querySelector('#btn-undo').onclick = () => undo(page, state)
 
-  // 晴辰云：获取模型列表 → 弹窗让用户选择要添加的模型
-  page.querySelector('#btn-qtcool-oneclick').onclick = async () => {
-    if (!state.config) { toast('配置未加载完成，请稍候', 'warning'); return }
-
-    const btn = page.querySelector('#btn-qtcool-oneclick')
-    btn.textContent = '获取中...'
-    btn.disabled = true
-
-    const models = await fetchQtcoolModels()
-
-    btn.innerHTML = `${icon('plus', 14)} 获取模型列表`
-    btn.disabled = false
-
-    if (!models.length) {
-      toast('无法获取模型列表，请检查网络或稍后重试', 'error')
-      return
-    }
-
-    // 已有的模型 ID
-    const existingProvider = (state.config.models?.providers || {})[QTCOOL.providerKey]
-    const existingIds = new Set((existingProvider?.models || []).map(m => typeof m === 'string' ? m : m.id))
-
-    // 弹窗让用户勾选要添加的模型
-    const overlay = document.createElement('div')
-    overlay.className = 'modal-overlay'
-    overlay.innerHTML = `
-      <div class="modal" style="max-height:80vh;overflow-y:auto">
-        <div class="modal-title">选择要添加的模型</div>
-        <div class="form-hint" style="margin-bottom:12px">从晴辰云获取到 ${models.length} 个可用模型，勾选需要的模型后点击添加。</div>
-        <div style="margin-bottom:12px;display:flex;gap:8px">
-          <button class="btn btn-sm btn-secondary" id="qtsel-all">全选</button>
-          <button class="btn btn-sm btn-secondary" id="qtsel-none">全不选</button>
-        </div>
-        <div id="qtmodel-list" style="display:flex;flex-direction:column;gap:6px;max-height:40vh;overflow-y:auto;padding-right:4px">
-          ${models.map(m => {
-            const already = existingIds.has(m.id)
-            return `<label style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:var(--radius-md);cursor:pointer;background:var(--bg-tertiary);opacity:${already ? '0.5' : '1'}">
-              <input type="checkbox" value="${m.id}" ${already ? 'disabled title="已添加"' : 'checked'} style="accent-color:var(--primary)">
-              <span style="font-size:var(--font-size-sm);flex:1">${m.id}</span>
-              ${already ? '<span style="font-size:10px;color:var(--text-tertiary)">已有</span>' : ''}
-            </label>`
-          }).join('')}
-        </div>
-        <div class="modal-actions" style="margin-top:16px">
-          <button class="btn btn-primary" id="qtsel-confirm">${icon('plus', 14)} 添加选中模型</button>
-          <button class="btn btn-secondary" id="qtsel-cancel">取消</button>
-        </div>
-      </div>
-    `
-    document.body.appendChild(overlay)
-    overlay.querySelector('#qtsel-cancel').onclick = () => overlay.remove()
-    overlay.querySelector('#qtsel-all').onclick = () => {
-      overlay.querySelectorAll('#qtmodel-list input:not(:disabled)').forEach(cb => cb.checked = true)
-    }
-    overlay.querySelector('#qtsel-none').onclick = () => {
-      overlay.querySelectorAll('#qtmodel-list input:not(:disabled)').forEach(cb => cb.checked = false)
-    }
-    overlay.querySelector('#qtsel-confirm').onclick = () => {
-      const selected = [...overlay.querySelectorAll('#qtmodel-list input:checked:not(:disabled)')].map(cb => cb.value)
-      overlay.remove()
-      if (!selected.length) { toast('未选择任何模型', 'info'); return }
-
-      pushUndo(state)
-      if (!state.config.models) state.config.models = {}
-      if (!state.config.models.providers) state.config.models.providers = {}
-
-      const selectedModels = models.filter(m => selected.includes(m.id))
-      if (existingProvider) {
-        let added = 0
-        for (const m of selectedModels) {
-          if (!existingIds.has(m.id)) { existingProvider.models.push({ ...m }); added++ }
-        }
-        toast(added ? `已添加 ${added} 个模型` : '所选模型均已存在', added ? 'success' : 'info')
-      } else {
-        state.config.models.providers[QTCOOL.providerKey] = {
-          baseUrl: QTCOOL.baseUrl,
-          apiKey: QTCOOL.defaultKey,
-          api: QTCOOL.api,
-          models: selectedModels.map(m => ({ ...m })),
-        }
-        if (!getCurrentPrimary(state.config) && selectedModels.length) {
-          if (!state.config.agents) state.config.agents = {}
-          if (!state.config.agents.defaults) state.config.agents.defaults = {}
-          if (!state.config.agents.defaults.model) state.config.agents.defaults.model = {}
-          state.config.agents.defaults.model.primary = QTCOOL.providerKey + '/' + selectedModels[0].id
-        }
-        toast(`已添加晴辰云（${selectedModels.length} 个模型）`, 'success')
+  page.addEventListener('click', (e) => {
+    const saveInline = e.target.closest('[data-action="save-inline-provider"]')
+    if (saveInline) {
+      const root = saveInline.closest('.models-inline-setup')
+      if (!root || !state.config) return
+      const key = root.querySelector('[data-inline-field="key"]')?.value?.trim()
+      const baseUrl = root.querySelector('[data-inline-field="baseUrl"]')?.value?.trim() ?? ''
+      const apiKey = root.querySelector('[data-inline-field="apiKey"]')?.value?.trim() ?? ''
+      const api = root.querySelector('[data-inline-field="api"]')?.value
+      if (!key) {
+        toast('配置标识无效', 'warning')
+        return
       }
+      if ((state.config.models?.providers || {})[key]) {
+        toast('该配置已存在，正在切换到已有项', 'info')
+        applySelectionAfterProviderAdded(state, key)
+        renderProviders(page, state)
+        renderDefaultBar(page, state)
+        return
+      }
+      pushUndo(state)
+      if (!state.config.models) state.config.models = { mode: 'replace', providers: {} }
+      if (!state.config.models.providers) state.config.models.providers = {}
+      state.config.models.providers[key] = {
+        baseUrl,
+        apiKey,
+        api: api || 'openai-completions',
+        models: [],
+      }
+      applySelectionAfterProviderAdded(state, key)
       renderProviders(page, state)
       renderDefaultBar(page, state)
       updateUndoBtn(page, state)
       autoSave(state)
+      toast('已保存，可继续添加模型', 'success')
+      return
     }
-  }
+
+    const custom = e.target.closest('[data-vendor-custom]')
+    if (custom && custom.closest('#models-provider-rail')) {
+      const key = custom.dataset.vendorCustom
+      if (!key) return
+      state.selectedVendorPreset = 'custom'
+      state.selectedProviderKey = key
+      renderProviders(page, state)
+      return
+    }
+
+    const vp = e.target.closest('[data-vendor-preset]')
+    if (vp && vp.closest('#models-provider-rail')) {
+      const pk = vp.dataset.vendorPreset
+      if (!pk) return
+      state.selectedVendorPreset = pk
+      const providers = state.config?.models?.providers || {}
+      const pr = VENDOR_PRESETS.find((p) => p.key === pk)
+      state.selectedProviderKey = pr ? findProviderKeyForPreset(providers, pr) : null
+      renderProviders(page, state)
+    }
+  })
 }
 
-// 添加服务商（带预设快捷选择）
-function addProvider(page, state) {
+// 添加服务商（带预设快捷选择）；presetKey 可选，打开时自动选中该预设
+function addProvider(page, state, presetKey) {
   // 构建预设按钮 HTML
   const presetsHtml = PROVIDER_PRESETS.filter(p => !p.hidden).map(p =>
     `<button class="btn btn-sm btn-secondary preset-btn" data-preset="${p.key}" style="margin:0 6px 6px 0">${p.label}${p.badge ? ' <span style="font-size:9px;background:var(--accent);color:#fff;padding:1px 5px;border-radius:8px;margin-left:4px">' + p.badge + '</span>' : ''}</button>`
@@ -857,6 +1169,11 @@ function addProvider(page, state) {
 
   document.body.appendChild(overlay)
 
+  if (presetKey) {
+    const btn = [...overlay.querySelectorAll('.preset-btn')].find((b) => b.dataset.preset === presetKey)
+    if (btn) btn.click()
+  }
+
   // 预设按钮点击自动填充
   overlay.querySelectorAll('.preset-btn').forEach(btn => {
     btn.onclick = () => {
@@ -901,6 +1218,7 @@ function addProvider(page, state) {
       api: apiType,
       models: [],
     }
+    applySelectionAfterProviderAdded(state, key)
     overlay.remove()
     renderProviders(page, state)
     updateUndoBtn(page, state)

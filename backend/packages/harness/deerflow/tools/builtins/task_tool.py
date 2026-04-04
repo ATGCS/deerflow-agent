@@ -12,8 +12,9 @@ from langgraph.config import get_stream_writer
 from langgraph.typing import ContextT
 from pydantic import ValidationError
 
-from deerflow.agents.lead_agent.prompt import get_skills_prompt_section
+from deerflow.agents.lead_agent.prompt import get_skills_prompt
 from deerflow.agents.thread_state import ThreadState
+from deerflow.config.agents_config import load_agent_config
 from deerflow.sandbox.security import LOCAL_BASH_SUBAGENT_DISABLED_MESSAGE, is_host_bash_allowed
 from deerflow.collab.models import WorkerProfile
 from deerflow.collab.storage import (
@@ -266,6 +267,42 @@ async def task_tool(
 
     if overrides:
         config = replace(config, **overrides)
+
+    # Load tools/skills from AgentConfig if not overridden in WorkerProfile
+    final_tools = overrides.get("tools")
+    final_skills = skills_kw
+    
+    if profile_model is not None:
+        # Load from AgentConfig if WorkerProfile doesn't override
+        if final_tools is None:
+            agent_cfg = load_agent_config(effective_subagent_type)
+            if agent_cfg and agent_cfg.tools is not None:
+                # Filter by available tools
+                final_tools = [t for t in agent_cfg.tools if t in allowed_tool_names]
+                logger.info(f"Loaded {len(final_tools)} tools from AgentConfig for {effective_subagent_type}")
+        
+        if final_skills is None:
+            agent_cfg = load_agent_config(effective_subagent_type)
+            if agent_cfg and agent_cfg.skills is not None:
+                final_skills = set(agent_cfg.skills)
+                logger.info(f"Loaded {len(final_skills)} skills from AgentConfig for {effective_subagent_type}")
+        
+        # Override model if specified in WorkerProfile
+        if profile_model.model is not None:
+            parent_model = profile_model.model
+            logger.info(f"Overriding model to {profile_model.model} from WorkerProfile")
+    
+    # Update overrides with final values
+    if final_tools is not None:
+        overrides["tools"] = final_tools
+    if final_skills is not None:
+        skills_section = get_skills_prompt(final_skills)
+        system_prompt = config.system_prompt
+        if skills_section:
+            system_prompt = system_prompt + "\n\n" + skills_section
+        if profile_model and profile_model.instruction:
+            system_prompt = system_prompt + "\n\n" + profile_model.instruction
+        overrides["system_prompt"] = system_prompt
 
     # Create executor
     executor = SubagentExecutor(

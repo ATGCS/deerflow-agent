@@ -166,7 +166,7 @@ if [ "$sandbox_mode" = "provisioner" ]; then
     services=""
     extra_args="--profile provisioner"
 else
-    services="frontend gateway langgraph nginx"
+    services="gateway langgraph"
     extra_args=""
 fi
 
@@ -202,9 +202,8 @@ echo "=========================================="
 echo "  DeerFlow is running!"
 echo "=========================================="
 echo ""
-echo "  🌐 Application: http://localhost:${PORT:-2026}"
-echo "  📡 API Gateway: http://localhost:${PORT:-2026}/api/*"
-echo "  🤖 LangGraph:   http://localhost:${PORT:-2026}/api/langgraph/*"
+echo "  🌐 LangGraph:   http://localhost:2024"
+echo "  📡 Gateway:     http://localhost:8001"
 echo ""
 echo "  Manage:"
 echo "    make down        — stop and remove containers"

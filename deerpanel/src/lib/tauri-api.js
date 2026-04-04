@@ -5,24 +5,51 @@
 
 const isTauri = !!window.__TAURI_INTERNALS__
 
-// 获取后端基础 URL
+// 兼容旧接口：返回 Gateway 直连地址
 export function getBackendBaseURL() {
   const origin = window.location.origin
-  // Tauri 桌面应用可能运行在端口 1420 或 1421，或者没有端口（如 http://localhost）
   if (origin.includes(':1420') || origin.includes(':1421')) {
-    return origin.replace(/:\d+$/, ':2026')
+    return origin.replace(/:\d+$/, ':8012')
   }
-  // 如果 origin 是 http://localhost 或 http://localhost:xxx 但不是 2026，添加端口 2026
   if (origin === 'http://localhost' || /^http:\/\/localhost:\d+$/.test(origin)) {
-    return origin.replace(/(:\d+)?$/, ':2026')
+    return origin.replace(/(:\d+)?$/, ':8012')
   }
-  return origin || 'http://localhost:2026';
+  return origin || 'http://localhost:8012';
 }
 
-// 仅在 Node.js 后端实现的命令（Tauri Rust 不处理），强制走 webInvoke
-const WEB_ONLY_CMDS = new Set([
-  'agents_list', 'agents_get', 'agents_create', 'agents_update', 'agents_delete',
-])
+// 通过 Rust 后端代理访问 Gateway API（避免 CORS）
+// - Tauri 桌面应用：走 Rust invoke
+// - 浏览器开发模式：走 Vite 代理 fetch
+async function gatewayProxy(method, path, body = null, query = null) {
+  if (window.__TAURI__) {
+    let result
+    result = await window.__TAURI__.core.invoke('gateway_proxy', {
+      request: { method, path: '/api' + path, body, query }
+    })
+    if (!result.ok) {
+      throw new Error(result.error || `Gateway API ${method} ${path} failed: ${result.status}`)
+    }
+    return result.body
+  }
+
+  // 浏览器开发模式：通过 Vite 代理
+  let url = `/api${path}`
+  if (query && Object.keys(query).length > 0) {
+    const params = new URLSearchParams()
+    for (const [k, v] of Object.entries(query)) params.append(k, v)
+    url += '?' + params.toString()
+  }
+  const res = await fetch(url, {
+    method,
+    headers: body ? { 'Content-Type': 'application/json' } : {},
+    body: body ? JSON.stringify(body) : undefined,
+  })
+  const text = await res.text()
+  let result
+  try { result = JSON.parse(text) } catch { result = text }
+  if (!res.ok) throw new Error(result?.detail || result?.error || `Gateway API failed: ${res.status}`)
+  return result
+}
 
 // 预加载 Tauri invoke，避免每次 API 调用都做动态 import
 const _invokeReady = isTauri
@@ -96,6 +123,7 @@ function invalidate(...cmds) {
 // 导出 invalidate 供外部使用
 export { invalidate }
 
+// 函数声明：确保在 gatewayProxy 调用之前已定义（函数声明会被 hoisting）
 async function invoke(cmd, args = {}) {
   const start = Date.now()
   if (_invokeReady && !WEB_ONLY_CMDS.has(cmd)) {
@@ -225,57 +253,23 @@ export const api = {
   backupAgent: (id) => invoke('backup_agent', { id }),
   // Agent 管理（Web 版语义）
   listAgents: async () => {
-    const response = await fetch(`${getBackendBaseURL()}/api/agents`);
-    if (!response.ok) throw new Error(`Failed to load agents: ${response.statusText}`);
-    const data = await response.json();
+    const data = await gatewayProxy('GET', '/agents');
     return data.agents || [];
   },
   getAgent: async (name) => {
-    const response = await fetch(`${getBackendBaseURL()}/api/agents/${name}`);
-    if (!response.ok) throw new Error(`Agent '${name}' not found`);
-    return response.json();
+    return gatewayProxy('GET', `/agents/${name}`);
   },
   createAgent: async (request) => {
-    const response = await fetch(`${getBackendBaseURL()}/api/agents`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(request),
-    });
-    if (!response.ok) {
-      const err = await response.json().catch(() => ({}));
-      throw new Error(err.detail ?? `Failed to create agent: ${response.statusText}`);
-    }
-    return response.json();
+    return gatewayProxy('POST', '/agents', request);
   },
   updateAgent: async (name, request) => {
-    const response = await fetch(`${getBackendBaseURL()}/api/agents/${name}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(request),
-    });
-    if (!response.ok) {
-      const err = await response.json().catch(() => ({}));
-      throw new Error(err.detail ?? `Failed to update agent: ${response.statusText}`);
-    }
-    return response.json();
+    return gatewayProxy('PUT', `/agents/${name}`, request);
   },
   deleteAgent: async (name) => {
-    const response = await fetch(`${getBackendBaseURL()}/api/agents/${name}`, {
-      method: "DELETE",
-    });
-    if (!response.ok) throw new Error(`Failed to delete agent: ${response.statusText}`);
+    return gatewayProxy('DELETE', `/agents/${name}`);
   },
   checkAgentName: async (name) => {
-    const response = await fetch(
-      `${getBackendBaseURL()}/api/agents/check?name=${encodeURIComponent(name)}`
-    );
-    if (!response.ok) {
-      const err = await response.json().catch(() => ({}));
-      throw new Error(
-        err.detail ?? `Failed to check agent name: ${response.statusText}`
-      );
-    }
-    return response.json();
+    return gatewayProxy('GET', '/agents/check', null, { name });
   },
   // 传统 Agent 接口（保持兼容）
   agentsList: async () => {
@@ -361,36 +355,28 @@ export const api = {
   readLogTail: (logName, lines = 100) => cachedInvoke('read_log_tail', { logName, lines }, 5000),
   searchLog: (logName, query, maxResults = 50) => invoke('search_log', { logName, query, maxResults }),
 
-  // 记忆 API
-  getMemory: async () => {
-    const response = await fetch(`${getBackendBaseURL()}/api/memory`);
-    if (!response.ok) throw new Error(`Failed to load memory: ${response.statusText}`);
-    return response.json();
+  // 记忆 API（global：不传 agentId；per-agent：`agents/{id}/memory.json`）
+  getMemoryAgents: async () => gatewayProxy('GET', '/memory/agents'),
+  getMemory: async (agentId) => {
+    const q = agentId != null && String(agentId).trim() !== '' ? { agent: String(agentId).trim() } : null;
+    return gatewayProxy('GET', '/memory', null, q);
   },
-  reloadMemory: async () => {
-    const response = await fetch(`${getBackendBaseURL()}/api/memory/reload`, { method: 'POST' });
-    if (!response.ok) throw new Error(`Failed to reload memory: ${response.statusText}`);
-    return response.json();
+  reloadMemory: async (agentId) => {
+    const q = agentId != null && String(agentId).trim() !== '' ? { agent: String(agentId).trim() } : null;
+    return gatewayProxy('POST', '/memory/reload', null, q);
   },
-  clearMemory: async () => {
-    const response = await fetch(`${getBackendBaseURL()}/api/memory`, { method: 'DELETE' });
-    if (!response.ok) throw new Error(`Failed to clear memory: ${response.statusText}`);
-    return response.json();
+  clearMemory: async (agentId) => {
+    const q = agentId != null && String(agentId).trim() !== '' ? { agent: String(agentId).trim() } : null;
+    return gatewayProxy('DELETE', '/memory', null, q);
   },
-  deleteMemoryFact: async (factId) => {
-    const response = await fetch(`${getBackendBaseURL()}/api/memory/facts/${factId}`, { method: 'DELETE' });
-    if (!response.ok) throw new Error(`Failed to delete memory fact: ${response.statusText}`);
-    return response.json();
+  deleteMemoryFact: async (factId, agentId) => {
+    const q = agentId != null && String(agentId).trim() !== '' ? { agent: String(agentId).trim() } : null;
+    return gatewayProxy('DELETE', `/memory/facts/${encodeURIComponent(factId)}`, null, q);
   },
-  getMemoryConfig: async () => {
-    const response = await fetch(`${getBackendBaseURL()}/api/memory/config`);
-    if (!response.ok) throw new Error(`Failed to load memory config: ${response.statusText}`);
-    return response.json();
-  },
-  getMemoryStatus: async () => {
-    const response = await fetch(`${getBackendBaseURL()}/api/memory/status`);
-    if (!response.ok) throw new Error(`Failed to load memory status: ${response.statusText}`);
-    return response.json();
+  getMemoryConfig: async () => gatewayProxy('GET', '/memory/config'),
+  getMemoryStatus: async (agentId) => {
+    const q = agentId != null && String(agentId).trim() !== '' ? { agent: String(agentId).trim() } : null;
+    return gatewayProxy('GET', '/memory/status', null, q);
   },
 
   // 记忆文件
@@ -469,97 +455,22 @@ export const api = {
 
   // 技能接口（Web 版语义）
   loadSkills: async () => {
-    const response = await fetch(`${getBackendBaseURL()}/api/skills`);
-    const json = await response.json();
-    return json.skills || [];
+    const data = await gatewayProxy('GET', '/skills');
+    return data.skills || [];
   },
-  enableSkill: async (skillName, enabled) => {
-    const response = await fetch(
-      `${getBackendBaseURL()}/api/skills/${skillName}`,
-      {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          enabled,
-        }),
-      },
-    );
-    return response.json();
-  },
-  installSkill: async (request) => {
-    const response = await fetch(`${getBackendBaseURL()}/api/skills/install`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(request),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      const errorMessage = errorData.detail ?? `HTTP ${response.status}: ${response.statusText}`;
-      return {
-        success: false,
-        skill_name: "",
-        message: errorMessage,
-      };
-    }
-
-    return response.json();
-  },
+  enableSkill: async (skillName, enabled) => gatewayProxy('PUT', `/skills/${skillName}`, { enabled }),
+  installSkill: async (request) => gatewayProxy('POST', '/skills/install', request),
 
   // MCP 工具 API
-  getMCPConfig: async () => {
-    const response = await fetch(`${getBackendBaseURL()}/api/mcp/config`);
-    if (!response.ok) throw new Error(`Failed to load MCP config: ${response.statusText}`);
-    return response.json();
-  },
-  updateMCPConfig: async (mcpServers) => {
-    const response = await fetch(`${getBackendBaseURL()}/api/mcp/config`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mcp_servers: mcpServers }),
-    });
-    if (!response.ok) throw new Error(`Failed to update MCP config: ${response.statusText}`);
-    return response.json();
-  },
+  getMCPConfig: async () => gatewayProxy('GET', '/mcp/config'),
+  updateMCPConfig: async (mcpServers) => gatewayProxy('PUT', '/mcp/config', { mcp_servers: mcpServers }),
 
   // DeerFlaw 多渠道 API
-  getChannelsStatus: async () => {
-    const response = await fetch(`${getBackendBaseURL()}/api/channels`);
-    if (!response.ok) throw new Error(`Failed to get channels status: ${response.statusText}`);
-    return response.json();
-  },
-  restartChannel: async (name) => {
-    const response = await fetch(`${getBackendBaseURL()}/api/channels/${name}/restart`, { method: 'POST' });
-    if (!response.ok) throw new Error(`Failed to restart channel: ${response.statusText}`);
-    return response.json();
-  },
-  enableChannel: async (name, enabled) => {
-    const response = await fetch(`${getBackendBaseURL()}/api/channels/${name}/enable`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ enabled }),
-    });
-    if (!response.ok) throw new Error(`Failed to enable/disable channel: ${response.statusText}`);
-    return response.json();
-  },
-  getChannelConfig: async (name) => {
-    const response = await fetch(`${getBackendBaseURL()}/api/channels/${name}/config`);
-    if (!response.ok) throw new Error(`Failed to get channel config: ${response.statusText}`);
-    return response.json();
-  },
-  updateChannelConfig: async (name, config) => {
-    const response = await fetch(`${getBackendBaseURL()}/api/channels/${name}/config`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(config),
-    });
-    if (!response.ok) throw new Error(`Failed to update channel config: ${response.statusText}`);
-    return response.json();
-  },
+  getChannelsStatus: async () => gatewayProxy('GET', '/channels'),
+  restartChannel: async (name) => gatewayProxy('POST', `/channels/${name}/restart`),
+  enableChannel: async (name, enabled) => gatewayProxy('POST', `/channels/${name}/enable`, { enabled }),
+  getChannelConfig: async (name) => gatewayProxy('GET', `/channels/${name}/config`),
+  updateChannelConfig: async (name, config) => gatewayProxy('PUT', `/channels/${name}/config`, config),
 
   // 传统技能接口（保持兼容）
   skillsCatalog: () => invoke('skills_list'),
@@ -599,122 +510,29 @@ export const api = {
 
   // ========== 多智能体协作任务 ==========
   // 任务管理（任务为中心）
-  listAllTasks: async () => {
-    const response = await fetch(`${getBackendBaseURL()}/api/tasks`);
-    if (!response.ok) throw new Error(`Failed to list tasks: ${response.statusText}`);
-    return response.json();
-  },
-  getTask: async (taskId) => {
-    const response = await fetch(`${getBackendBaseURL()}/api/tasks/${taskId}`);
-    if (!response.ok) throw new Error(`Failed to get task: ${response.statusText}`);
-    return response.json();
-  },
-  createTask: async (name, description = '') => {
-    const response = await fetch(`${getBackendBaseURL()}/api/tasks`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, description }),
-    });
-    if (!response.ok) throw new Error(`Failed to create task: ${response.statusText}`);
-    return response.json();
-  },
-  updateTask: async (taskId, data) => {
-    const response = await fetch(`${getBackendBaseURL()}/api/tasks/${taskId}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    });
-    if (!response.ok) throw new Error(`Failed to update task: ${response.statusText}`);
-    return response.json();
-  },
-  deleteTask: async (taskId) => {
-    const response = await fetch(`${getBackendBaseURL()}/api/tasks/${taskId}`, { method: 'DELETE' });
-    if (!response.ok) throw new Error(`Failed to delete task: ${response.statusText}`);
-    return response.json();
-  },
+  listAllTasks: async () => gatewayProxy('GET', '/tasks'),
+  getTask: async (taskId) => gatewayProxy('GET', `/tasks/${taskId}`),
+  createTask: async (name, description = '') => gatewayProxy('POST', '/tasks', { name, description }),
+  updateTask: async (taskId, data) => gatewayProxy('PUT', `/tasks/${taskId}`, data),
+  deleteTask: async (taskId) => gatewayProxy('DELETE', `/tasks/${taskId}`),
 
   // 任务执行控制
-  startTaskPlanning: async (taskId) => {
-    const response = await fetch(`${getBackendBaseURL()}/api/tasks/${taskId}/start`, { method: 'POST' });
-    if (!response.ok) throw new Error(`Failed to start task: ${response.statusText}`);
-    return response.json();
-  },
-  stopTaskExecution: async (taskId) => {
-    const response = await fetch(`${getBackendBaseURL()}/api/tasks/${taskId}/stop`, { method: 'POST' });
-    if (!response.ok) throw new Error(`Failed to stop task: ${response.statusText}`);
-    return response.json();
-  },
+  startTaskPlanning: async (taskId) => gatewayProxy('POST', `/tasks/${taskId}/start`),
+  stopTaskExecution: async (taskId) => gatewayProxy('POST', `/tasks/${taskId}/stop`),
 
   // 子任务管理
-  addSubtask: async (taskId, name, description = '', dependencies = []) => {
-    const response = await fetch(`${getBackendBaseURL()}/api/tasks/${taskId}/subtasks`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, description, dependencies }),
-    });
-    if (!response.ok) throw new Error(`Failed to add subtask: ${response.statusText}`);
-    return response.json();
-  },
-  listSubtasks: async (taskId) => {
-    const response = await fetch(`${getBackendBaseURL()}/api/tasks/${taskId}/subtasks`);
-    if (!response.ok) throw new Error(`Failed to list subtasks: ${response.statusText}`);
-    return response.json();
-  },
-  getSubtask: async (taskId, subtaskId) => {
-    const response = await fetch(`${getBackendBaseURL()}/api/tasks/${taskId}/subtasks/${subtaskId}`);
-    if (!response.ok) throw new Error(`Failed to get subtask: ${response.statusText}`);
-    return response.json();
-  },
-  updateSubtask: async (taskId, subtaskId, data) => {
-    const response = await fetch(`${getBackendBaseURL()}/api/tasks/${taskId}/subtasks/${subtaskId}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    });
-    if (!response.ok) throw new Error(`Failed to update subtask: ${response.statusText}`);
-    return response.json();
-  },
-  deleteSubtask: async (taskId, subtaskId) => {
-    const response = await fetch(`${getBackendBaseURL()}/api/tasks/${taskId}/subtasks/${subtaskId}`, { method: 'DELETE' });
-    if (!response.ok) throw new Error(`Failed to delete subtask: ${response.statusText}`);
-    return response.json();
-  },
-  assignSubtask: async (taskId, subtaskId, agentId) => {
-    const response = await fetch(`${getBackendBaseURL()}/api/tasks/${taskId}/subtasks/${subtaskId}/assign`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ agent_id: agentId }),
-    });
-    if (!response.ok) throw new Error(`Failed to assign subtask: ${response.statusText}`);
-    return response.json();
-  },
+  addSubtask: async (taskId, name, description = '', dependencies = []) =>
+    gatewayProxy('POST', `/tasks/${taskId}/subtasks`, { name, description, dependencies }),
+  listSubtasks: async (taskId) => gatewayProxy('GET', `/tasks/${taskId}/subtasks`),
+  getSubtask: async (taskId, subtaskId) => gatewayProxy('GET', `/tasks/${taskId}/subtasks/${subtaskId}`),
+  updateSubtask: async (taskId, subtaskId, data) => gatewayProxy('PUT', `/tasks/${taskId}/subtasks/${subtaskId}`, data),
+  deleteSubtask: async (taskId, subtaskId) => gatewayProxy('DELETE', `/tasks/${taskId}/subtasks/${subtaskId}`),
+  assignSubtask: async (taskId, subtaskId, agentId) => gatewayProxy('POST', `/tasks/${taskId}/subtasks/${subtaskId}/assign`, { agent_id: agentId }),
 
   // 任务记忆
-  getTaskFacts: async (taskId) => {
-    // Backend doesn't implement GET `/api/task-memory/tasks/{taskId}/facts`.
-    // Use the canonical endpoint and read `facts` from TaskMemoryResponse.
-    const response = await fetch(`${getBackendBaseURL()}/api/task-memory/tasks/${taskId}`);
-    if (!response.ok) throw new Error(`Failed to get task memory: ${response.statusText}`);
-    return response.json();
-  },
-  getTaskMemory: async (taskId) => {
-    const response = await fetch(`${getBackendBaseURL()}/api/task-memory/tasks/${taskId}`);
-    if (!response.ok) throw new Error(`Failed to get task memory: ${response.statusText}`);
-    return response.json();
-  },
-  getSubtaskMemory: async (taskId, subtaskId) => {
-    const response = await fetch(`${getBackendBaseURL()}/api/task-memory/subtasks/${subtaskId}`);
-    if (!response.ok) throw new Error(`Failed to get subtask memory: ${response.statusText}`);
-    return response.json();
-  },
-  searchTaskFacts: async (taskId, keyword) => {
-    const response = await fetch(`${getBackendBaseURL()}/api/task-memory/tasks/${taskId}/search?keyword=${encodeURIComponent(keyword)}`);
-    if (!response.ok) throw new Error(`Failed to search task facts: ${response.statusText}`);
-    return response.json();
-  },
-  getTaskRuntime: async (taskId) => {
-    const response = await fetch(`${getBackendBaseURL()}/api/task-memory/tasks/${taskId}/runtime`);
-    if (!response.ok) throw new Error(`Failed to get task runtime: ${response.statusText}`);
-    return response.json();
-  },
+  getTaskFacts: async (taskId) => gatewayProxy('GET', `/task-memory/tasks/${taskId}`),
+  getTaskMemory: async (taskId) => gatewayProxy('GET', `/task-memory/tasks/${taskId}`),
+  getSubtaskMemory: async (taskId, subtaskId) => gatewayProxy('GET', `/task-memory/subtasks/${subtaskId}`),
+  searchTaskFacts: async (taskId, keyword) => gatewayProxy('GET', `/task-memory/tasks/${taskId}/search`, null, { keyword }),
+  getTaskRuntime: async (taskId) => gatewayProxy('GET', `/task-memory/tasks/${taskId}/runtime`),
 }

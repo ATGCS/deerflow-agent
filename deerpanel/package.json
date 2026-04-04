@@ -1,6 +1,6 @@
 {
   "name": "deerpanel",
-  "version": "0.10.0",
+  "version": "1.0.0",
   "private": true,
   "description": "DeerPanel - DeerPanel 可视化管理面板，基于 Tauri v2 的跨平台桌面应用",
   "type": "module",
