@@ -20,6 +20,11 @@ import { toast } from '../components/toast.js'
 import { openMobileShellAside, toggleShellAsideCollapsed } from '../components/shell-aside.js'
 import { useHostedAgent } from './hooks/useHostedAgent.js'
 import { getBackendBaseURL } from '../lib/tauri-api.js'
+
+// ========== 任务进度可视化系统集成 ==========
+import { tasksAPI } from '../lib/api-client.js'
+// ============================================
+
 import type {
   ChatAttachment,
   ChatSessionRow,
@@ -251,6 +256,89 @@ function finalizeAssistantSegments(S: StreamState): MessageSegment[] | undefined
 }
 
 /**
+ * 从工具调用结果中提取任务 ID
+ * 当检测到 supervisor_tool 或 task_tool 被调用时，从输出中提取任务 ID
+ */
+function extractTaskIdFromTools(tools: unknown[]): { taskId?: string; projectId?: string } {
+  for (const tool of tools) {
+    const t = tool as Record<string, unknown>
+    const name = String(t.name || '')
+    const input = t.input as Record<string, unknown> | null
+    const output = t.output as Record<string, unknown> | string | null
+    
+    console.log('[任务系统] 检查工具:', name)
+    console.log('[任务系统] 工具输入:', input)
+    console.log('[任务系统] 工具输出:', output)
+    
+    // 检查是否是任务相关的工具
+    if (name.includes('supervisor') || name.includes('task_tool') || name.includes('task')) {
+      console.log('[任务系统] ✅ 检测到任务工具调用:', name)
+      
+      // 1. 尝试从输出对象中提取
+      if (output && typeof output === 'object') {
+        const taskId = String(output.taskId || output.id || output.task_id || '')
+        const projectId = String(output.projectId || output.project_id || output.parent_project_id || '')
+        
+        if (taskId) {
+          console.log('[任务系统] ✅ 从输出对象中提取到任务 ID:', taskId)
+          console.log('[任务系统] ✅ 从输出对象中提取到项目 ID:', projectId)
+          return { taskId, projectId }
+        }
+      }
+      
+      // 2. 尝试从输出字符串中提取（格式："Task created successfully. ID: xxx, Name: ..."）
+      if (typeof output === 'string') {
+        console.log('[任务系统] 尝试从输出字符串中解析...')
+        
+        // 匹配 "ID: xxx" 格式
+        const idMatch = output.match(/ID:\s*([a-zA-Z0-9_-]+)/i)
+        if (idMatch) {
+          const taskId = idMatch[1]
+          console.log('[任务系统] ✅ 从字符串中提取到任务 ID:', taskId)
+          
+          // 尝试匹配项目 ID（如果有）
+          const projectIdMatch = output.match(/project[_\s]?ID:\s*([a-zA-Z0-9_-]+)/i)
+          const projectId = projectIdMatch ? projectIdMatch[1] : undefined
+          console.log('[任务系统] ✅ 从字符串中提取到项目 ID:', projectId)
+          
+          return { taskId, projectId }
+        }
+        
+        // 尝试解析为 JSON（如果输出是 JSON 字符串）
+        try {
+          const parsed = JSON.parse(output)
+          const taskId = String(parsed.taskId || parsed.id || parsed.task_id || '')
+          const projectId = String(parsed.projectId || parsed.project_id || parsed.parent_project_id || '')
+          
+          if (taskId) {
+            console.log('[任务系统] ✅ 从 JSON 字符串中提取到任务 ID:', taskId)
+            console.log('[任务系统] ✅ 从 JSON 字符串中提取到项目 ID:', projectId)
+            return { taskId, projectId }
+          }
+        } catch {
+          // 不是 JSON 格式，忽略
+        }
+      }
+      
+      // 3. 尝试从输入中提取（如果输出中没有）
+      if (input && typeof input === 'object') {
+        const taskId = String(input.taskId || input.id || input.task_id || '')
+        const projectId = String(input.projectId || input.project_id || '')
+        
+        if (taskId) {
+          console.log('[任务系统] ✅ 从输入中提取到任务 ID:', taskId)
+          console.log('[任务系统] ✅ 从输入中提取到项目 ID:', projectId)
+          return { taskId, projectId }
+        }
+      }
+    }
+  }
+  
+  console.log('[任务系统] ❌ 未找到任务 ID')
+  return {}
+}
+
+/**
  * 简化版：直接累积所有文本，不使用 segments 封存机制
  * 流式阶段只显示文本，工具调用信息在 final 时一次性显示
  */
@@ -324,6 +412,20 @@ export default function ChatApp() {
 
   /** 从 MCP/技能等页点侧栏任务记录进入聊天时，shell-aside 写入待选会话 */
   useEffect(() => {
+    console.log('%c====== [ChatApp] 组件初始化 ======', 'color: #00ff00; font-size: 16px; font-weight: bold;')
+    console.log('[ChatApp] 时间:', new Date().toLocaleTimeString())
+    console.log('[ChatApp] 当前会话:', selectedSessionKey)
+    
+    try {
+        // ========== 任务进度可视化系统初始化 ==========
+        console.log('%c[ChatApp] 正在初始化任务系统...', 'color: #00ffff; font-size: 14px')
+        console.log('[ChatApp] 任务系统已就绪，将监听工具调用')
+        console.log('%c====== [ChatApp] 任务系统初始化完成 ======', 'color: #00ff00; font-size: 16px; font-weight: bold;')
+      } catch (err) {
+        console.error('[ChatApp] ❌ 任务系统初始化失败:', err.message)
+        console.error('[ChatApp] 错误堆栈:', err.stack)
+      }
+    
     try {
       const pending = sessionStorage.getItem('deerpanel_pending_shell_session')
       if (pending) {
@@ -675,7 +777,7 @@ export default function ChatApp() {
     ;(async () => {
       setModelsLoading(true)
       try {
-        const resp = await fetch(`${getBackendBaseURL()}/api/models`)
+        const resp = await fetch('/api/models')
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
         const data = await resp.json()
         const rows = Array.isArray(data?.models) ? data.models : []
@@ -854,6 +956,62 @@ export default function ChatApp() {
       const payload = msg.payload
       if (!payload) return
       if (payload.sessionKey && payload.sessionKey !== sessionRef.current) return
+      
+      // ========== 流式响应调试日志 - 只显示工具相关 ==========
+      // 检查是否有工具调用
+      const hasTools = payload.message?.tools && payload.message.tools.length > 0
+      const isToolState = payload.state === 'tool'
+      
+      // 只有工具调用时才输出日志
+      if (hasTools || isToolState) {
+        console.log('%c====== [流式响应] 🎯 检测到工具调用 ======', 'color: #ff00ff; font-size: 16px; font-weight: bold; background: #000')
+        console.log('[流式响应] 事件类型:', msg.event)
+        console.log('[流式响应] 状态:', payload.state)
+        console.log('[流式响应] runId:', payload.runId)
+        console.log('[流式响应] 时间:', new Date().toLocaleTimeString())
+        
+        // 输出工具详情
+        if (payload.message?.tools) {
+          console.log('%c[流式响应] 工具数量:', 'color: #00ffff; font-size: 14px', payload.message.tools.length)
+          
+          payload.message.tools.forEach((tool: any, index: number) => {
+            console.log(`%c[流式响应] ━━ 工具 ${index + 1} ━━`, 'color: #00ff00; font-size: 13px; font-weight: bold')
+            console.log('[流式响应] 名称:', tool.name)
+            console.log('[流式响应] 输入:', JSON.stringify(tool.input, null, 2))
+            
+            // 输出格式根据类型决定
+            if (typeof tool.output === 'string') {
+              console.log('[流式响应] 输出 (字符串):')
+              console.log(tool.output)
+              
+              // 尝试解析 JSON 字符串
+              try {
+                const parsed = JSON.parse(tool.output)
+                console.log('%c[流式响应] ✅ 输出解析为 JSON:', 'color: #00ff00; font-size: 12px')
+                console.log(JSON.stringify(parsed, null, 2))
+              } catch {
+                // 不是 JSON，忽略
+              }
+            } else {
+              console.log('[流式响应] 输出 (对象):')
+              console.log(JSON.stringify(tool.output, null, 2))
+            }
+          })
+        }
+        
+        // 工具状态的完整 payload
+        if (isToolState) {
+          console.log('%c[流式响应] 完整 payload:', 'color: #ffff00; font-size: 13px')
+          console.log(JSON.stringify(payload, null, 2))
+        }
+        
+        if (payload.durationMs) {
+          console.log('[流式响应] 耗时:', payload.durationMs, 'ms')
+        }
+        
+        console.log('%c====== [流式响应] 工具调用结束 ======', 'color: #ff00ff; font-size: 16px; font-weight: bold; background: #000')
+      }
+      // ====================================
 
       const { state } = payload
       const runId = payload.runId
@@ -931,6 +1089,36 @@ export default function ChatApp() {
         if (c?.files?.length) S.files = c.files
         if (finalTools.length) {
           S.tools = finalTools
+          
+          // ========== 任务系统：从工具调用中提取任务 ID ==========
+          console.log('[ChatApp] 检测到工具调用，检查是否有任务创建...')
+          const { taskId, projectId } = extractTaskIdFromTools(finalTools)
+          
+          if (taskId) {
+            console.log('%c====== [ChatApp] 检测到任务创建 ======', 'color: #00ff00; font-size: 16px; font-weight: bold; background: #000')
+            console.log('[ChatApp] 任务 ID:', taskId)
+            console.log('[ChatApp] 项目 ID:', projectId)
+            
+            // 延迟一点获取任务详情，确保后端已完全创建
+            setTimeout(async () => {
+              try {
+                console.log('[ChatApp] 正在获取任务详情...')
+                const task = await tasksAPI.getTask(taskId)
+                console.log('[ChatApp] 任务获取结果:', task ? '✅ 成功' : '❌ 失败')
+                
+                if (task) {
+                  console.log('[ChatApp] 任务名称:', task.name)
+                  console.log('[ChatApp] 任务状态:', task.status)
+                  console.log('[ChatApp] 打开任务侧边栏...')
+                  setTaskSidebarOpen(true)
+                  console.log('%c[ChatApp] ✅✅✅ 任务已显示在侧边栏！', 'color: #00ff00; font-size: 16px; font-weight: bold')
+                }
+              } catch (err) {
+                console.error('[ChatApp] ❌ 获取任务失败:', err.message)
+              }
+            }, 800)  // 延迟 800ms
+          }
+          // ============================================
         }
         const segmentsOut = finalizeAssistantSegments(S)
         let textOut: string

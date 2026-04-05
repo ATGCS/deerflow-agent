@@ -43,12 +43,13 @@ export default defineConfig({
   },
   clearScreen: false,
   server: {
-    port: 1420,
-    strictPort: true,
+    port: 1421,
+    strictPort: false,
     proxy: {
       '/api/langgraph': {
         target: 'http://localhost:2024',
         changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api\/langgraph/, ''),
         timeout: 600000,
         proxyTimeout: 600000,
       },

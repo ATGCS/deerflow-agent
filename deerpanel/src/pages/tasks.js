@@ -4,6 +4,7 @@
 import { api, invalidate } from '../lib/tauri-api.js'
 import { toast } from '../components/toast.js'
 import { showModal, showConfirm } from '../components/modal.js'
+import { TaskConversationPanel } from '../components/TaskConversationPanel.js'
 
 export async function render() {
   const page = document.createElement('div')
@@ -46,7 +47,8 @@ export async function render() {
     tasks: [], 
     filter: '',
     batchMode: false,
-    selectedTasks: new Set()
+    selectedTasks: new Set(),
+    conversationPanels: new Map() // 保存打开的对话面板
   }
   loadTasks(page, state)
 
@@ -250,6 +252,7 @@ function renderTasks(page, state) {
           <button class="btn btn-sm btn-primary" data-action="open" data-id="${t.id}">查看详情</button>
           ${t.status === 'planning' ? `<button class="btn btn-sm btn-warning" data-action="start" data-id="${t.id}">开始执行</button>` : ''}
           ${t.status === 'executing' ? `<button class="btn btn-sm btn-secondary" data-action="stop" data-id="${t.id}">暂停</button>` : ''}
+          ${t.thread_id ? `<button class="btn btn-sm btn-ghost" data-action="conversation" data-id="${t.id}" title="查看对话">💬 对话</button>` : ''}
           <button class="btn btn-sm btn-ghost" data-action="delete" data-id="${t.id}">删除</button>
         </div>
       </div>
@@ -279,6 +282,8 @@ function attachTaskEvents(page, state) {
       await stopTaskExecution(id)
     } else if (action === 'delete') {
       await deleteTask(page, state, id)
+    } else if (action === 'conversation') {
+      viewConversation(page, state, id)
     }
   })
 }
@@ -342,6 +347,39 @@ async function deleteTask(page, state, taskId) {
   } catch (e) {
     toast('删除失败：' + e, 'error')
   }
+}
+
+/**
+ * 查看任务对话
+ * @param {HTMLElement} page - 页面元素
+ * @param {Object} state - 页面状态
+ * @param {string} taskId - 任务 ID
+ */
+function viewConversation(page, state, taskId) {
+  // 检查是否已打开
+  if (state.conversationPanels.has(taskId)) {
+    const panel = state.conversationPanels.get(taskId)
+    // 聚焦已有面板
+    panel.focus()
+    toast('对话窗口已打开', 'info')
+    return
+  }
+  
+  // 创建新面板（抽屉模式）
+  const panel = new TaskConversationPanel(taskId, {
+    mode: 'drawer',
+    allowMessaging: false // 只读模式
+  })
+  
+  state.conversationPanels.set(taskId, panel)
+  
+  // 面板关闭时移除引用
+  panel.onClose = () => {
+    state.conversationPanels.delete(taskId)
+    console.log('[TasksPage] Conversation panel closed for task:', taskId)
+  }
+  
+  toast('已打开对话窗口', 'success')
 }
 
 function getStatusBadge(status) {

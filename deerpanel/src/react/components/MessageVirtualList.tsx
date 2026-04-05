@@ -31,11 +31,6 @@ export function MessageVirtualList({
 
   const items = useMemo((): VItem[] => {
     const list: VItem[] = rows.map((row, i) => ({ kind: 'row', row, i }))
-    console.log('[MessageVirtualList] useMemo:', {
-      rowsLength: rows.length,
-      streamTick,
-      lastRowRole: rows[rows.length - 1]?.role
-    })
     // 只在最后一条消息是 user 消息时显示 stream（避免 AI 消息重复显示）
     const lastRow = rows[rows.length - 1]
     if (lastRow?.role === 'user') {
@@ -60,14 +55,8 @@ export function MessageVirtualList({
             files: s.files || [],
           },
         })
-        console.log('[MessageVirtualList] added stream item')
-      } else {
-        console.log('[MessageVirtualList] no stream content')
       }
-    } else {
-      console.log('[MessageVirtualList] lastRow is not user, skipping stream')
     }
-    console.log('[MessageVirtualList] total items:', list.length)
     return list
   }, [rows, streamTick])  // 只依赖 rows 和 streamTick，不依赖 streamRef（引用不变）
 

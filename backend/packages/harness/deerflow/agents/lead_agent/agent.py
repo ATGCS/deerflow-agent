@@ -285,8 +285,8 @@ def make_lead_agent(config: RunnableConfig):
     thinking_enabled = cfg.get("thinking_enabled", True)
     reasoning_effort = cfg.get("reasoning_effort", None)
     requested_model_name: str | None = cfg.get("model_name") or cfg.get("model")
-    is_plan_mode = cfg.get("is_plan_mode", False)
-    subagent_enabled = cfg.get("subagent_enabled", False)
+    is_plan_mode = cfg.get("is_plan_mode", True)  # 默认启用规划模式，让 Lead Agent 自主判断和规划
+    subagent_enabled = cfg.get("subagent_enabled", True)  # 默认启用子代理，让 Lead Agent 能够分配任务
     max_concurrent_subagents = cfg.get("max_concurrent_subagents", 3)
     is_bootstrap = cfg.get("is_bootstrap", False)
     agent_name = cfg.get("agent_name")

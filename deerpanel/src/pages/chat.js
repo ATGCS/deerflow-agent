@@ -10,6 +10,14 @@ import { toast } from '../components/toast.js'
 import { showConfirm, showModal } from '../components/modal.js'
 import { icon as svgIcon } from '../lib/icons.js'
 
+// ========== 任务进度可视化系统集成 ==========
+import { tasksAPI } from '../lib/api-client.js'
+import { EventStreamManager, EventTypes } from '../lib/event-stream.js'
+import { FloatingTaskPanel } from '../components/FloatingTaskPanel.js'
+import { EmbeddedTaskDashboard } from '../components/EmbeddedTaskDashboard.js'
+import { StateRestorationManager } from '../lib/state-persistence.js'
+// ============================================
+
 const RENDER_THROTTLE = 16
 const STORAGE_SESSION_KEY = 'clawpanel-last-session'
 const STORAGE_MODEL_KEY = 'clawpanel-chat-selected-model'
@@ -124,6 +132,13 @@ let _hostedAutoStopTimer = null
 let _hostedStartTime = 0
 
 export async function render() {
+  // ========== 调试日志 START ==========
+  console.log('%c====== [Chat] render() 被调用 ======', 'color: #00ff00; font-size: 16px; font-weight: bold;')
+  console.log('%c[Chat] 开始创建页面元素...', 'color: #00ffff; font-size: 14px')
+  console.log('[Chat] 当前时间:', new Date().toLocaleTimeString())
+  console.log('[Chat] 页面路径:', window.location.pathname)
+  // ========== 调试日志 END ==========
+  
   const page = document.createElement('div')
   page.className = 'page chat-page'
   _pageActive = true
@@ -294,6 +309,8 @@ export async function render() {
         </div>
         <div class="hosted-agent-footer" id="hosted-agent-status">就绪</div>
       </div>
+      <!-- 任务进度可视化仪表板容器 -->
+      <div id="embedded-task-dashboard" class="embedded-task-dashboard"></div>
     </div>
   `
 
@@ -384,6 +401,11 @@ export async function render() {
   syncCollabHeaderButton()
   renderTokenStats()
   syncQuickPromptsVisibility()
+  
+  // ========== 任务进度可视化系统初始化 ==========
+  initTaskVisualization(page)
+  // ============================================
+  
   return page
 }
 
@@ -4051,6 +4073,182 @@ function appendHostedOutput(text) {
   scrollToBottom()
 }
 
+// ── 任务进度可视化系统初始化 ──
+
+/**
+ * 初始化任务进度可视化系统
+ * @param {HTMLElement} page - 页面元素
+ */
+async function initTaskVisualization(page) {
+  // ========== 调试日志 START ==========
+  console.log('%c====== [任务系统] 开始初始化 ======', 'color: #ff00ff; font-size: 16px; font-weight: bold; background: #000')
+  console.log('%c[任务系统] 🚀 初始化启动...', 'color: #ffff00; font-size: 14px')
+  console.log('[任务系统] 时间:', new Date().toLocaleTimeString())
+  console.log('[任务系统] 页面 URL:', window.location.href)
+  console.log('[任务系统] page 参数:', page ? '✅ 存在' : '❌ 不存在')
+  console.log('[任务系统] page 类型:', typeof page)
+  console.log('[任务系统] page className:', page?.className)
+  // ========== 调试日志 END ==========
+  
+  try {
+    // 1. 初始化嵌入式任务仪表板
+    console.log('%c[任务系统] 正在查找仪表板容器 #embedded-task-dashboard...', 'color: #00ffff; font-size: 13px')
+    const dashboardContainer = page.querySelector('#embedded-task-dashboard')
+    console.log('[任务系统] 查找结果:', dashboardContainer ? '✅ 找到' : '❌ 未找到')
+    console.log('[任务系统] 容器类型:', dashboardContainer ? dashboardContainer.tagName : 'N/A')
+    
+    if (dashboardContainer) {
+      console.log('%c[任务系统] 正在创建 EmbeddedTaskDashboard...', 'color: #00ffff; font-size: 13px')
+      window.__embeddedTaskDashboard = new EmbeddedTaskDashboard(dashboardContainer)
+      console.log('%c[任务系统] ✅ 仪表板已初始化', 'color: #00ff00; font-size: 14px; font-weight: bold')
+      console.log('[任务系统] 仪表板对象:', window.__embeddedTaskDashboard)
+    } else {
+      console.error('%c[任务系统] ❌ 未找到仪表板容器', 'color: #ff0000; font-size: 14px; font-weight: bold')
+      console.error('[任务系统] 页面中可用的 ID:', Array.from(page.querySelectorAll('[id]')).map(el => el.id))
+    }
+    
+    // 2. 初始化浮动任务面板
+    console.log('%c[任务系统] 正在创建 FloatingTaskPanel...', 'color: #00ffff; font-size: 13px')
+    window.__floatingPanel = new FloatingTaskPanel()
+    console.log('%c[任务系统] ✅ 浮动面板已初始化', 'color: #00ff00; font-size: 14px; font-weight: bold')
+    console.log('[任务系统] 浮动面板对象:', window.__floatingPanel)
+    
+    // 3. 获取或创建项目事件流
+    console.log('%c[任务系统] 正在获取 EventStreamManager 单例...', 'color: #00ffff; font-size: 13px')
+    const eventStreamManager = EventStreamManager.getInstance()
+    console.log('[任务系统] EventStreamManager:', eventStreamManager ? '✅ 获取成功' : '❌ 获取失败')
+    console.log('[任务系统] EventStreamManager 类型:', typeof eventStreamManager)
+    
+    const projectId = 'main'
+    console.log('[任务系统] 项目 ID:', projectId)
+    
+    console.log('%c[任务系统] 正在获取 TaskEventStream...', 'color: #00ffff; font-size: 13px')
+    const taskEventStream = eventStreamManager.getStream(projectId)
+    console.log('%c[任务系统] ✅ 事件流已获取', 'color: #00ff00; font-size: 14px; font-weight: bold')
+    console.log('[任务系统] TaskEventStream 对象:', taskEventStream)
+    console.log('[任务系统] TaskEventStream 类型:', typeof taskEventStream)
+    console.log('[任务系统] 连接状态:', taskEventStream?.isConnected)
+    console.log('[任务系统] 事件源状态:', taskEventStream?.eventSource?.readyState)
+    
+    // 添加事件监听器 - TASK_CREATED
+    console.log('%c[任务系统] 正在注册 TASK_CREATED 监听器...', 'color: #00ffff; font-size: 13px')
+    taskEventStream.on(EventTypes.TASK_CREATED, async (data) => {
+      console.log('%c====== [任务系统] 收到 TASK_CREATED 事件 ======', 'color: #ff0000; font-size: 16px; font-weight: bold; background: #ffff00')
+      console.log('[任务系统] 🔔 事件触发！')
+      console.log('[任务系统] 原始数据:', JSON.stringify(data, null, 2))
+      console.log('[任务系统] 数据类型:', typeof data)
+      console.log('[任务系统] 数据键:', Object.keys(data || {}))
+      console.log('[任务系统] 时间:', new Date().toLocaleTimeString())
+      
+      const taskId = data?.taskId || data?.id || data?.task?.id || data?.data?.taskId || data?.data?.id
+      console.log('[任务系统] 提取的 taskId:', taskId)
+      
+      if (taskId) {
+        console.log('%c[任务系统] 正在获取任务详情...', 'color: #00ffff; font-size: 13px')
+        setTimeout(async () => {
+          try {
+            console.log('[任务系统] 调用 tasksAPI.getTask(', taskId, ')')
+            const task = await tasksAPI.getTask(taskId)
+            console.log('[任务系统] 任务获取结果:', task ? '✅ 成功' : '❌ 失败')
+            console.log('[任务系统] 任务对象:', task)
+            
+            if (task && window.__embeddedTaskDashboard) {
+              console.log('%c[任务系统] 调用 dashboard.showTask(', 'color: #00ffff; font-size: 13px', taskId, ')')
+              window.__embeddedTaskDashboard.showTask(task)
+              console.log('%c[任务系统] ✅✅✅ 任务已显示在仪表板！', 'color: #00ff00; font-size: 16px; font-weight: bold')
+            } else {
+              console.warn('%c[任务系统] ❌ 显示失败', 'color: #ff0000; font-size: 14px; font-weight: bold')
+              console.warn('[任务系统] - task 存在:', !!task)
+              console.warn('[任务系统] - dashboard 存在:', !!window.__embeddedTaskDashboard)
+            }
+          } catch (err) {
+            console.error('%c[任务系统] ❌ 获取任务失败', 'color: #ff0000; font-size: 14px; font-weight: bold')
+            console.error('[任务系统] 错误:', err.message)
+            console.error('[任务系统] 堆栈:', err.stack)
+          }
+        }, 500)
+      } else {
+        console.error('%c[任务系统] ❌ 无法提取 taskId', 'color: #ff0000; font-size: 14px; font-weight: bold')
+      }
+      console.log('%c====== [任务系统] TASK_CREATED 事件处理结束 ======', 'color: #ff0000; font-size: 16px; font-weight: bold; background: #ffff00')
+    })
+    console.log('%c[任务系统] ✅ TASK_CREATED 监听器已注册', 'color: #00ff00; font-size: 14px; font-weight: bold')
+    
+    // 添加事件监听器 - TASK_PROGRESS
+    console.log('%c[任务系统] 正在注册 TASK_PROGRESS 监听器...', 'color: #00ffff; font-size: 13px')
+    taskEventStream.on(EventTypes.TASK_PROGRESS, (data) => {
+      console.log('[任务系统] 📊 收到进度更新:', data)
+      if (window.__embeddedTaskDashboard) {
+        window.__embeddedTaskDashboard.handleEvent({
+          type: EventTypes.TASK_PROGRESS,
+          data: data
+        })
+      }
+      if (window.__floatingPanel) {
+        window.__floatingPanel.handleEvent({
+          type: EventTypes.TASK_PROGRESS,
+          data: data
+        })
+      }
+    })
+    console.log('%c[任务系统] ✅ TASK_PROGRESS 监听器已注册', 'color: #00ff00; font-size: 14px; font-weight: bold')
+    
+    // 添加事件监听器 - TASK_COMPLETED
+    console.log('%c[任务系统] 正在注册 TASK_COMPLETED 监听器...', 'color: #00ffff; font-size: 13px')
+    taskEventStream.on(EventTypes.TASK_COMPLETED, (data) => {
+      console.log('[任务系统] 🎉 任务完成:', data)
+      if (window.__embeddedTaskDashboard) {
+        window.__embeddedTaskDashboard.handleEvent({
+          type: EventTypes.TASK_COMPLETED,
+          data: data
+        })
+      }
+      if (window.__floatingPanel) {
+        window.__floatingPanel.handleEvent({
+          type: EventTypes.TASK_COMPLETED,
+          data: data
+        })
+      }
+    })
+    console.log('%c[任务系统] ✅ TASK_COMPLETED 监听器已注册', 'color: #00ff00; font-size: 14px; font-weight: bold')
+    
+    // 连接事件流
+    console.log('%c[任务系统] 正在连接 SSE...', 'color: #00ffff; font-size: 13px')
+    console.log('[任务系统] 连接前状态:', taskEventStream?.isConnected)
+    taskEventStream.connect()
+    console.log('%c[任务系统] ✅ SSE 已连接', 'color: #00ff00; font-size: 14px; font-weight: bold')
+    console.log('[任务系统] 连接后状态:', taskEventStream?.isConnected)
+    console.log('[任务系统] 事件源 readyState:', taskEventStream?.eventSource?.readyState)
+    console.log('[任务系统] 事件源 URL:', taskEventStream?.eventSource?.url)
+    
+    // 4. 状态恢复
+    console.log('%c[任务系统] 正在恢复活动任务...', 'color: #00ffff; font-size: 13px')
+    const restorationManager = new StateRestorationManager()
+    const activeTask = await restorationManager.restoreActiveTask()
+    console.log('[任务系统] 恢复的活动任务:', activeTask ? activeTask.id : '无')
+    
+    if (activeTask && window.__embeddedTaskDashboard) {
+      console.log('%c[任务系统] 显示恢复的任务:', 'color: #00ffff; font-size: 13px', activeTask.id)
+      window.__embeddedTaskDashboard.showTask(activeTask)
+      console.log('%c[任务系统] ✅ 已恢复活动任务', 'color: #00ff00; font-size: 14px; font-weight: bold')
+    }
+    
+    console.log('%c====== [任务系统] 初始化完成 ======', 'color: #00ff00; font-size: 16px; font-weight: bold; background: #000')
+    console.log('%c[任务系统] 🎉 全局状态:', 'color: #ffff00; font-size: 14px')
+    console.log('  - dashboard:', !!window.__embeddedTaskDashboard ? '✅' : '❌')
+    console.log('  - floatingPanel:', !!window.__floatingPanel ? '✅' : '❌')
+    console.log('  - eventStream:', !!taskEventStream ? '✅' : '❌')
+    console.log('  - eventStream.connected:', taskEventStream?.isConnected)
+    console.log('%c====== [任务系统] 初始化结束 ======', 'color: #00ff00; font-size: 16px; font-weight: bold; background: #000')
+  } catch (err) {
+    console.error('%c====== [任务系统] 初始化失败 ======', 'color: #ff0000; font-size: 16px; font-weight: bold; background: #000')
+    console.error('%c[任务系统] ❌ 错误:', 'color: #ff0000; font-size: 14px; font-weight: bold', err.message)
+    console.error('[任务系统] 堆栈:', err.stack)
+    console.error('[任务系统] 错误名称:', err.name)
+    console.error('[任务系统] 时间:', new Date().toLocaleTimeString())
+  }
+}
+
 // ── 页面离开清理 ──
 
 export function cleanup() {
@@ -4065,6 +4263,19 @@ export function cleanup() {
   if (_unsubStatus) { _unsubStatus(); _unsubStatus = null }
   clearTimeout(_streamSafetyTimer)
   if (_hostedAbort) { _hostedAbort.abort(); _hostedAbort = null }
+  
+  // 清理任务系统
+  const eventStreamManager = EventStreamManager.getInstance()
+  eventStreamManager.disconnectStream('main')
+  if (window.__floatingPanel) {
+    window.__floatingPanel.destroy()
+    window.__floatingPanel = null
+  }
+  if (window.__embeddedTaskDashboard) {
+    window.__embeddedTaskDashboard.destroy()
+    window.__embeddedTaskDashboard = null
+  }
+  
   _sessionKey = null
   _page = null
   _messagesEl = null

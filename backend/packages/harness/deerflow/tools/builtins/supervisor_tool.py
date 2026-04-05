@@ -264,7 +264,24 @@ async def supervisor_tool(
 
         if storage.save_project(project_data):
             logger.info(f"Created task '{task_name}' with ID: {task_data['id']}")
-            return f"Task created successfully. ID: {task_data['id']}, Name: {task_name}\nDescription: {task_description or 'N/A'}"
+            
+            # 返回结构化的 JSON 格式，方便前端解析
+            result = {
+                "success": True,
+                "taskId": task_data['id'],
+                "id": task_data['id'],  # 兼容性字段
+                "task_id": task_data['id'],  # 兼容性字段
+                "name": task_name,
+                "description": task_description or "",
+                "projectId": project_data.get('id'),
+                "project_id": project_data.get('id'),  # 兼容性字段
+                "parent_project_id": project_data.get('id'),  # 兼容性字段
+                "projectName": project_data.get('name', ''),
+                "threadId": bound_thread,
+                "status": "pending",
+                "progress": 0
+            }
+            return json.dumps(result, ensure_ascii=False)
         return "Error: Failed to create task"
 
     elif action == "create_subtask":
@@ -319,7 +336,21 @@ async def supervisor_tool(
                         storage.save_project(project)
                         task_found = True
                         logger.info(f"Created subtask '{subtask_name}' in task {task_id}")
-                        return f"Subtask created successfully. ID: {subtask_data['id']}, Name: {subtask_name}\nParent Task: {task_id}"
+                        
+                        # 返回结构化的 JSON 格式
+                        result = {
+                            "success": True,
+                            "subtaskId": subtask_data['id'],
+                            "id": subtask_data['id'],
+                            "subtask_id": subtask_data['id'],
+                            "name": subtask_name,
+                            "description": subtask_description or "",
+                            "parentTaskId": task_id,
+                            "task_id": task_id,
+                            "status": "pending",
+                            "progress": 0
+                        }
+                        return json.dumps(result, ensure_ascii=False)
 
         if not task_found:
             return f"Error: Task '{task_id}' not found"
@@ -384,7 +415,17 @@ async def supervisor_tool(
                                 storage.save_project(project)
                                 agent_name = assigned_agent or "general-purpose"
                                 logger.info(f"Assigned subtask {subtask_id} to {agent_name}")
-                                return f"Subtask {subtask_id} assigned to agent: {agent_name}"
+                                
+                                # 返回结构化的 JSON 格式
+                                result = {
+                                    "success": True,
+                                    "action": "assign_subtask",
+                                    "subtaskId": subtask_id,
+                                    "taskId": task_id,
+                                    "assignedTo": agent_name,
+                                    "message": f"Subtask {subtask_id} assigned to agent: {agent_name}"
+                                }
+                                return json.dumps(result, ensure_ascii=False)
                         return f"Error: Subtask '{subtask_id}' not found in task '{task_id}'"
 
         # Always emit a failure summary so we can diagnose without special flags.
@@ -461,7 +502,17 @@ async def supervisor_tool(
                                             "current_step": "",
                                         },
                                     )
-                                    return f"Updated progress of subtask {subtask_id} to {progress_value}%"
+                                    
+                                    # 返回结构化的 JSON 格式
+                                    result = {
+                                        "success": True,
+                                        "action": "update_progress",
+                                        "subtaskId": subtask_id,
+                                        "taskId": task_id,
+                                        "progress": progress_value,
+                                        "message": f"Updated progress of subtask {subtask_id} to {progress_value}%"
+                                    }
+                                    return json.dumps(result, ensure_ascii=False)
                             return f"Error: Subtask '{subtask_id}' not found"
                         task["progress"] = progress_value
                         project["tasks"][i] = task
@@ -476,7 +527,16 @@ async def supervisor_tool(
                                 "current_step": "",
                             },
                         )
-                        return f"Updated progress of main task {task_id} to {progress_value}%"
+                        
+                        # 返回结构化的 JSON 格式
+                        result = {
+                            "success": True,
+                            "action": "update_progress",
+                            "taskId": task_id,
+                            "progress": progress_value,
+                            "message": f"Updated progress of main task {task_id} to {progress_value}%"
+                        }
+                        return json.dumps(result, ensure_ascii=False)
 
         return f"Error: Task '{task_id}' not found"
 
@@ -529,7 +589,17 @@ async def supervisor_tool(
                                         {"task_id": task_id, "result": task.get("result")},
                                     )
                                 logger.info(f"Completed subtask {subtask_id}")
-                                return f"Subtask {subtask_id} marked as completed"
+                                
+                                # 返回结构化的 JSON 格式
+                                result = {
+                                    "success": True,
+                                    "action": "complete_subtask",
+                                    "subtaskId": subtask_id,
+                                    "taskId": task_id,
+                                    "status": "completed",
+                                    "message": f"Subtask {subtask_id} marked as completed"
+                                }
+                                return json.dumps(result, ensure_ascii=False)
                         return f"Error: Subtask '{subtask_id}' not found in task '{task_id}'"
         return f"Error: Task '{task_id}' not found"
 
@@ -539,8 +609,22 @@ async def supervisor_tool(
         actor = authorized_by or "lead"
         ok, msg = authorize_main_task_execution(storage, task_id, actor)
         if not ok:
-            return f"Error: {msg}"
-        return f"Execution authorized for task {task_id}. ({msg})"
+            return json.dumps({
+                "success": False,
+                "action": "start_execution",
+                "taskId": task_id,
+                "error": msg
+            }, ensure_ascii=False)
+        
+        # 返回结构化的 JSON 格式
+        result = {
+            "success": True,
+            "action": "start_execution",
+            "taskId": task_id,
+            "authorizedBy": actor,
+            "message": f"Execution authorized for task {task_id}. ({msg})"
+        }
+        return json.dumps(result, ensure_ascii=False)
 
     elif action == "get_status":
         if not task_id:

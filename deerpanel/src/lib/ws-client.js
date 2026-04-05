@@ -939,14 +939,19 @@ export class WsClient {
     const map = loadSessionMap()
     const threadId = map[key]?.threadId
     if (!threadId) return { messages: [], valuesSnapshot: null }
-    const state = await fetchJson(`/api/langgraph/threads/${encodeURIComponent(threadId)}/state`)
-    const values = state?.values && typeof state.values === 'object' ? state.values : null
-    const messages = Array.isArray(values?.messages) ? values.messages : []
-    const result = messages.slice(-Math.max(1, limit))
-    // 仅拉历史不要用「当前时间」刷 updatedAt，否则下次列表排序会把刚点过的会话顶来顶去
-    map[key].messageCount = messages.length
-    saveSessionMap(map)
-    return { messages: result, valuesSnapshot: values }
+    try {
+      const state = await fetchJson(`/api/langgraph/threads/${encodeURIComponent(threadId)}/state`)
+      const values = state?.values && typeof state.values === 'object' ? state.values : null
+      const messages = Array.isArray(values?.messages) ? values.messages : []
+      const result = messages.slice(-Math.max(1, limit))
+      // 仅拉历史不要用「当前时间」刷 updatedAt，否则下次列表排序会把刚点过的会话顶来顶去
+      map[key].messageCount = messages.length
+      saveSessionMap(map)
+      return { messages: result, valuesSnapshot: values }
+    } catch (e) {
+      console.warn('[ws-client] threads/state 获取失败，返回空消息', e?.message || e)
+      return { messages: [], valuesSnapshot: null }
+    }
   }
 
   async chatSuggestions(sessionKey, n = 3, modelName = undefined, recentMessages = undefined) {
