@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>工具调用调试</title>
+  <style>
+    body {
+      font-family: 'Courier New', monospace;
+      padding: 20px;
+      background: #1e1e1e;
+      color: #d4d4d4;
+    }
+    .log {
+      background: #2d2d2d;
+      padding: 10px;
+      margin: 10px 0;
+      border-left: 3px solid #00ff00;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+    }
+    .error {
+      border-left-color: #ff0000;
+    }
+    .info {
+      border-left-color: #00ffff;
+    }
+    button {
+      padding: 10px 20px;
+      font-size: 16px;
+      cursor: pointer;
+      background: #0e639c;
+      color: white;
+      border: none;
+      margin: 5px;
+    }
+    button:hover {
+      background: #1177bb;
+    }
+  </style>
+</head>
+<body>
+  <h1>🔧 工具调用调试工具</h1>
+  <p>点击按钮创建任务，查看工具调用的数据格式</p>
+  
+  <button onclick="createTask()">创建测试任务</button>
+  <button onclick="clearLogs()">清空日志</button>
+  
+  <div id="logs"></div>
+  
+  <script>
+    function log(message, type = 'log') {
+      const logsDiv = document.getElementById('logs');
+      const entry = document.createElement('div');
+      entry.className = `log ${type}`;
+      entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+      logsDiv.insertBefore(entry, logsDiv.firstChild);
+    }
+    
+    function clearLogs() {
+      document.getElementById('logs').innerHTML = '';
+    }
+    
+    async function createTask() {
+      log('开始创建任务...', 'info');
+      
+      try {
+        const response = await fetch('http://localhost:1423/api/langgraph/threads/new-test123/runs', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            input: {
+              messages: [{
+                role: 'user',
+                content: '帮我创建一个任务，在文件中说明 agent name'
+              }]
+            },
+            config: {
+              configurable: {
+                subagent_enabled: true,
+                is_plan_mode: true
+              }
+            }
+          })
+        });
+        
+        log(`请求发送成功，状态码：${response.status}`, 'info');
+        
+        // 读取流式响应
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          
+          const chunk = decoder.decode(value);
+          log(`收到数据块:\n${chunk}`, 'log');
+          
+          // 尝试解析 JSON
+          try {
+            const lines = chunk.split('\n').filter(line => line.trim());
+            for (const line of lines) {
+              if (line.startsWith('data: ')) {
+                const data = JSON.parse(line.slice(6));
+                log(`解析后的数据:\n${JSON.stringify(data, null, 2)}`, 'info');
+                
+                // 检查是否有工具调用
+                if (data.tools && data.tools.length > 0) {
+                  log(`🎯 检测到工具调用！\n${JSON.stringify(data.tools, null, 2)}`, 'info');
+                  
+                  // 检查每个工具的输出
+                  data.tools.forEach((tool, index) => {
+                    log(`工具 ${index + 1}:\n名称：${tool.name}\n输入：${JSON.stringify(tool.input)}\n输出：${JSON.stringify(tool.output)}`, 'log');
+                  });
+                }
+              }
+            }
+          } catch (e) {
+            // 不是 JSON 格式，忽略
+          }
+        }
+        
+        log('任务创建完成', 'info');
+      } catch (error) {
+        log(`错误：${error.message}`, 'error');
+        console.error(error);
+      }
+    }
+  </script>
+</body>
+</html>
