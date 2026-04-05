@@ -1,3 +1,20 @@
-powershell -NoProfile -ExecutionPolicy Bypass -File "D:/openclaw-workspace/github/deerflaw/scripts/dev-windows.ps1"
+# 在仓库根目录 deerflaw 下执行（路径按你本机调整）
 
-wsl -d Ubuntu -- bash -lc "cd /mnt/d/github/deerflaw && bash scripts/serve.sh --dev"
+# 一键：后端 LangGraph(2024)+Gateway(8012)，并提示前端另启
+powershell -NoProfile -ExecutionPolicy Bypass -File ".\scripts\dev-windows.ps1"
+
+# 后端拆分
+powershell -NoProfile -ExecutionPolicy Bypass -File ".\scripts\windows\stop-backend.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -File ".\scripts\windows\start-backend.ps1"
+
+# 桌面 Web：Tauri devUrl 为 http://localhost:1420（见 deerpanel/src-tauri/tauri.conf.json）
+powershell -NoProfile -ExecutionPolicy Bypass -File ".\scripts\windows\start-deerpanel-web.ps1"
+# 仅浏览器开 Vite（无桌面壳）
+powershell -NoProfile -ExecutionPolicy Bypass -File ".\scripts\windows\start-deerpanel-web.ps1" -WebOnly
+
+# 结束 1420/1421 上的前端 dev（Vite 若占用 1423 等可加 -ExtraPorts）
+powershell -NoProfile -ExecutionPolicy Bypass -File ".\scripts\windows\stop-deerpanel-web.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -File ".\scripts\windows\stop-deerpanel-web.ps1" -ExtraPorts 1423
+
+# Linux / WSL（若使用）
+# wsl -d Ubuntu -- bash -lc "cd /mnt/d/github/deerflaw && bash scripts/serve.sh --dev"

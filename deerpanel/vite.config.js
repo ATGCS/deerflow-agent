@@ -83,7 +83,7 @@ export default defineConfig({
       },
     },
     warmup: {
-      clientFiles: ['./src/pages/chat-react.js', './src/react/ChatApp.tsx'],
+      clientFiles: ['./src/react/ChatApp.tsx'],
     },
   },
   envPrefix: ['VITE_', 'TAURI_'],

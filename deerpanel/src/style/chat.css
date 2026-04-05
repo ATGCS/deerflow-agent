@@ -20,6 +20,8 @@
   flex-direction: column;
   min-width: 0;
   position: relative;
+  height: 100%;
+  overflow: hidden;
 }
 
 /* 消息区（任务协作改为顶栏弹窗，不再占右侧栏） */
@@ -38,6 +40,8 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
+  height: 100%;
+  overflow: hidden;
 }
 
 /* 右侧任务协作抽屉（不遮住聊天，直接占位） */

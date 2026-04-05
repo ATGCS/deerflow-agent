@@ -10,8 +10,6 @@ import { api, checkBackendHealth, isBackendOnline, onBackendStatusChange } from 
 import { version as APP_VERSION } from '../package.json'
 import { statusIcon } from './lib/icons.js'
 import { tryShowEngagement } from './components/engagement.js'
-/** 静态导入：避免 dev 下 `import('./pages/chat-react.js')` 单独拉 chunk 时出现 Failed to fetch（与入口同图，由 Vite 随 main 解析）。 */
-import * as chatReactPage from './pages/chat-react.js'
 
 // 样式
 import './style/variables.css'
@@ -290,15 +288,21 @@ const content = document.getElementById('content')
 async function boot() {
   setDefaultRoute('/chat')
   // 先注册所有路由，立即渲染 UI（不等后端检测）
-  registerRoute('/chat-legacy', () => import('./pages/chat.js'))
-  /** 默认 React 聊天；设 VITE_USE_REACT_CHAT=0 或 false 则 #/chat 仍走经典 chat.js */
-  const legacyChatDefault =
-    import.meta.env.VITE_USE_REACT_CHAT === '0' || import.meta.env.VITE_USE_REACT_CHAT === 'false'
-  registerRoute(
-    '/chat',
-    () => (legacyChatDefault ? import('./pages/chat.js') : Promise.resolve(chatReactPage)),
-  )
-  registerRoute('/chat-react', () => Promise.resolve(chatReactPage))
+  // 只使用 React 版本的 ChatApp
+  registerRoute('/chat', async () => {
+    const { createRoot } = await import('react-dom/client')
+    const React = await import('react')
+    const ChatAppModule = await import('./react/ChatApp.tsx')
+    const ChatApp = ChatAppModule.default
+    const container = document.createElement('div')
+    container.style.height = '100%'
+    const root = createRoot(container)
+    root.render(React.createElement(ChatApp))
+    // 导出 render 函数，返回已渲染的容器
+    return {
+      render: () => container
+    }
+  })
   registerRoute('/models', () => import('./pages/models.js'))
   registerRoute('/agents', () => import('./pages/agents.js'))
   registerRoute('/memory', () => import('./pages/memory.js'))

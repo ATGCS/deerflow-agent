@@ -10,8 +10,8 @@ from langgraph.typing import ContextT
 from pydantic import ValidationError
 
 from deerflow.collab.models import WorkerProfile
+from deerflow.collab.authorize_execution import authorize_main_task_execution
 from deerflow.collab.storage import (
-    authorize_main_task_execution,
     find_open_main_task_id_by_name,
     get_project_storage,
     get_task_memory_storage,
@@ -199,12 +199,12 @@ async def supervisor_tool(
 
     Args:
         action: One of create_task, create_subtask, assign_subtask, update_progress,
-            complete_subtask, start_execution, get_status, get_task_memory, list_subtasks (see workflow above).
+            complete_subtask, start_execution, get_status, get_task_memory, list_subtasks, set_task_planned (see workflow above).
         task_name: Name for a new task (required for create_task).
         task_description: Description for a new task (optional for create_task).
         subtask_name: Name for a new subtask (required for create_subtask).
         subtask_description: Description for a new subtask (optional for create_subtask).
-        task_id: Main task id (required for create_subtask, assign_subtask, get_status, get_task_memory, list_subtasks).
+        task_id: Main task id (required for create_subtask, assign_subtask, get_status, get_task_memory, list_subtasks, set_task_planned).
         subtask_id: ID of an existing subtask (required for assign_subtask, complete_subtask; optional for update_progress when updating main task).
         assigned_agent: Agent ID for assign_subtask (optional); must be a configured subagent name.
         subtask_ids: List of subtask IDs (optional, for batch operations).
@@ -249,11 +249,20 @@ async def supervisor_tool(
 
     if action == "create_task":
         if not task_name:
-            return "Error: task_name is required for create_task action"
+            return json.dumps({
+                "success": False,
+                "action": "create_task",
+                "error": "task_name is required for create_task action"
+            }, ensure_ascii=False)
 
         task_id_new = find_open_main_task_id_by_name(storage, task_name)
         if task_id_new:
-            return f"Task '{task_name}' already exists with ID: {task_id_new}"
+            return json.dumps({
+                "success": False,
+                "action": "create_task",
+                "error": f"Task '{task_name}' already exists with ID: {task_id_new}",
+                "existingTaskId": task_id_new
+            }, ensure_ascii=False)
 
         bound_thread = _runtime_thread_id(runtime)
         project_data, task_data = new_project_bundle_root_task(
@@ -282,24 +291,44 @@ async def supervisor_tool(
                 "progress": 0
             }
             return json.dumps(result, ensure_ascii=False)
-        return "Error: Failed to create task"
+        return json.dumps({
+            "success": False,
+            "action": "create_task",
+            "error": "Failed to create task"
+        }, ensure_ascii=False)
 
     elif action == "create_subtask":
         if not task_id or not subtask_name:
-            return "Error: task_id and subtask_name are required for create_subtask action"
+            return json.dumps({
+                "success": False,
+                "action": "create_subtask",
+                "error": "task_id and subtask_name are required for create_subtask action"
+            }, ensure_ascii=False)
 
         worker_profile: dict | None = None
         if worker_profile_json and str(worker_profile_json).strip():
             try:
                 parsed = json.loads(worker_profile_json)
             except json.JSONDecodeError:
-                return "Error: worker_profile_json must be valid JSON"
+                return json.dumps({
+                    "success": False,
+                    "action": "create_subtask",
+                    "error": "worker_profile_json must be valid JSON"
+                }, ensure_ascii=False)
             if not isinstance(parsed, dict):
-                return "Error: worker_profile_json must be a JSON object"
+                return json.dumps({
+                    "success": False,
+                    "action": "create_subtask",
+                    "error": "worker_profile_json must be a JSON object"
+                }, ensure_ascii=False)
             try:
                 wp = WorkerProfile.model_validate(parsed)
             except ValidationError as e:
-                return f"Error: worker_profile_json: {e}"
+                return json.dumps({
+                    "success": False,
+                    "action": "create_subtask",
+                    "error": f"worker_profile_json: {e}"
+                }, ensure_ascii=False)
             worker_profile = wp.to_storage_dict() or None
 
         projects = storage.list_projects()
@@ -353,13 +382,26 @@ async def supervisor_tool(
                         return json.dumps(result, ensure_ascii=False)
 
         if not task_found:
-            return f"Error: Task '{task_id}' not found"
+            return json.dumps({
+                "success": False,
+                "action": "create_subtask",
+                "error": f"Task '{task_id}' not found"
+            }, ensure_ascii=False)
 
     elif action == "assign_subtask":
         if not task_id or not subtask_id:
-            return "Error: task_id and subtask_id are required for assign_subtask action"
+            return json.dumps({
+                "success": False,
+                "action": "assign_subtask",
+                "error": "task_id and subtask_id are required for assign_subtask action"
+            }, ensure_ascii=False)
         if assigned_agent and assigned_agent not in available_agents:
-            return f"Error: Unknown agent '{assigned_agent}'. Available: {', '.join(available_agents)}"
+            return json.dumps({
+                "success": False,
+                "action": "assign_subtask",
+                "error": f"Unknown agent '{assigned_agent}'",
+                "availableAgents": list(available_agents)
+            }, ensure_ascii=False)
 
         projects = storage.list_projects()
         # Fallback debug to stdout/stderr: some deployments filter python logging.
@@ -426,7 +468,11 @@ async def supervisor_tool(
                                     "message": f"Subtask {subtask_id} assigned to agent: {agent_name}"
                                 }
                                 return json.dumps(result, ensure_ascii=False)
-                        return f"Error: Subtask '{subtask_id}' not found in task '{task_id}'"
+                        return json.dumps({
+                            "success": False,
+                            "action": "assign_subtask",
+                            "error": f"Subtask '{subtask_id}' not found in task '{task_id}'"
+                        }, ensure_ascii=False)
 
         # Always emit a failure summary so we can diagnose without special flags.
         try:
@@ -473,9 +519,17 @@ async def supervisor_tool(
 
     elif action == "update_progress":
         if not task_id:
-            return "Error: task_id is required for update_progress action"
+            return json.dumps({
+                "success": False,
+                "action": "update_progress",
+                "error": "task_id is required for update_progress action"
+            }, ensure_ascii=False)
         if progress is None:
-            return "Error: progress is required for update_progress action (0-100)"
+            return json.dumps({
+                "success": False,
+                "action": "update_progress",
+                "error": "progress is required for update_progress action (0-100)"
+            }, ensure_ascii=False)
 
         progress_value = _clamp_progress(progress)
 
@@ -513,7 +567,11 @@ async def supervisor_tool(
                                         "message": f"Updated progress of subtask {subtask_id} to {progress_value}%"
                                     }
                                     return json.dumps(result, ensure_ascii=False)
-                            return f"Error: Subtask '{subtask_id}' not found"
+                            return json.dumps({
+                                "success": False,
+                                "action": "update_progress",
+                                "error": f"Subtask '{subtask_id}' not found"
+                            }, ensure_ascii=False)
                         task["progress"] = progress_value
                         project["tasks"][i] = task
                         storage.save_project(project)
@@ -538,11 +596,19 @@ async def supervisor_tool(
                         }
                         return json.dumps(result, ensure_ascii=False)
 
-        return f"Error: Task '{task_id}' not found"
+        return json.dumps({
+            "success": False,
+            "action": "update_progress",
+            "error": f"Task '{task_id}' not found"
+        }, ensure_ascii=False)
 
     elif action == "complete_subtask":
         if not task_id or not subtask_id:
-            return "Error: task_id and subtask_id are required for complete_subtask action"
+            return json.dumps({
+                "success": False,
+                "action": "complete_subtask",
+                "error": "task_id and subtask_id are required for complete_subtask action"
+            }, ensure_ascii=False)
 
         projects = storage.list_projects()
 
@@ -600,12 +666,24 @@ async def supervisor_tool(
                                     "message": f"Subtask {subtask_id} marked as completed"
                                 }
                                 return json.dumps(result, ensure_ascii=False)
-                        return f"Error: Subtask '{subtask_id}' not found in task '{task_id}'"
-        return f"Error: Task '{task_id}' not found"
+                        return json.dumps({
+                            "success": False,
+                            "action": "complete_subtask",
+                            "error": f"Subtask '{subtask_id}' not found in task '{task_id}'"
+                        }, ensure_ascii=False)
+        return json.dumps({
+            "success": False,
+            "action": "complete_subtask",
+            "error": f"Task '{task_id}' not found"
+        }, ensure_ascii=False)
 
     elif action == "start_execution":
         if not task_id:
-            return "Error: task_id is required for start_execution action"
+            return json.dumps({
+                "success": False,
+                "action": "start_execution",
+                "error": "task_id is required for start_execution action"
+            }, ensure_ascii=False)
         actor = authorized_by or "lead"
         ok, msg = authorize_main_task_execution(storage, task_id, actor)
         if not ok:
@@ -626,9 +704,57 @@ async def supervisor_tool(
         }
         return json.dumps(result, ensure_ascii=False)
 
+    elif action == "set_task_planned":
+        if not task_id:
+            return json.dumps({
+                "success": False,
+                "action": "set_task_planned",
+                "error": "task_id is required for set_task_planned action"
+            }, ensure_ascii=False)
+        
+        # 查找并更新任务状态
+        projects = storage.list_projects()
+        for project_summary in projects:
+            project = storage.load_project(project_summary["id"])
+            if not project:
+                continue
+            for i, task in enumerate(project.get("tasks", [])):
+                if task.get("id") == task_id:
+                    now = datetime.utcnow().isoformat() + "Z"
+                    task["status"] = "planned"
+                    task["updated_at"] = now
+                    project["tasks"][i] = task
+                    
+                    if storage.save_project(project):
+                        result = {
+                            "success": True,
+                            "action": "set_task_planned",
+                            "taskId": task_id,
+                            "status": "planned",
+                            "message": f"Task {task_id} status set to planned"
+                        }
+                        return json.dumps(result, ensure_ascii=False)
+                    else:
+                        return json.dumps({
+                            "success": False,
+                            "action": "set_task_planned",
+                            "taskId": task_id,
+                            "error": "Failed to save project"
+                        }, ensure_ascii=False)
+            return json.dumps({
+                "success": False,
+                "action": "set_task_planned",
+                "taskId": task_id,
+                "error": f"Task '{task_id}' not found"
+            }, ensure_ascii=False)
+
     elif action == "get_status":
         if not task_id:
-            return "Error: task_id is required for get_status action"
+            return json.dumps({
+                "success": False,
+                "action": "get_status",
+                "error": "task_id is required for get_status action"
+            }, ensure_ascii=False)
 
         projects = storage.list_projects()
 
@@ -661,15 +787,27 @@ Subtasks ({len(subtasks)}):
 {chr(10).join(subtask_info) if subtask_info else '  (none)'}"""
                         return result
 
-        return f"Error: Task '{task_id}' not found"
+        return json.dumps({
+            "success": False,
+            "action": "get_status",
+            "error": f"Task '{task_id}' not found"
+        }, ensure_ascii=False)
 
     elif action == "get_task_memory":
         if not task_id:
-            return "Error: task_id is required for get_task_memory action"
+            return json.dumps({
+                "success": False,
+                "action": "get_task_memory",
+                "error": "task_id is required for get_task_memory action"
+            }, ensure_ascii=False)
         mem_store = get_task_memory_storage()
         row = load_task_memory_for_task_id(storage, mem_store, task_id)
         if row is None:
-            return f"Error: Task '{task_id}' not found"
+            return json.dumps({
+                "success": False,
+                "action": "get_task_memory",
+                "error": f"Task '{task_id}' not found"
+            }, ensure_ascii=False)
         mem, project_id, agent_id, parent_task_id = row
         facts = mem.get("facts") or []
         max_show = 30
@@ -693,7 +831,11 @@ Subtasks ({len(subtasks)}):
 
     elif action == "list_subtasks":
         if not task_id:
-            return "Error: task_id is required for list_subtasks action"
+            return json.dumps({
+                "success": False,
+                "action": "list_subtasks",
+                "error": "task_id is required for list_subtasks action"
+            }, ensure_ascii=False)
 
         projects = storage.list_projects()
 
@@ -718,7 +860,11 @@ Subtasks ({len(subtasks)}):
 
                         return f"Subtasks for task '{task_id}':\n" + "\n".join(subtask_info)
 
-        return f"Error: Task '{task_id}' not found"
+        return json.dumps({
+            "success": False,
+            "action": "list_subtasks",
+            "error": f"Task '{task_id}' not found"
+        }, ensure_ascii=False)
 
     elif action == "create_agent":
         """Create a new agent configuration.
@@ -970,4 +1116,9 @@ Subtasks ({len(subtasks)}):
             logger.error(f"Failed to list agents: {e}", exc_info=True)
             return f"Error: Failed to list agents: {e}"
 
-    return f"Error: Unknown action '{action}'. Available actions: create_task, create_subtask, assign_subtask, update_progress, complete_subtask, start_execution, get_status, get_task_memory, list_subtasks, create_agent, update_agent, list_agents"
+    return json.dumps({
+        "success": False,
+        "action": action,
+        "error": f"Unknown action '{action}'",
+        "availableActions": ["create_task", "create_subtask", "assign_subtask", "update_progress", "complete_subtask", "start_execution", "set_task_planned", "get_status", "get_task_memory", "list_subtasks", "create_agent", "update_agent", "list_agents"]
+    }, ensure_ascii=False)

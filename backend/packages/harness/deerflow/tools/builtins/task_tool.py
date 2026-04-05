@@ -12,7 +12,7 @@ from langgraph.config import get_stream_writer
 from langgraph.typing import ContextT
 from pydantic import ValidationError
 
-from deerflow.agents.lead_agent.prompt import get_skills_prompt
+from deerflow.agents.lead_agent.prompt import get_skills_prompt_section
 from deerflow.agents.thread_state import ThreadState
 from deerflow.config.agents_config import load_agent_config
 from deerflow.sandbox.security import LOCAL_BASH_SUBAGENT_DISABLED_MESSAGE, is_host_bash_allowed
@@ -296,7 +296,7 @@ async def task_tool(
     if final_tools is not None:
         overrides["tools"] = final_tools
     if final_skills is not None:
-        skills_section = get_skills_prompt(final_skills)
+        skills_section = get_skills_prompt_section(final_skills)
         system_prompt = config.system_prompt
         if skills_section:
             system_prompt = system_prompt + "\n\n" + skills_section

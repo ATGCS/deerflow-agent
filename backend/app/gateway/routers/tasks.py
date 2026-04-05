@@ -6,9 +6,9 @@ from datetime import datetime
 from fastapi import APIRouter, Body, HTTPException
 from pydantic import BaseModel, Field
 
+from deerflow.collab.authorize_execution import authorize_main_task_execution
 from deerflow.collab.models import WorkerProfile
 from deerflow.collab.storage import (
-    authorize_main_task_execution,
     get_project_storage,
     get_task_memory_storage,
     new_project_bundle_root_task,

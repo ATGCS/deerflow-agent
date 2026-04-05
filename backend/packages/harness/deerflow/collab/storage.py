@@ -643,34 +643,6 @@ def persist_task_memory_after_subagent_run(
         return False, 0
 
 
-def authorize_main_task_execution(storage: ProjectStorage, task_id: str, authorized_by: str) -> tuple[bool, str]:
-    """Set execution_authorized when status is planned or planning. Idempotent if already authorized."""
-    allowed_status = ("planned", "planning")
-    for summary in storage.list_projects():
-        project = storage.load_project(summary["id"])
-        if not project:
-            continue
-        for i, task in enumerate(project.get("tasks", [])):
-            if task.get("id") != task_id:
-                continue
-            if task.get("execution_authorized"):
-                return True, "Already authorized"
-            if task.get("status") not in allowed_status:
-                return False, (
-                    f"Task status must be one of {allowed_status!r} to authorize execution; "
-                    f"got {task.get('status')!r}"
-                )
-            now = datetime.utcnow().isoformat() + "Z"
-            task["execution_authorized"] = True
-            task["authorized_at"] = now
-            task["authorized_by"] = authorized_by
-            project["tasks"][i] = task
-            if storage.save_project(project):
-                return True, "Execution authorized"
-            return False, "Failed to save project"
-    return False, f"Task '{task_id}' not found"
-
-
 def collab_execution_gate_error(main_task_id: str, runtime_thread_id: str | None) -> str | None:
     """Return user-facing error if collaborative main task cannot run workers; None if OK."""
     storage = get_project_storage()
@@ -768,3 +740,6 @@ def get_agent_runtime_storage() -> AgentRuntimeStorage:
             return _agent_runtime_instance
         _agent_runtime_instance = AgentRuntimeStorage()
         return _agent_runtime_instance
+
+
+from deerflow.collab.authorize_execution import authorize_main_task_execution  # noqa: E402

@@ -338,10 +338,7 @@ function extractTaskIdFromTools(tools: unknown[]): { taskId?: string; projectId?
   return {}
 }
 
-/**
- * 简化版：直接累积所有文本，不使用 segments 封存机制
- * 流式阶段只显示文本，工具调用信息在 final 时一次性显示
- */
+/** 流式正文：单调合并到 S.text；工具由 delta/tool 事件写入 S.tools，由 MessageRow 实时渲染 */
 function applyAssistantTextDelta(S: StreamState, incoming: string): boolean {
   const inc = String(incoming || '')
   if (!inc) return false
@@ -416,15 +413,10 @@ export default function ChatApp() {
     console.log('[ChatApp] 时间:', new Date().toLocaleTimeString())
     console.log('[ChatApp] 当前会话:', selectedSessionKey)
     
-    try {
-        // ========== 任务进度可视化系统初始化 ==========
-        console.log('%c[ChatApp] 正在初始化任务系统...', 'color: #00ffff; font-size: 14px')
-        console.log('[ChatApp] 任务系统已就绪，将监听工具调用')
-        console.log('%c====== [ChatApp] 任务系统初始化完成 ======', 'color: #00ff00; font-size: 16px; font-weight: bold;')
-      } catch (err) {
-        console.error('[ChatApp] ❌ 任务系统初始化失败:', err.message)
-        console.error('[ChatApp] 错误堆栈:', err.stack)
-      }
+    // ========== 任务进度可视化系统初始化 ==========
+    console.log('%c[ChatApp] 正在初始化任务系统...', 'color: #00ffff; font-size: 14px')
+    console.log('[ChatApp] 任务系统已就绪，将监听工具调用')
+    console.log('%c====== [ChatApp] 任务系统初始化完成 ======', 'color: #00ff00; font-size: 16px; font-weight: bold;')
     
     try {
       const pending = sessionStorage.getItem('deerpanel_pending_shell_session')
@@ -1256,7 +1248,11 @@ export default function ChatApp() {
   const streaming = !!(
     streamRef.current.text ||
     streamRef.current.segments?.length ||
-    streamRef.current.tools?.length
+    streamRef.current.tools?.length ||
+    streamRef.current.images?.length ||
+    streamRef.current.videos?.length ||
+    streamRef.current.audios?.length ||
+    streamRef.current.files?.length
   )
   const hasTodos = Array.isArray(threadPanelState.todos) && threadPanelState.todos.length > 0
 
