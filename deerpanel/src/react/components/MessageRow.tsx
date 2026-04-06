@@ -76,6 +76,17 @@ function AssistantBody({ row, isStreaming }: { row: DisplayRow; isStreaming?: bo
   const text = row.text || ''
 
   if (segments?.length) {
+    const segmentToolIds = new Set(
+      segments.filter((s): s is MessageSegment & { kind: 'tools'; ids: string[] } => s.kind === 'tools').flatMap((s) => s.ids || []),
+    )
+    const orphanTools =
+      isStreaming && tools.length
+        ? tools.filter((t) => {
+            const id = String((t as Record<string, unknown>).id || (t as Record<string, unknown>).tool_call_id || '')
+            return !id || !segmentToolIds.has(id)
+          })
+        : []
+
     return (
       <>
         {segments.map((seg, i) => {
@@ -84,6 +95,7 @@ function AssistantBody({ row, isStreaming }: { row: DisplayRow; isStreaming?: bo
           }
           return <ToolCallList key={`seg-k-${i}`} tools={tools} filterIds={seg.ids} />
         })}
+        {orphanTools.length > 0 ? <ToolCallList key="stream-tools-tail" tools={orphanTools} /> : null}
         {isStreaming ? <span className="stream-cursor" aria-hidden /> : null}
         {/* 历史消息：如果 segments 中没有 text 但 row.text 有内容，也要显示 */}
         {!isStreaming && text && !segments.some(s => s.kind === 'text') && (
@@ -101,7 +113,7 @@ function AssistantBody({ row, isStreaming }: { row: DisplayRow; isStreaming?: bo
           {isStreaming && <span className="stream-cursor" aria-hidden />}
         </>
       )}
-      {!isStreaming && <ToolCallList tools={tools} />}
+      {tools.length > 0 ? <ToolCallList tools={tools} /> : null}
     </>
   )
 }

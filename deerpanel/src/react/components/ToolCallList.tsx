@@ -1,4 +1,5 @@
-import { isToolRunning, toolLabel, safeStringify, stripAnsi } from '../../lib/chat-normalize.js'
+import { formatToolDisplayValue, isToolRunning, toolLabel } from '../../lib/chat-normalize.js'
+import { getToolIcon } from '../../lib/tool-display.js'
 
 function formatTime(date: Date | number) {
   const d = date instanceof Date ? date : new Date(date)
@@ -50,10 +51,12 @@ export function ToolCallList({
         const statusCls = running ? 'running' : t.status === 'error' ? 'error' : 'ok'
         const timeValue = (t.time || t.messageTimestamp) as number | string | undefined
         const timeText = timeValue ? formatTime(new Date(timeValue)) : ''
-        const toolName = String(t.name || 'tool')
+        const rawName = t.name ?? t.tool_name ?? t.toolName
+        const toolName = String(rawName != null && String(rawName).trim() ? rawName : 'tool')
         const toolKind = safeToolKind(toolName)
-        const inputJson = stripAnsi(safeStringify(t.input))
-        const outputJson = stripAnsi(safeStringify(t.output))
+        const titleText = toolLabel(tool)
+        const inputJson = formatToolDisplayValue(t.input)
+        const outputJson = formatToolDisplayValue(t.output)
 
         const inputObj = t.input && typeof t.input === 'object' ? (t.input as Record<string, unknown>) : null
         const command = typeof inputObj?.command === 'string' ? inputObj.command : null
@@ -70,8 +73,11 @@ export function ToolCallList({
             className={`msg-tool-item${running ? ' msg-tool-item--running' : ''} msg-tool-item--${toolKind}`}
             open={running}
           >
-            <summary>
-              <span className="msg-tool-name">{toolLabel(tool)}</span>
+            <summary title={titleText}>
+              <span className="msg-tool-icon" aria-hidden="true">
+                {getToolIcon(tool)}
+              </span>
+              <span className="msg-tool-name">{titleText}</span>
               <span className={`msg-tool-status msg-tool-status--${statusCls}`}>{status}</span>
               {timeText ? <span className="msg-tool-time">{timeText}</span> : null}
             </summary>

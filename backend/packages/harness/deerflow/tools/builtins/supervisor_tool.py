@@ -1,9 +1,11 @@
 """Supervisor tool for multi-agent task planning and coordination."""
 
-import os
+import asyncio
 import json
 import logging
-from typing import Annotated
+import os
+import uuid
+from typing import Annotated, Any
 
 from langchain.tools import InjectedToolCallId, ToolRuntime, tool
 from langgraph.typing import ContextT
@@ -12,17 +14,132 @@ from pydantic import ValidationError
 from deerflow.collab.models import WorkerProfile
 from deerflow.collab.authorize_execution import authorize_main_task_execution
 from deerflow.collab.storage import (
+    find_main_task,
     find_open_main_task_id_by_name,
+    find_subtask_by_ids,
     get_project_storage,
     get_task_memory_storage,
     load_task_memory_for_task_id,
     new_project_bundle_root_task,
 )
+from deerflow.collab.thread_collab import advance_collab_phase_to_executing_for_task
 from deerflow.config.agents_config import load_agent_config, list_all_agents
 from deerflow.config.paths import get_paths
 from deerflow.subagents import get_available_subagent_names
 
 logger = logging.getLogger(__name__)
+
+_TERMINAL_SUBTASK = frozenset({"completed", "failed", "cancelled"})
+
+
+def _subtask_ids_to_run_after_start(
+    storage: Any, main_task_id: str, explicit: list[str] | None
+) -> list[str]:
+    """Resolve which subtasks to delegate: explicit list, else all assigned non-terminal subtasks."""
+    if explicit:
+        return list(explicit)
+    row = find_main_task(storage, main_task_id)
+    if not row:
+        return []
+    _proj, task = row
+    out: list[str] = []
+    for st in task.get("subtasks") or []:
+        sid = st.get("id")
+        if not sid:
+            continue
+        status = (st.get("status") or "pending").strip().lower()
+        if status in _TERMINAL_SUBTASK:
+            continue
+        if not (str(st.get("assigned_to") or "")).strip():
+            continue
+        out.append(str(sid))
+    return out
+
+
+async def delegate_collab_subtasks_for_start_execution(
+    runtime: ToolRuntime[ContextT, dict] | None,
+    storage: Any,
+    main_task_id: str,
+    subtask_ids: list[str],
+) -> list[dict[str, Any]]:
+    """Invoke ``task`` for each subtask (parallel). Used by ``start_execution`` so workers actually run."""
+    if not subtask_ids:
+        return []
+    if runtime is None:
+        logger.warning("start_execution: skip subagent delegation (no tool runtime)")
+        return [
+            {
+                "subtaskId": sid,
+                "ok": False,
+                "error": "No runtime: cannot delegate to task tool",
+            }
+            for sid in subtask_ids
+        ]
+
+    from deerflow.tools.builtins.task_tool import task_tool as tt
+    coro = getattr(tt, "coroutine", None)
+    if coro is None:
+        logger.error("task_tool has no coroutine; cannot delegate from start_execution")
+        return [{"subtaskId": sid, "ok": False, "error": "task_tool unavailable"} for sid in subtask_ids]
+
+    async def _one(sid: str) -> dict[str, Any]:
+        st = find_subtask_by_ids(storage, main_task_id, sid)
+        if not st:
+            return {"subtaskId": sid, "ok": False, "error": "subtask not found"}
+        name = (st.get("name") or "subtask").strip() or "subtask"
+        desc = (st.get("description") or "").strip()
+        prompt = desc if desc else (
+            f"完成子任务「{name}」。协作主任务 id: {main_task_id}；子任务 id: {sid}。"
+        )
+        assigned = (st.get("assigned_to") or "").strip()
+        subagent_type = assigned or "general-purpose"
+        tcid = f"supervisor-start-exec-{main_task_id}-{sid}-{uuid.uuid4().hex[:12]}"
+        try:
+            out = await coro(
+                runtime=runtime,
+                description=name[:120],
+                prompt=prompt,
+                subagent_type=subagent_type,
+                tool_call_id=tcid,
+                max_turns=None,
+                collab_task_id=main_task_id,
+                collab_subtask_id=sid,
+            )
+            text = out if isinstance(out, str) else str(out)
+            ok = text.startswith("Task Succeeded.")
+            err = None if ok else text[:4000]
+            return {"subtaskId": sid, "ok": ok, "result": text if ok else None, "error": err}
+        except Exception as e:
+            logger.exception("delegate subtask %s via task_tool failed", sid)
+            return {"subtaskId": sid, "ok": False, "error": str(e)}
+
+    return list(await asyncio.gather(*[_one(sid) for sid in subtask_ids]))
+
+
+def _record_supervisor_ui_step(
+    runtime: ToolRuntime[ContextT, dict] | None,
+    tool_call_id: str,
+    action: str,
+    label: str,
+) -> None:
+    """Persist a compact supervisor step for DeerPanel task sidebar (best-effort)."""
+    tid = _runtime_thread_id(runtime)
+    if not tid:
+        return
+    try:
+        import uuid as _uuid
+
+        from deerflow.collab.thread_collab import append_sidebar_supervisor_step
+
+        sid = (tool_call_id or "").strip()
+        step_id = sid if sid else str(_uuid.uuid4())
+        append_sidebar_supervisor_step(
+            get_paths(),
+            tid,
+            {"id": step_id, "action": action, "label": label, "done": True},
+        )
+    except Exception:
+        logger.debug("append sidebar supervisor step failed", exc_info=True)
 
 
 def _runtime_thread_id(runtime: ToolRuntime[ContextT, dict] | None) -> str | None:
@@ -100,6 +217,28 @@ def _subtask_worker_profile_suffix(st: dict) -> str:
     if not parts:
         return ""
     return " | profile: " + "; ".join(parts)
+
+
+def _subtask_row_dict(st: dict) -> dict[str, Any]:
+    """Structured subtask row for JSON tool results (get_status / list_subtasks)."""
+    status = st.get("status", "unknown")
+    icon = {"pending": "⚪", "executing": "🔴", "completed": "✅", "failed": "❌"}.get(status, "⚪")
+    wp = st.get("worker_profile")
+    summary = _subtask_worker_profile_suffix(st)
+    if summary.startswith(" | profile: "):
+        summary = summary[len(" | profile: ") :]
+    else:
+        summary = ""
+    return {
+        "id": st.get("id"),
+        "name": st.get("name", "unnamed"),
+        "status": status,
+        "statusIcon": icon,
+        "assignedTo": st.get("assigned_to") or "unassigned",
+        "progress": st.get("progress", 0),
+        "workerProfile": wp if isinstance(wp, dict) else None,
+        "workerProfileSummary": summary,
+    }
 
 
 async def _broadcast_task_event(project_id: str, event_type: str, data: dict) -> None:
@@ -207,7 +346,8 @@ async def supervisor_tool(
         task_id: Main task id (required for create_subtask, assign_subtask, get_status, get_task_memory, list_subtasks, set_task_planned).
         subtask_id: ID of an existing subtask (required for assign_subtask, complete_subtask; optional for update_progress when updating main task).
         assigned_agent: Agent ID for assign_subtask (optional); must be a configured subagent name.
-        subtask_ids: List of subtask IDs (optional, for batch operations).
+        subtask_ids: For start_execution: optional; if set, only these subtasks are delegated via `task` (must exist).
+            If omitted/empty after normalize, all assigned non-terminal subtasks on the main task are delegated in parallel.
         progress: Progress 0-100 (required for update_progress).
         authorized_by: Recorded on authorize/start_execution (default lead for start_execution).
         worker_profile_json: Optional JSON object string for create_subtask (worker constraints, tools, etc.).
@@ -225,6 +365,13 @@ async def supervisor_tool(
     task_id = _norm_id(task_id)
     subtask_id = _norm_id(subtask_id)
     assigned_agent = _norm_id(assigned_agent)
+    if subtask_ids is not None:
+        _sid_clean: list[str] = []
+        for _s in subtask_ids:
+            _n = _norm_id(_s) if _s is not None else None
+            if _n:
+                _sid_clean.append(_n)
+        subtask_ids = _sid_clean or None
 
     if _dbg_enabled(runtime):
         try:
@@ -290,6 +437,9 @@ async def supervisor_tool(
                 "status": "pending",
                 "progress": 0
             }
+            _record_supervisor_ui_step(
+                runtime, tool_call_id, "create_task", f"创建主任务：{task_name}"
+            )
             return json.dumps(result, ensure_ascii=False)
         return json.dumps({
             "success": False,
@@ -379,6 +529,12 @@ async def supervisor_tool(
                             "status": "pending",
                             "progress": 0
                         }
+                        _record_supervisor_ui_step(
+                            runtime,
+                            tool_call_id,
+                            "create_subtask",
+                            f"创建子任务：{subtask_name}",
+                        )
                         return json.dumps(result, ensure_ascii=False)
 
         if not task_found:
@@ -467,6 +623,12 @@ async def supervisor_tool(
                                     "assignedTo": agent_name,
                                     "message": f"Subtask {subtask_id} assigned to agent: {agent_name}"
                                 }
+                                _record_supervisor_ui_step(
+                                    runtime,
+                                    tool_call_id,
+                                    "assign_subtask",
+                                    f"分配子任务 {subtask_id} → {agent_name}",
+                                )
                                 return json.dumps(result, ensure_ascii=False)
                         return json.dumps({
                             "success": False,
@@ -594,6 +756,12 @@ async def supervisor_tool(
                             "progress": progress_value,
                             "message": f"Updated progress of main task {task_id} to {progress_value}%"
                         }
+                        _record_supervisor_ui_step(
+                            runtime,
+                            tool_call_id,
+                            "update_progress",
+                            f"主任务进度 {progress_value}%",
+                        )
                         return json.dumps(result, ensure_ascii=False)
 
         return json.dumps({
@@ -685,6 +853,27 @@ async def supervisor_tool(
                 "error": "task_id is required for start_execution action"
             }, ensure_ascii=False)
         actor = authorized_by or "lead"
+
+        if subtask_ids:
+            row = find_main_task(storage, task_id)
+            if not row:
+                return json.dumps({
+                    "success": False,
+                    "action": "start_execution",
+                    "taskId": task_id,
+                    "error": f"Task '{task_id}' not found",
+                }, ensure_ascii=False)
+            _project, _task = row
+            _existing = {st.get("id") for st in (_task.get("subtasks") or [])}
+            _missing = [x for x in subtask_ids if x not in _existing]
+            if _missing:
+                return json.dumps({
+                    "success": False,
+                    "action": "start_execution",
+                    "taskId": task_id,
+                    "error": f"Subtask id(s) not under this task: {_missing}",
+                }, ensure_ascii=False)
+
         ok, msg = authorize_main_task_execution(storage, task_id, actor)
         if not ok:
             return json.dumps({
@@ -693,14 +882,57 @@ async def supervisor_tool(
                 "taskId": task_id,
                 "error": msg
             }, ensure_ascii=False)
-        
+
+        to_run = _subtask_ids_to_run_after_start(storage, task_id, subtask_ids)
+        if to_run:
+            from datetime import datetime as _dt
+
+            _now = _dt.utcnow().isoformat() + "Z"
+            row_mark = find_main_task(storage, task_id)
+            if row_mark:
+                proj_mark, t_mark = row_mark
+                to_set = set(to_run)
+                for st in t_mark.get("subtasks") or []:
+                    if st.get("id") in to_set:
+                        st["started_at"] = st.get("started_at") or _now
+                storage.save_project(proj_mark)
+
+        # 与 HTTP authorize-execution 对齐：必须把该聊天线程的 collab_phase 推进到 executing，
+        # 否则 CollabPhaseMiddleware 仍提示「等待执行」。随后对本批子任务并行调用 task 工具，子智能体开始实际执行。
+        phase_ok = False
+        try:
+            phase_ok = advance_collab_phase_to_executing_for_task(
+                get_paths(), task_id, runtime_thread_id=_runtime_thread_id(runtime)
+            )
+        except Exception:
+            logger.exception("start_execution: advance_collab_phase_to_executing_for_task failed for task_id=%s", task_id)
+
+        delegated: list[dict[str, Any]] = []
+        if to_run:
+            try:
+                delegated = await delegate_collab_subtasks_for_start_execution(
+                    runtime, storage, task_id, to_run
+                )
+            except Exception:
+                logger.exception("start_execution: delegate_collab_subtasks_for_start_execution failed task_id=%s", task_id)
+                delegated = [
+                    {"subtaskId": sid, "ok": False, "error": "delegation failed"}
+                    for sid in to_run
+                ]
+
+        all_ok = all(d.get("ok") for d in delegated) if delegated else True
+
         # 返回结构化的 JSON 格式
         result = {
             "success": True,
             "action": "start_execution",
             "taskId": task_id,
             "authorizedBy": actor,
-            "message": f"Execution authorized for task {task_id}. ({msg})"
+            "message": f"Execution authorized for task {task_id}. ({msg})",
+            "collabPhaseAdvanced": phase_ok,
+            "subtaskIds": to_run,
+            "delegatedSubtasks": delegated,
+            "delegationAllSucceeded": all_ok,
         }
         return json.dumps(result, ensure_ascii=False)
 
@@ -712,7 +944,7 @@ async def supervisor_tool(
                 "error": "task_id is required for set_task_planned action"
             }, ensure_ascii=False)
         
-        # 查找并更新任务状态
+        # 查找并更新任务状态（须遍历全部 project：任务可能在非列表首项的工程中）
         projects = storage.list_projects()
         for project_summary in projects:
             project = storage.load_project(project_summary["id"])
@@ -720,6 +952,8 @@ async def supervisor_tool(
                 continue
             for i, task in enumerate(project.get("tasks", [])):
                 if task.get("id") == task_id:
+                    from datetime import datetime
+
                     now = datetime.utcnow().isoformat() + "Z"
                     task["status"] = "planned"
                     task["updated_at"] = now
@@ -733,6 +967,12 @@ async def supervisor_tool(
                             "status": "planned",
                             "message": f"Task {task_id} status set to planned"
                         }
+                        _record_supervisor_ui_step(
+                            runtime,
+                            tool_call_id,
+                            "set_task_planned",
+                            f"任务已规划：{task_id}",
+                        )
                         return json.dumps(result, ensure_ascii=False)
                     else:
                         return json.dumps({
@@ -741,12 +981,13 @@ async def supervisor_tool(
                             "taskId": task_id,
                             "error": "Failed to save project"
                         }, ensure_ascii=False)
-            return json.dumps({
-                "success": False,
-                "action": "set_task_planned",
-                "taskId": task_id,
-                "error": f"Task '{task_id}' not found"
-            }, ensure_ascii=False)
+
+        return json.dumps({
+            "success": False,
+            "action": "set_task_planned",
+            "taskId": task_id,
+            "error": f"Task '{task_id}' not found"
+        }, ensure_ascii=False)
 
     elif action == "get_status":
         if not task_id:
@@ -764,28 +1005,21 @@ async def supervisor_tool(
                 for task in project.get("tasks", []):
                     if task.get("id") == task_id:
                         subtasks = task.get("subtasks", [])
-                        subtask_info = []
-                        for st in subtasks:
-                            status_icon = {"pending": "⚪", "executing": "🔴", "completed": "✅", "failed": "❌"}.get(st.get("status", ""), "⚪")
-                            ag = st.get("assigned_to") or "unassigned"
-                            wp_s = _subtask_worker_profile_suffix(st)
-                            subtask_info.append(
-                                f"  {status_icon} {st.get('name', 'unnamed')} [{st.get('status', 'unknown')}] "
-                                f"| Agent: {ag}{wp_s} (ID: {st.get('id')})"
-                            )
-
                         auth = task.get("execution_authorized", False)
-                        tid = task.get("thread_id") or "(none)"
-                        result = f"""Task Status:
-ID: {task_id}
-Name: {task.get('name')}
-Status: {task.get('status', 'unknown')}
-Progress: {task.get('progress', 0)}%
-Execution authorized: {auth}
-Thread ID: {tid}
-Subtasks ({len(subtasks)}):
-{chr(10).join(subtask_info) if subtask_info else '  (none)'}"""
-                        return result
+                        tid = task.get("thread_id")
+                        result = {
+                            "success": True,
+                            "action": "get_status",
+                            "taskId": task_id,
+                            "name": task.get("name"),
+                            "status": task.get("status", "unknown"),
+                            "progress": task.get("progress", 0),
+                            "executionAuthorized": bool(auth),
+                            "threadId": tid,
+                            "subtaskCount": len(subtasks),
+                            "subtasks": [_subtask_row_dict(st) for st in subtasks],
+                        }
+                        return json.dumps(result, ensure_ascii=False, default=str)
 
         return json.dumps({
             "success": False,
@@ -810,24 +1044,26 @@ Subtasks ({len(subtasks)}):
             }, ensure_ascii=False)
         mem, project_id, agent_id, parent_task_id = row
         facts = mem.get("facts") or []
-        max_show = 30
-        fact_lines = [
-            f"  - [{f.get('category', 'finding')}] {f.get('content', '')}"
-            for f in facts[:max_show]
-        ]
-        more = f"\n  ... and {len(facts) - max_show} more fact(s)" if len(facts) > max_show else ""
-        scope = f"subtask of {parent_task_id!r}" if parent_task_id else "main task"
-        return "\n".join(
-            [
-                f"TaskMemory for {scope} {task_id!r} (project_id={project_id}, memory_key_agent_id={agent_id!r}):",
-                f"status: {mem.get('status', '')}",
-                f"progress: {mem.get('progress', 0)}",
-                f"current_step: {mem.get('current_step', '')}",
-                f"output_summary: {mem.get('output_summary', '')}",
-                f"facts ({len(facts)}):",
-                *fact_lines,
-            ]
-        ) + more
+        if not isinstance(facts, list):
+            facts = []
+        result = {
+            "success": True,
+            "action": "get_task_memory",
+            "taskId": task_id,
+            "projectId": project_id,
+            "memoryKeyAgentId": agent_id,
+            "parentTaskId": parent_task_id,
+            "isSubtaskMemory": parent_task_id is not None,
+            "memory": {
+                "status": mem.get("status", ""),
+                "progress": mem.get("progress", 0),
+                "current_step": mem.get("current_step", ""),
+                "output_summary": mem.get("output_summary", ""),
+                "facts": facts,
+                "factsCount": len(facts),
+            },
+        }
+        return json.dumps(result, ensure_ascii=False, default=str)
 
     elif action == "list_subtasks":
         if not task_id:
@@ -845,20 +1081,15 @@ Subtasks ({len(subtasks)}):
                 for task in project.get("tasks", []):
                     if task.get("id") == task_id:
                         subtasks = task.get("subtasks", [])
+                        payload = {
+                            "success": True,
+                            "action": "list_subtasks",
+                            "taskId": task_id,
+                            "subtasks": [_subtask_row_dict(st) for st in subtasks],
+                        }
                         if not subtasks:
-                            return f"No subtasks found for task '{task_id}'"
-
-                        subtask_info = []
-                        for st in subtasks:
-                            status_icon = {"pending": "⚪", "executing": "🔴", "completed": "✅", "failed": "❌"}.get(st.get("status", ""), "⚪")
-                            agent = st.get("assigned_to", "unassigned")
-                            wp_s = _subtask_worker_profile_suffix(st)
-                            subtask_info.append(
-                                f"{status_icon} {st.get('name', 'unnamed')} | Status: {st.get('status', 'unknown')} "
-                                f"| Agent: {agent} | Progress: {st.get('progress', 0)}%{wp_s} | ID: {st.get('id')}"
-                            )
-
-                        return f"Subtasks for task '{task_id}':\n" + "\n".join(subtask_info)
+                            payload["message"] = f"No subtasks found for task '{task_id}'"
+                        return json.dumps(payload, ensure_ascii=False, default=str)
 
         return json.dumps({
             "success": False,

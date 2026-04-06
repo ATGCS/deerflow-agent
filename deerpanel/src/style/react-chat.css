@@ -124,7 +124,7 @@
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
   padding: 4px 10px 12px;
   border-bottom: 1px solid color-mix(in srgb, var(--border, #e5e7eb) 70%, transparent);
 }
@@ -135,27 +135,42 @@
   gap: 10px;
   width: 100%;
   padding: 9px 10px;
-  border: none;
+  border: 1px solid transparent;
   border-radius: 10px;
   background: transparent;
   color: var(--text-secondary, #6b7280);
   font-size: 13px;
   text-align: left;
   cursor: pointer;
+  box-shadow: none;
+  transform: translateY(0);
   transition:
-    background 0.12s ease,
-    color 0.12s ease;
+    background 0.14s ease,
+    color 0.14s ease,
+    border-color 0.14s ease,
+    box-shadow 0.14s ease,
+    transform 0.14s ease;
 }
 
 .react-chat-aside-nav-item:hover {
-  background: color-mix(in srgb, var(--bg-primary, #fff) 65%, transparent);
+  background: color-mix(in srgb, var(--bg-primary, #fff) 72%, transparent);
   color: var(--text-primary, #111827);
+  border-color: color-mix(in srgb, var(--border, #e5e7eb) 55%, transparent);
+  box-shadow:
+    0 4px 14px rgba(0, 0, 0, 0.07),
+    0 2px 4px rgba(0, 0, 0, 0.04);
+  transform: translateY(-1px);
 }
 
 .react-chat-aside-nav-item.active {
   background: color-mix(in srgb, var(--accent, #2563eb) 12%, var(--bg-primary, #fff));
   color: var(--accent, #2563eb);
   font-weight: 500;
+  border-color: color-mix(in srgb, var(--accent, #2563eb) 28%, transparent);
+  box-shadow:
+    0 6px 18px rgba(37, 99, 235, 0.16),
+    0 2px 6px rgba(37, 99, 235, 0.08);
+  transform: translateY(-1px);
 }
 
 .react-chat-aside-nav-item.active .react-chat-aside-nav-ic {
@@ -231,20 +246,30 @@
   gap: 10px;
   width: 100%;
   padding: 9px 10px;
-  border: none;
+  border: 1px solid transparent;
   border-radius: 10px;
   background: transparent;
   color: var(--text-secondary, #6b7280);
   font-size: 13px;
   cursor: pointer;
+  box-shadow: none;
+  transform: translateY(0);
   transition:
-    background 0.12s ease,
-    color 0.12s ease;
+    background 0.14s ease,
+    color 0.14s ease,
+    border-color 0.14s ease,
+    box-shadow 0.14s ease,
+    transform 0.14s ease;
 }
 
 .react-chat-aside-footer-btn:hover {
-  background: color-mix(in srgb, var(--bg-primary, #fff) 65%, transparent);
+  background: color-mix(in srgb, var(--bg-primary, #fff) 72%, transparent);
   color: var(--text-primary, #111827);
+  border-color: color-mix(in srgb, var(--border, #e5e7eb) 55%, transparent);
+  box-shadow:
+    0 4px 14px rgba(0, 0, 0, 0.07),
+    0 2px 4px rgba(0, 0, 0, 0.04);
+  transform: translateY(-1px);
 }
 
 .react-chat-aside-icon-btn {
@@ -316,21 +341,25 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 6px;
 }
 
 .react-chat-session-list li {
   margin-bottom: 0;
 }
 
-/* 扁平「任务记录」行（参考桌面助手列表） */
+/* 任务记录：卡片式隔离，与侧栏底色区分；选中态仅在实际位于聊天页时由 shell-aside 加 .active */
 .react-chat-history-item {
   width: 100%;
   text-align: left;
   padding: 10px 10px;
-  border: none;
+  border: 1px solid color-mix(in srgb, var(--border, #e5e7eb) 78%, transparent);
   border-radius: 10px;
-  background: transparent;
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--bg-primary, #ffffff) 88%, var(--bg-tertiary, #f3f4f6) 12%),
+    color-mix(in srgb, var(--bg-tertiary, #f3f4f6) 20%, var(--bg-primary, #ffffff) 80%)
+  );
   color: var(--text-primary, #111827);
   font-size: 13px;
   cursor: pointer;
@@ -339,15 +368,36 @@
   align-items: stretch;
   gap: 4px;
   position: relative;
-  transition: background 120ms ease;
+  box-shadow:
+    0 1px 3px rgba(0, 0, 0, 0.05),
+    0 1px 2px rgba(0, 0, 0, 0.03);
+  transform: translateY(0);
+  transition:
+    background 140ms ease,
+    border-color 140ms ease,
+    box-shadow 140ms ease,
+    transform 140ms ease;
 }
 
 .react-chat-history-item:hover {
-  background: color-mix(in srgb, var(--bg-primary, #fff) 55%, transparent);
+  border-color: color-mix(in srgb, var(--border, #e5e7eb) 95%, transparent);
+  box-shadow:
+    0 8px 22px rgba(0, 0, 0, 0.1),
+    0 3px 8px rgba(0, 0, 0, 0.06);
+  transform: translateY(-2px);
 }
 
 .react-chat-history-item.active {
-  background: color-mix(in srgb, var(--accent, #2563eb) 11%, var(--bg-primary, #fff));
+  border-color: rgba(37, 99, 235, 0.42);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--accent, #2563eb) 10%, var(--bg-primary, #ffffff) 90%),
+    color-mix(in srgb, var(--bg-tertiary, #f3f4f6) 16%, var(--bg-primary, #ffffff) 84%)
+  );
+  box-shadow:
+    0 10px 28px rgba(37, 99, 235, 0.18),
+    0 4px 12px rgba(37, 99, 235, 0.1);
+  transform: translateY(-1px);
 }
 
 .react-chat-history-item.active .react-chat-history-item-title {
@@ -411,16 +461,23 @@
   justify-content: flex-start;
   gap: 6px;
   position: relative;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.035);
+  box-shadow:
+    0 2px 8px rgba(0, 0, 0, 0.04),
+    0 1px 3px rgba(0, 0, 0, 0.03);
+  transform: translateY(0);
   transition:
-    background 120ms ease,
-    border-color 120ms ease,
-    box-shadow 120ms ease;
+    background 140ms ease,
+    border-color 140ms ease,
+    box-shadow 140ms ease,
+    transform 140ms ease;
 }
 
 .react-chat-session-card:hover {
   border-color: var(--border, #e5e7eb);
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.06);
+  box-shadow:
+    0 8px 22px rgba(0, 0, 0, 0.1),
+    0 3px 8px rgba(0, 0, 0, 0.06);
+  transform: translateY(-2px);
 }
 
 .react-chat-session-card.active {
@@ -431,7 +488,10 @@
     color-mix(in srgb, var(--bg-tertiary, #f3f4f6) 18%, #ffffff 82%)
   );
   color: var(--accent, #2563eb);
-  box-shadow: 0 6px 18px rgba(37, 99, 235, 0.14);
+  box-shadow:
+    0 10px 28px rgba(37, 99, 235, 0.18),
+    0 4px 12px rgba(37, 99, 235, 0.1);
+  transform: translateY(-1px);
 }
 
 .react-chat-session-card-header {
@@ -588,6 +648,9 @@
   border-bottom: 1px solid var(--border, #e5e7eb);
   gap: 12px;
   flex-shrink: 0;
+  position: relative;
+  z-index: 8;
+  background: var(--bg-primary, #fff);
 }
 
 .react-chat-header-left {
@@ -1827,21 +1890,55 @@
   max-height: none;
 }
 
-/* ========== 任务进度侧边栏 ========== */
+/* ========== 任务进度侧边栏 ==========
+   固定在主列内、不铺满视口，底部预留输入区（.react-chat-bottom-area），避免挡住发消息 */
 .react-chat-task-sidebar {
-  position: fixed;
+  position: absolute;
   right: 0;
   top: 0;
-  bottom: 0;
-  width: 360px;
-  max-width: calc(100vw - 280px);
+  bottom: var(--react-chat-task-sidebar-bottom, min(260px, 34vh));
+  width: min(360px, 40vw);
+  max-width: 100%;
   background: var(--bg-primary, #fff);
   border-left: 1px solid var(--border, #e5e7eb);
+  border-radius: 12px 0 0 0;
   box-shadow: -4px 0 24px rgba(0, 0, 0, 0.08);
-  z-index: 100;
+  /* 低于输入区 (z-index:10)，底部横向重叠时仍可点输入框 */
+  z-index: 6;
   display: flex;
   flex-direction: column;
   animation: slide-in-right 0.25s ease-out;
+  min-height: 0;
+  overflow: hidden;
+  transition:
+    width 0.2s ease,
+    max-width 0.2s ease,
+    min-width 0.2s ease;
+}
+
+.react-chat-task-sidebar--collapsed {
+  width: 44px;
+  min-width: 44px;
+  max-width: 44px;
+  animation: none;
+}
+
+.react-chat-task-sidebar-rail {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 12px 0;
+}
+
+@media (max-width: 768px) {
+  .react-chat-task-sidebar {
+    width: min(320px, 88vw);
+    bottom: var(--react-chat-task-sidebar-bottom, min(220px, 38vh));
+  }
 }
 
 @keyframes slide-in-right {
@@ -1871,7 +1968,15 @@
   margin: 0;
 }
 
-.react-chat-task-sidebar-close {
+.react-chat-task-sidebar-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.react-chat-task-sidebar-close,
+.react-chat-task-sidebar-collapse-btn {
   border: none;
   background: transparent;
   cursor: pointer;
@@ -1883,7 +1988,8 @@
   justify-content: center;
 }
 
-.react-chat-task-sidebar-close:hover {
+.react-chat-task-sidebar-close:hover,
+.react-chat-task-sidebar-collapse-btn:hover {
   background: rgba(37, 99, 235, 0.08);
   color: var(--accent, #2563eb);
 }
@@ -1932,6 +2038,27 @@
   background: rgba(37, 99, 235, 0.04);
   border-radius: 10px;
   border-left: 3px solid var(--accent, #2563eb);
+}
+
+.react-chat-task-meta {
+  font-size: 12px;
+  color: var(--text-secondary, #6b7280);
+  margin-top: 6px;
+  padding: 0 2px 0 12px;
+  line-height: 1.5;
+}
+
+.react-chat-task-link {
+  display: inline-block;
+  margin-top: 10px;
+  margin-left: 12px;
+  font-size: 13px;
+  color: var(--accent, #2563eb);
+  text-decoration: none;
+}
+
+.react-chat-task-link:hover {
+  text-decoration: underline;
 }
 
 .react-chat-task-activity {
@@ -2045,6 +2172,218 @@
   margin-top: 8px !important;
   color: var(--text-tertiary, #9ca3af);
   line-height: 1.5;
+}
+
+/* Supervisor 流式步骤时间线 */
+.react-chat-task-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--border, #e5e7eb) 80%, transparent);
+  overflow: hidden;
+  background: var(--bg-secondary, #f9fafb);
+}
+
+.react-chat-task-step {
+  display: grid;
+  grid-template-columns: 12px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  font-size: 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border, #e5e7eb) 60%, transparent);
+  animation: react-chat-task-step-in 0.22s ease-out;
+}
+
+.react-chat-task-step:last-child {
+  border-bottom: none;
+}
+
+@keyframes react-chat-task-step-in {
+  from {
+    opacity: 0;
+    transform: translateX(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.react-chat-task-step-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-tertiary, #d1d5db);
+}
+
+.react-chat-task-step--done .react-chat-task-step-dot {
+  background: var(--success, #10b981);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--success, #10b981) 25%, transparent);
+}
+
+.react-chat-task-step--pending .react-chat-task-step-dot {
+  background: var(--accent, #2563eb);
+  opacity: 0.85;
+  animation: react-chat-task-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes react-chat-task-pulse {
+  0%,
+  100% {
+    opacity: 0.5;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.05);
+  }
+}
+
+.react-chat-task-step-label {
+  color: var(--text-primary, #111827);
+  line-height: 1.4;
+  font-weight: 500;
+}
+
+.react-chat-task-step-state {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-tertiary, #9ca3af);
+  flex-shrink: 0;
+}
+
+.react-chat-task-step--done .react-chat-task-step-state {
+  color: var(--success, #059669);
+}
+
+/* 子任务卡片网格 */
+.react-chat-task-subgrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+  gap: 10px;
+}
+
+.react-chat-subtask-card {
+  border-radius: 10px;
+  border: 1px solid var(--border, #e5e7eb);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--bg-primary, #fff) 92%, var(--bg-tertiary, #f3f4f6) 8%),
+    var(--bg-primary, #fff)
+  );
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
+  transition:
+    box-shadow 0.15s ease,
+    border-color 0.15s ease;
+  min-height: 72px;
+}
+
+.react-chat-subtask-card:hover {
+  border-color: color-mix(in srgb, var(--accent, #2563eb) 35%, var(--border, #e5e7eb));
+  box-shadow: 0 4px 14px rgba(37, 99, 235, 0.1);
+}
+
+.react-chat-subtask-card-top {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.react-chat-subtask-card-icon {
+  font-size: 14px;
+  line-height: 1.2;
+  flex-shrink: 0;
+}
+
+.react-chat-subtask-card-head {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.react-chat-subtask-card-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary, #111827);
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.react-chat-subtask-card-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.react-chat-subtask-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 4px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.react-chat-subtask-badge--status {
+  background: color-mix(in srgb, var(--bg-tertiary, #e5e7eb) 85%, transparent);
+  color: var(--text-secondary, #6b7280);
+}
+
+.react-chat-subtask-badge--agent {
+  background: color-mix(in srgb, var(--accent, #2563eb) 12%, transparent);
+  color: var(--accent, #2563eb);
+  max-width: 120px;
+}
+
+.react-chat-subtask-card.task-status-progress .react-chat-subtask-badge--status {
+  background: color-mix(in srgb, var(--accent, #2563eb) 14%, transparent);
+  color: var(--accent, #2563eb);
+}
+
+.react-chat-subtask-card.task-status-completed .react-chat-subtask-badge--status {
+  background: color-mix(in srgb, var(--success, #10b981) 14%, transparent);
+  color: var(--success, #059669);
+}
+
+.react-chat-subtask-card-desc {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-secondary, #6b7280);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.react-chat-subtask-card-progress {
+  height: 3px;
+  border-radius: 2px;
+  background: var(--bg-tertiary, #e5e7eb);
+  overflow: hidden;
+}
+
+.react-chat-subtask-card-progress-bar {
+  height: 100%;
+  border-radius: 2px;
+  background: linear-gradient(90deg, var(--accent, #2563eb), color-mix(in srgb, var(--accent, #2563eb) 70%, #fff));
+  transition: width 0.25s ease;
 }
 
 /* ========== 任务管理器 ========== */

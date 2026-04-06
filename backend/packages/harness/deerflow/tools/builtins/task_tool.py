@@ -16,15 +16,19 @@ from deerflow.agents.lead_agent.prompt import get_skills_prompt_section
 from deerflow.agents.thread_state import ThreadState
 from deerflow.config.agents_config import load_agent_config
 from deerflow.sandbox.security import LOCAL_BASH_SUBAGENT_DISABLED_MESSAGE, is_host_bash_allowed
-from deerflow.collab.models import WorkerProfile
+from deerflow.collab.models import CollabPhase, WorkerProfile
 from deerflow.collab.storage import (
     collab_execution_gate_error,
     find_main_task,
     find_subtask_by_ids,
     get_project_storage,
     get_task_memory_storage,
+    patch_collab_subtask_in_project_storage,
     persist_task_memory_after_subagent_run,
+    rollup_root_task_progress_from_subtasks,
 )
+from deerflow.collab.thread_collab import load_thread_collab_state
+from deerflow.config.paths import get_paths
 from deerflow.subagents import SubagentExecutor, get_available_subagent_names, get_subagent_config
 from deerflow.subagents.executor import SubagentResult, SubagentStatus, cleanup_background_task, get_background_task_result
 
@@ -72,8 +76,8 @@ async def task_tool(
         prompt: The task description for the subagent. Be specific and clear about what needs to be done. ALWAYS PROVIDE THIS PARAMETER SECOND.
         subagent_type: The type of subagent to use. ALWAYS PROVIDE THIS PARAMETER THIRD.
         max_turns: Optional maximum number of agent turns. Defaults to subagent's configured max.
-        collab_task_id: When set (or context key collab_task_id), enforce collaborative gate:
-            main task must exist, execution_authorized=true, and thread_id must match if the task is bound.
+        collab_task_id: When set (or context key collab_task_id), require the main task to exist
+            in project storage (no execution_authorized / thread_id gate).
         collab_subtask_id: With collab_task_id, load ``worker_profile`` from storage (§5.2 → §5.4):
             ``base_subagent``, ``tools`` (whitelist ∩ global tools), ``skills``, ``instruction``.
     """
@@ -90,6 +94,17 @@ async def task_tool(
         ctx_ct = runtime.context.get("collab_task_id")
         if ctx_ct:
             resolved_collab = str(ctx_ct).strip() or None
+
+    # Same-run stale context: authorize/start_execution writes bound_task_id to collab_state.json only.
+    if not resolved_collab and thread_id:
+        try:
+            disk = load_thread_collab_state(get_paths(), str(thread_id))
+            if disk.collab_phase == CollabPhase.EXECUTING:
+                bt = str(disk.bound_task_id or "").strip()
+                if bt:
+                    resolved_collab = bt
+        except Exception:
+            pass
 
     resolved_subtask = (collab_subtask_id or "").strip() or None
     if not resolved_subtask and runtime is not None and runtime.context:
@@ -181,6 +196,41 @@ async def task_tool(
                 source_ref=tool_call_id,
             )
             prog, step = 0, "Subagent timed out"
+
+        # 同步项目 JSON 中的子任务行（任务侧栏 / GET /api/tasks 读的是这里，不仅 task_memory）
+        if resolved_subtask and resolved_collab:
+            try:
+                pst = get_project_storage()
+                if outcome == "completed":
+                    patch_collab_subtask_in_project_storage(
+                        pst,
+                        resolved_collab,
+                        resolved_subtask,
+                        {"status": "completed", "progress": 100},
+                    )
+                elif outcome == "failed":
+                    patch_collab_subtask_in_project_storage(
+                        pst,
+                        resolved_collab,
+                        resolved_subtask,
+                        {"status": "failed", "progress": 0},
+                    )
+                else:
+                    patch_collab_subtask_in_project_storage(
+                        pst,
+                        resolved_collab,
+                        resolved_subtask,
+                        {"status": "failed", "progress": 0},
+                    )
+                rollup_root_task_progress_from_subtasks(pst, resolved_collab)
+            except Exception:
+                logger.exception(
+                    "sync collab subtask row after subagent outcome=%s main=%s sub=%s",
+                    outcome,
+                    resolved_collab,
+                    resolved_subtask,
+                )
+
         if not ok:
             return
         pid, tid = collab_project_id, collab_memory_task_id
@@ -342,6 +392,30 @@ async def task_tool(
             "task:started",
             {"task_id": collab_memory_task_id, "agent_id": collab_agent_for_memory},
         )
+
+    if resolved_collab and resolved_subtask:
+        try:
+            pst = get_project_storage()
+            st0 = find_subtask_by_ids(pst, resolved_collab, resolved_subtask)
+            prev_p = 0
+            if isinstance(st0, dict):
+                try:
+                    prev_p = max(0, min(100, int(st0.get("progress") or 0)))
+                except (TypeError, ValueError):
+                    prev_p = 0
+            patch_collab_subtask_in_project_storage(
+                pst,
+                resolved_collab,
+                resolved_subtask,
+                {"status": "executing", "progress": max(5, prev_p)},
+            )
+            rollup_root_task_progress_from_subtasks(pst, resolved_collab)
+        except Exception:
+            logger.exception(
+                "mark collab subtask executing failed main=%s sub=%s",
+                resolved_collab,
+                resolved_subtask,
+            )
 
     try:
         while True:

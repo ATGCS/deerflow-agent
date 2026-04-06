@@ -3,6 +3,8 @@
  * 不依赖页面级全局变量（如 _toolEventTimes）。
  */
 
+import { formatToolDisplayTitle } from './tool-display.js'
+
 export const CHAT_MAIN_SESSION_KEY = 'agent:main:main'
 
 export function uuid() {
@@ -85,6 +87,16 @@ function isEmptyToolInput(x) {
   return false
 }
 
+/** 从流式/多形态 entry 上解析工具名（供 upsert 合并时写回 target.name） */
+function resolveEntryToolName(entry) {
+  if (!entry || typeof entry !== 'object') return null
+  const n = entry.name ?? entry.tool_name ?? entry.toolName
+  if (n != null && String(n).trim()) return String(n).trim()
+  const fn = entry.function && typeof entry.function === 'object' ? entry.function.name : null
+  if (fn != null && String(fn).trim()) return String(fn).trim()
+  return null
+}
+
 /** 合并流式/多事件中的工具参数（先到的 {} 不应挡住后到的完整 args） */
 function mergeToolInput(prev, next) {
   const p = parseToolInputValue(prev)
@@ -109,6 +121,8 @@ export function upsertTool(tools, entry) {
     if (!target) target = tools.find((t) => t.name === entry.name && isEmptyToolInput(t.input))
   }
   if (target) {
+    const nextName = resolveEntryToolName(entry)
+    if (nextName) target.name = nextName
     if (entry.input != null) target.input = mergeToolInput(target.input, entry.input)
     if (entry.output != null) target.output = entry.output
     if (entry.status) target.status = entry.status
@@ -648,16 +662,7 @@ export function isToolRunning(tool) {
 }
 
 export function toolLabel(tool) {
-  const name = String(tool?.name || 'tool')
-  const args = tool?.input && typeof tool.input === 'object' ? tool.input : null
-  if (name === 'web_search') return `网络搜索${args?.query ? `: ${args.query}` : ''}`
-  if (name === 'web_fetch') return `网页读取${args?.url ? `: ${args.url}` : ''}`
-  if (name === 'read_file') return `读取文件${args?.path ? `: ${args.path}` : ''}`
-  if (name === 'write_file' || name === 'str_replace') return `修改文件${args?.path ? `: ${args.path}` : ''}`
-  if (name === 'bash') return `执行命令${args?.command ? `: ${args.command}` : ''}`
-  if (name === 'write_todos') return '更新待办'
-  if (name === 'ask_clarification') return '等待确认'
-  return name
+  return formatToolDisplayTitle(tool)
 }
 
 export function safeStringify(value) {
@@ -683,6 +688,25 @@ export function safeStringify(value) {
       return ''
     }
   }
+}
+
+/**
+ * 工具入参/出参展示：字符串若可解析为 JSON（对象/数组/合法 JSON 字面量）则格式化为缩进文本，否则原样；非字符串走 safeStringify。结果统一 stripAnsi，与原先展示行为一致。
+ */
+export function formatToolDisplayValue(value) {
+  if (value == null) return ''
+  if (typeof value === 'string') {
+    const s = stripAnsi(value)
+    const t = s.trim()
+    if (!t) return ''
+    try {
+      const parsed = JSON.parse(t)
+      return stripAnsi(safeStringify(parsed))
+    } catch {
+      return s
+    }
+  }
+  return stripAnsi(safeStringify(value))
 }
 
 export function escapeHtml(text) {

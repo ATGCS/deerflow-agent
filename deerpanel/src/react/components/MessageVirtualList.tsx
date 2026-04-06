@@ -40,7 +40,10 @@ export function MessageVirtualList({
         (s.text ||
           (s.segments && s.segments.length) ||
           (s.tools && s.tools.length) ||
-          (s.images && s.images.length))
+          (s.images && s.images.length) ||
+          (s.videos && s.videos.length) ||
+          (s.audios && s.audios.length) ||
+          (s.files && s.files.length))
       ) {
         list.push({
           kind: 'stream',

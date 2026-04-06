@@ -6,6 +6,6 @@ export default defineConfig({
   test: {
     environment: 'happy-dom',
     // 其余 tests/*.test.js 使用 node:test，由 `node --test` 单独运行
-    include: ['tests/chat-normalize.test.js'],
+    include: ['tests/chat-normalize.test.js', 'tests/tool-display.test.js'],
   },
 })

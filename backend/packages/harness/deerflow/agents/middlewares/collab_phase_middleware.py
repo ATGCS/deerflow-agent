@@ -10,6 +10,50 @@ from langchain_core.messages import HumanMessage
 from langgraph.runtime import Runtime
 
 from deerflow.collab.models import CollabPhase
+from deerflow.collab.thread_collab import load_thread_collab_state
+from deerflow.config.paths import get_paths
+
+
+def _effective_collab_for_hints(ctx: dict[str, Any]) -> tuple[str | None, str | None, str | None]:
+    """Resolve phase + bound ids for hints.
+
+    Run context is fixed for the whole LangGraph stream, but ``supervisor(start_execution)``
+    and HTTP authorize update ``collab_state.json`` on disk. Re-read per model step so the lead
+    model sees ``executing`` and ``bound_task_id`` immediately after authorization.
+    """
+    ctx_phase_raw = ctx.get("collab_phase")
+    ctx_phase = str(ctx_phase_raw).strip() if ctx_phase_raw not in (None, "") else None
+    ctx_ct = str(ctx.get("collab_task_id") or "").strip() or None
+    ctx_bp = str(ctx.get("bound_project_id") or "").strip() or None
+    tid = str(ctx.get("thread_id") or "").strip() or None
+
+    eff_phase = ctx_phase
+    eff_ct = ctx_ct
+    eff_bp = ctx_bp
+
+    if tid:
+        try:
+            disk = load_thread_collab_state(get_paths(), tid)
+            d_phase = disk.collab_phase
+            d_phase_str = d_phase.value if isinstance(d_phase, CollabPhase) else str(d_phase)
+            d_bt = str(disk.bound_task_id or "").strip() or None
+            d_bp = str(disk.bound_project_id or "").strip() or None
+            if d_phase != CollabPhase.IDLE:
+                eff_phase = d_phase_str
+            # 流式 run 的 context 整轮固定；start_execution 只写磁盘。executing 阶段必须以磁盘绑定为准，
+            # 否则 ctx 里旧的 collab_task_id 会盖住 bound_task_id，模型一直拿不到正确主任务 id。
+            if d_phase == CollabPhase.EXECUTING:
+                eff_ct = d_bt or ctx_ct
+                eff_bp = d_bp or ctx_bp
+            else:
+                eff_ct = ctx_ct or d_bt
+                eff_bp = ctx_bp or d_bp
+        except Exception:
+            pass
+
+    if not eff_phase or eff_phase == CollabPhase.IDLE.value:
+        return None, None, None
+    return eff_phase, eff_ct, eff_bp
 
 
 def _collab_hint_text(
@@ -70,18 +114,17 @@ def _collab_hint_text(
     if phase == CollabPhase.AWAITING_EXEC.value:
         return (
             common
-            + "**Awaiting execution:** The user must authorize execution (e.g. `authorize-execution` API or "
-            "`supervisor` `start_execution` for the main task). Until then, do not call `task` with "
-            "`collab_task_id` — the tool will reject unauthorized runs.\n"
+            + "**Awaiting execution:** The user should confirm start (e.g. `authorize-execution` or "
+            "`supervisor` `start_execution`). Until the phase advances to `executing`, do not call `task` "
+            "with `collab_task_id` for collaborative workers.\n"
             + "</collab_phase_context>"
         )
 
     if phase == CollabPhase.EXECUTING.value:
         return (
             common
-            + "**Executing:** When delegating collaborative work, pass `collab_task_id` from context (and "
-            "`collab_subtask_id` when working on a specific subtask). The tool enforces authorization and "
-            "`thread_id` binding.\n"
+            + "**Executing:** Delegate collaborative work with `collab_task_id` from context (and "
+            "`collab_subtask_id` when scoped to one subtask).\n"
             + "</collab_phase_context>"
         )
 
@@ -110,11 +153,8 @@ class CollabPhaseMiddleware(AgentMiddleware[AgentState]):
 
     def _inject(self, state: AgentState, runtime: Runtime) -> dict[str, Any] | None:
         ctx = runtime.context or {}
-        raw_phase = ctx.get("collab_phase")
-        if raw_phase is None or raw_phase == "":
-            return None
-        phase = str(raw_phase).strip()
-        if not phase or phase == CollabPhase.IDLE.value:
+        phase, collab_task_id, bound_project_id = _effective_collab_for_hints(ctx)
+        if not phase:
             return None
 
         messages = state.get("messages") or []
@@ -128,8 +168,8 @@ class CollabPhaseMiddleware(AgentMiddleware[AgentState]):
 
         text = _collab_hint_text(
             phase,
-            collab_task_id=ctx.get("collab_task_id"),
-            bound_project_id=ctx.get("bound_project_id"),
+            collab_task_id=collab_task_id,
+            bound_project_id=bound_project_id,
             subagent_enabled=bool(ctx.get("subagent_enabled", False)),
         )
         hint = HumanMessage(

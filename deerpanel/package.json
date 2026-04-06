@@ -30,7 +30,7 @@
     "serve": "node scripts/serve.js",
     "version:sync": "node scripts/sync-version.js",
     "version:set": "node scripts/sync-version.js",
-    "test": "vitest run tests/chat-normalize.test.js",
+    "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"
   },

@@ -1782,14 +1782,27 @@
   padding: 0;
 }
 
+.react-msg-tool .msg-tool-icon {
+  flex-shrink: 0;
+  font-size: 15px;
+  line-height: 1;
+  user-select: none;
+}
+
 .react-msg-tool .msg-tool-item > summary:hover {
   background: rgba(37, 99, 235, 0.06);
   border-radius: 10px;
 }
 
 .react-msg-tool .msg-tool-name {
-  flex: 0 1 auto; /* 关键：避免摘要宽度撑满 */
-  max-width: 320px;
+  flex: 1 1 auto;
+  min-width: 12ch; /* 折叠时摘要行仍留出可读工具名宽度 */
+  max-width: min(420px, 92vw);
+  font-weight: 500;
+  color: var(--text-primary, #111827);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .react-msg-tool .msg-tool-body {

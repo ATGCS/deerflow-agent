@@ -1,10 +1,13 @@
 /**
- * 应用全局左侧壳：聊天式主导航 + 任务记录（仅聊天路由由 ChatApp 同步数据）
- * 替代原 #sidebar（概览/配置 等旧菜单已移除）
+ * 应用全局左侧壳：聊天式主导航 + 任务记录
+ * 会话列表由 ChatApp 同步；离开聊天页后仍从 sessionStorage / API 恢复展示
  */
 import { navigate, getCurrentRoute } from '../router.js'
 
 const LS_SHELL_COLLAPSED = 'deerpanel_shell_aside_collapsed'
+/** 与 ChatApp.tsx 中 SHELL_SIDEBAR_SYNC_STORAGE_KEY 一致 */
+const SS_SHELL_SYNC = 'deerpanel_shell_sidebar_sync'
+const CHAT_MAIN_SESSION_KEY = 'agent:main:main'
 /** 从 MCP/技能等页点任务记录进入 /chat 时要选中的会话（ChatApp 挂载后读取） */
 const SS_PENDING_SHELL_SESSION = 'deerpanel_pending_shell_session'
 
@@ -37,6 +40,94 @@ function _applyCollapsed(collapsed) {
   if (btn) btn.textContent = collapsed ? '»' : '«'
 }
 
+function _parseSessionLabel(key) {
+  const parts = String(key || '').split(':')
+  if (parts.length < 3) return key || '未知'
+  const agent = parts[1] || 'main'
+  const channel = parts.slice(2).join(':')
+  if (agent === 'main' && channel === 'main') return 'leader-agnet'
+  if (agent === 'main') return channel
+  return `${agent} / ${channel}`
+}
+
+function _sessionDisplayTitle(key) {
+  try {
+    const names = JSON.parse(localStorage.getItem('clawpanel-chat-session-names') || '{}')
+    if (names[key]) return names[key]
+  } catch {
+    /* ignore */
+  }
+  return _parseSessionLabel(key)
+}
+
+function _formatSessionTime(ts) {
+  const t = typeof ts === 'number' && ts < 1e12 ? ts * 1000 : ts
+  const d = new Date(t)
+  if (Number.isNaN(d.getTime())) return ''
+  const now = Date.now()
+  const diffMs = now - d.getTime()
+  if (diffMs < 60000) return '刚刚'
+  if (diffMs < 3600000) return `${Math.floor(diffMs / 60000)} 分钟前`
+  if (diffMs < 86400000) return `${Math.floor(diffMs / 3600000)} 小时前`
+  if (diffMs < 604800000) return `${Math.floor(diffMs / 86400000)} 天前`
+  return `${(d.getMonth() + 1).toString().padStart(2, '0')}-${d.getDate().toString().padStart(2, '0')}`
+}
+
+function _formatSessionMeta(s) {
+  const n = typeof s.messageCount === 'number' ? s.messageCount : typeof s.messages === 'number' ? s.messages : 0
+  const ts = s.updatedAt ?? s.lastActivity ?? s.createdAt ?? 0
+  const timeStr = ts ? _formatSessionTime(ts) : ''
+  let status = '已完成'
+  if (!n) status = '草稿'
+  return timeStr ? `${timeStr} · ${status}` : status
+}
+
+async function _bootstrapShellSessionsIfEmpty() {
+  if (_lastChatSidebarSync?.rows?.length) return
+  try {
+    const raw = sessionStorage.getItem(SS_SHELL_SYNC)
+    if (raw) {
+      const d = JSON.parse(raw)
+      if (d && Array.isArray(d.rows) && d.rows.length) {
+        _lastChatSidebarSync = d
+        _renderSessionList(d)
+        return
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+
+  try {
+    const { api } = await import('../lib/tauri-api.js')
+    const data = await api.chatSessionsList(50)
+    const sessions = data?.sessions || []
+    if (!sessions.length) return
+    const rows = sessions.map((s) => {
+      const key = String(s.sessionKey || '')
+      return {
+        sessionKey: key,
+        title: _sessionDisplayTitle(key),
+        meta: _formatSessionMeta(s),
+        active: false,
+        modePill: null,
+        canDelete: key !== CHAT_MAIN_SESSION_KEY,
+      }
+    })
+    const d = {
+      listLoading: false,
+      sessionFilter: '',
+      moreMenuKey: null,
+      newTaskActive: false,
+      rows,
+    }
+    _lastChatSidebarSync = d
+    _renderSessionList(d)
+  } catch (e) {
+    console.warn('[shell-aside] bootstrap sessions', e)
+  }
+}
+
 function _syncNavActive() {
   if (!_shellEl) return
   const routePath = (getCurrentRoute() || '/chat').split('?')[0]
@@ -46,6 +137,18 @@ function _syncNavActive() {
     if (target === '/chat' && (routePath === '/chat' || routePath === '/chat-react')) active = true
     btn.classList.toggle('active', active)
   })
+  const newBtn = _shellEl.querySelector('#shell-btn-new-task')
+  if (newBtn) {
+    if (!_isChatRoute()) {
+      newBtn.classList.remove('active')
+    } else {
+      const na =
+        _lastChatSidebarSync && typeof _lastChatSidebarSync.newTaskActive === 'boolean'
+          ? _lastChatSidebarSync.newTaskActive
+          : false
+      newBtn.classList.toggle('active', na)
+    }
+  }
 }
 
 function _renderSessionList(detail) {
@@ -64,13 +167,14 @@ function _renderSessionList(detail) {
     return
   }
   const moreKey = detail.moreMenuKey || ''
+  const onChatRoute = _isChatRoute()
   ul.innerHTML = detail.rows
     .map((row) => {
       const key = escHtml(row.sessionKey)
       const title = escHtml(row.title)
       const meta = escHtml(row.meta)
       const pill = row.modePill ? `<span class="react-chat-history-pill">${escHtml(row.modePill)}</span>` : ''
-      const active = row.active ? ' active' : ''
+      const active = onChatRoute && row.active ? ' active' : ''
       const moreOpen = moreKey === row.sessionKey
       const menu = moreOpen
         ? `<div class="react-chat-session-more-menu" role="menu">
@@ -98,16 +202,28 @@ function _onChatSync(ev) {
   const d = ev.detail
   if (!_shellEl) return
   const newBtn = _shellEl.querySelector('#shell-btn-new-task')
-  if (newBtn && d && typeof d.newTaskActive === 'boolean') {
-    newBtn.classList.toggle('active', d.newTaskActive)
+  if (newBtn && d) {
+    const na = typeof d.newTaskActive === 'boolean' ? d.newTaskActive : false
+    // 仅在实际位于聊天路由时高亮；避免 ChatApp 卸载时用 sessionStorage 再派发一次把选中态粘住
+    newBtn.classList.toggle('active', na && _isChatRoute())
   }
 
   if (!d) {
-    // 聊天页卸载：保留任务记录列表，仅去掉「新建任务」高亮
     newBtn?.classList.remove('active')
-    if (_lastChatSidebarSync) {
-      _renderSessionList(_lastChatSidebarSync)
+    let snapshot = _lastChatSidebarSync
+    if (!snapshot?.rows?.length) {
+      try {
+        const raw = sessionStorage.getItem(SS_SHELL_SYNC)
+        if (raw) snapshot = JSON.parse(raw)
+      } catch {
+        snapshot = null
+      }
     }
+    if (snapshot && Array.isArray(snapshot.rows)) {
+      _lastChatSidebarSync = snapshot
+      _renderSessionList(snapshot)
+    }
+    void _bootstrapShellSessionsIfEmpty()
     return
   }
 
@@ -257,6 +373,15 @@ export function initShellAside(el) {
         </span>
         <span>新建任务</span>
       </button>
+      <button type="button" class="react-chat-aside-nav-item" data-shell-nav="/tasks">
+        <span class="react-chat-aside-nav-ic" aria-hidden>
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M9 11l3 3L22 4"/>
+            <path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/>
+          </svg>
+        </span>
+        <span>任务中心</span>
+      </button>
       <button type="button" class="react-chat-aside-nav-item" data-shell-nav="/cron">
         <span class="react-chat-aside-nav-ic" aria-hidden>
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
@@ -322,8 +447,12 @@ export function initShellAside(el) {
   _bindShell(el)
   window.addEventListener('hashchange', () => {
     _syncNavActive()
+    if (_lastChatSidebarSync) {
+      _renderSessionList(_lastChatSidebarSync)
+    }
   })
   window.addEventListener('deerpanel:chat-sidebar-sync', _onChatSync)
 
   _syncNavActive()
+  void _bootstrapShellSessionsIfEmpty()
 }

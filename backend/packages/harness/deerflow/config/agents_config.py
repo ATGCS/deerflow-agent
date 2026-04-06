@@ -26,6 +26,7 @@ class AgentConfig(BaseModel):
         agent_type: Type of agent - 'custom', 'subagent', or 'acp'.
         system_prompt: For subagents - the system prompt.
         tools: For subagents - optional tool whitelist.
+        skills: For subagents - optional skill names (injected via skills prompt section).
         disallowed_tools: For subagents - optional tool blacklist.
         max_turns: For subagents - maximum number of turns.
         timeout_seconds: For subagents/ACP - timeout in seconds.
@@ -46,6 +47,7 @@ class AgentConfig(BaseModel):
     # Subagent-specific fields
     system_prompt: str | None = None
     tools: list[str] | None = None
+    skills: list[str] | None = None
     disallowed_tools: list[str] | None = None
     max_turns: int = 50
     timeout_seconds: int = 900

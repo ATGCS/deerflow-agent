@@ -22,6 +22,125 @@ function safeParseJSON(raw, fallback) {
   try { return JSON.parse(raw) } catch { return fallback }
 }
 
+function clampProgress01(v) {
+  const n = Number.parseInt(v, 10)
+  if (Number.isNaN(n)) return 0
+  return Math.max(0, Math.min(100, n))
+}
+
+/**
+ * 旧版 Gateway 无 GET .../task-progress 时，用已有 collab + /api/tasks 拼出与后端快照同构的数据，避免对不存在路由发请求导致控制台 404。
+ */
+async function buildTaskProgressSnapshotFromLegacyApis(threadId) {
+  const enc = encodeURIComponent(threadId)
+  let collab = null
+  try {
+    const resp = await fetch(`/api/collab/threads/${enc}`)
+    const text = await resp.text().catch(() => '')
+    collab = text ? safeParseJSON(text, null) : null
+    if (!resp.ok) collab = null
+  } catch {
+    collab = null
+  }
+  // collab 接口失败时仍可用 /api/tasks 按 thread_id 恢复（避免「任务列表有数据但整段返回 null」）
+  if (!collab || typeof collab !== 'object') {
+    collab = {
+      collab_phase: 'idle',
+      bound_task_id: null,
+      bound_project_id: null,
+    }
+  }
+
+  const phaseStr =
+    collab.collab_phase != null && collab.collab_phase !== ''
+      ? String(collab.collab_phase)
+      : 'idle'
+  const boundTid = (collab.bound_task_id || '').toString().trim()
+
+  let task = null
+  if (boundTid) {
+    try {
+      task = await fetchJson(`/api/tasks/${encodeURIComponent(boundTid)}`)
+    } catch {
+      task = null
+    }
+  }
+  if (!task) {
+    let list = []
+    try {
+      list = await fetchJson('/api/tasks')
+    } catch {
+      return null
+    }
+    if (!Array.isArray(list)) return null
+    const want = (threadId || '').toString().trim().toLowerCase()
+    const matches = list.filter((t) => {
+      const tid = (t.thread_id || t.threadId || '').toString().trim().toLowerCase()
+      return tid && tid === want
+    })
+    if (!matches.length) return null
+    matches.sort((a, b) => {
+      const auth = (x) => (x.execution_authorized ? 1 : 0)
+      const d = auth(b) - auth(a)
+      if (d) return d
+      const ua = String(a.updated_at || a.created_at || '')
+      const ub = String(b.updated_at || b.created_at || '')
+      return ub.localeCompare(ua)
+    })
+    task = matches[0]
+  }
+
+  if (!task || !task.id) return null
+
+  const pid = (task.parent_project_id || task.project_id || '').toString().trim() || null
+  const subs = Array.isArray(task.subtasks) ? task.subtasks : []
+  const subtasks = subs
+    .filter((st) => st && st.id)
+    .map((st) => ({
+      subtaskId: String(st.id),
+      parentTaskId: String(task.id),
+      name: st.name,
+      description: st.description,
+      status: st.status,
+      progress: clampProgress01(st.progress),
+      assignedAgent: st.assigned_to,
+    }))
+
+  const rawSupervisorSteps =
+    (Array.isArray(collab?.sidebar_supervisor_steps) &&
+    collab.sidebar_supervisor_steps.length > 0
+      ? collab.sidebar_supervisor_steps
+      : null) ??
+    (Array.isArray(collab?.supervisor_steps) &&
+    collab.supervisor_steps.length > 0
+      ? collab.supervisor_steps
+      : null)
+  const supervisor_steps =
+    rawSupervisorSteps != null
+      ? rawSupervisorSteps
+          .map((x) =>
+            x && typeof x === 'object' ? { ...x } : x
+          )
+          .filter((x) => x != null)
+      : []
+
+  return {
+    thread_id: threadId,
+    collab_phase: phaseStr,
+    bound_task_id: collab.bound_task_id ?? null,
+    bound_project_id: collab.bound_project_id ?? null,
+    main_task: {
+      taskId: String(task.id),
+      projectId: pid,
+      name: task.name,
+      status: task.status,
+      progress: clampProgress01(task.progress),
+    },
+    subtasks,
+    supervisor_steps,
+  }
+}
+
 function loadSessionMap() {
   return safeParseJSON(localStorage.getItem(SESSION_MAP_KEY) || '{}', {})
 }
@@ -432,6 +551,31 @@ export class WsClient {
     } catch {
       return null
     }
+  }
+
+  /** 刷新页后按 LangGraph thread_id 恢复任务侧栏（主任务 + 子任务，与会话绑定） */
+  async getTaskProgressSnapshot(threadId) {
+    if (!threadId) return null
+    const legacy = await buildTaskProgressSnapshotFromLegacyApis(threadId)
+    if (legacy && legacy.main_task && String(legacy.main_task.taskId || '').trim()) {
+      return legacy
+    }
+    const enc = encodeURIComponent(threadId)
+    const fallbacks = [
+      `/api/collab/threads/${enc}/task-progress`,
+      `/api/threads/${enc}/task-progress`,
+    ]
+    for (const p of fallbacks) {
+      try {
+        const resp = await fetch(p)
+        const text = await resp.text().catch(() => '')
+        const data = text ? safeParseJSON(text, null) : null
+        if (resp.ok && data) return data
+      } catch {
+        /* try next */
+      }
+    }
+    return legacy
   }
 
   async putThreadCollabState(threadId, body) {

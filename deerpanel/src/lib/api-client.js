@@ -6,7 +6,14 @@
  * 参考文档：DeerFlow 前端实现进度.md - Task 1.1
  */
 
-const API_BASE = 'http://localhost:8000'
+/** 浏览器走当前源 + Vite `/api` 代理到 Gateway；非浏览器回退 8012 */
+function apiUrl(path) {
+  const p = path.startsWith('/') ? path : `/${path}`
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    return `/api${p}`
+  }
+  return `http://localhost:8012/api${p}`
+}
 
 /**
  * 任务管理 API 客户端
@@ -18,7 +25,7 @@ export const tasksAPI = {
    */
   async listTasks() {
     try {
-      const response = await fetch(`${API_BASE}/api/tasks`)
+      const response = await fetch(apiUrl('/tasks'))
       if (!response.ok) {
         throw new Error(`Failed to fetch tasks: ${response.status} ${response.statusText}`)
       }
@@ -36,7 +43,7 @@ export const tasksAPI = {
    */
   async getTask(taskId) {
     try {
-      const response = await fetch(`${API_BASE}/api/tasks/${taskId}`)
+      const response = await fetch(apiUrl(`/tasks/${taskId}`))
       if (!response.ok) {
         if (response.status === 404) {
           throw new Error(`Task not found: ${taskId}`)
@@ -60,7 +67,7 @@ export const tasksAPI = {
    */
   async createTask(taskData) {
     try {
-      const response = await fetch(`${API_BASE}/api/tasks`, {
+      const response = await fetch(apiUrl('/tasks'), {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
@@ -86,7 +93,7 @@ export const tasksAPI = {
    */
   async startTask(taskId) {
     try {
-      const response = await fetch(`${API_BASE}/api/tasks/${taskId}/start`, {
+      const response = await fetch(apiUrl(`/tasks/${taskId}/start`), {
         method: 'POST',
         headers: { 
           'Accept': 'application/json'
@@ -110,7 +117,7 @@ export const tasksAPI = {
    */
   async stopTask(taskId) {
     try {
-      const response = await fetch(`${API_BASE}/api/tasks/${taskId}/stop`, {
+      const response = await fetch(apiUrl(`/tasks/${taskId}/stop`), {
         method: 'POST',
         headers: { 
           'Accept': 'application/json'
@@ -138,7 +145,7 @@ export const tasksAPI = {
    */
   async updateTask(taskId, updates) {
     try {
-      const response = await fetch(`${API_BASE}/api/tasks/${taskId}`, {
+      const response = await fetch(apiUrl(`/tasks/${taskId}`), {
         method: 'PUT',
         headers: { 
           'Content-Type': 'application/json',
@@ -164,7 +171,7 @@ export const tasksAPI = {
    */
   async listSubtasks(taskId) {
     try {
-      const response = await fetch(`${API_BASE}/api/tasks/${taskId}/subtasks`)
+      const response = await fetch(apiUrl(`/tasks/${taskId}/subtasks`))
       if (!response.ok) {
         throw new Error(`Failed to fetch subtasks: ${response.status} ${response.statusText}`)
       }
@@ -182,7 +189,7 @@ export const tasksAPI = {
    */
   async getConversation(taskId) {
     try {
-      const response = await fetch(`${API_BASE}/api/tasks/${taskId}/conversation`)
+      const response = await fetch(apiUrl(`/tasks/${taskId}/conversation`))
       if (!response.ok) {
         if (response.status === 404) {
           throw new Error(`Conversation not found for task: ${taskId}`)
@@ -205,7 +212,7 @@ export const tasksAPI = {
    */
   async sendMessage(taskId, content, threadId) {
     try {
-      const response = await fetch(`${API_BASE}/api/tasks/${taskId}/conversation/message`, {
+      const response = await fetch(apiUrl(`/tasks/${taskId}/conversation/message`), {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
@@ -234,7 +241,7 @@ export const tasksAPI = {
    */
   async deleteTask(taskId) {
     try {
-      const response = await fetch(`${API_BASE}/api/tasks/${taskId}`, {
+      const response = await fetch(apiUrl(`/tasks/${taskId}`), {
         method: 'DELETE',
         headers: { 
           'Accept': 'application/json'

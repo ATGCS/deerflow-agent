@@ -395,6 +395,10 @@ ask_clarification(
 
 **监督者工具操作：**
 
+**协作执行：`start_execution` 与 `task`**
+- **`supervisor(start_execution)`**：在授权并推进协作阶段为 `executing` 之后，会**自动**对目标子任务并行调用内部的 `task` 委派逻辑，**子智能体开始实际执行**（读子任务的 `worker_profile` / `assigned_to`）。传入 `subtask_ids` 时只跑指定子任务；不传或传空时，跑主任务下所有**已分配负责人**且**未处于完成/失败/取消**的子任务。
+- **额外 `task(..., collab_task_id=..., collab_subtask_id=...)`**：仍可用于手动补跑、重试或并行策略由你细调的场景；常规流程**不必**在 `start_execution` 后再逐条重复 `task`。
+
 1. **创建主任务：**
    `supervisor(action="create_task", task_name="任务名称", task_description="描述")`
 
@@ -427,9 +431,9 @@ ask_clarification(
 6. **标记子任务完成：**
    `supervisor(action="complete_subtask", task_id="ID", subtask_id="SubID")`
 
-7. **设置任务状态为 planned（启动执行前必需）：**
+7. **设置任务状态为 planned（可选显式步骤）：**
    `supervisor(action="set_task_planned", task_id="ID")`  
-   **重要**：新创建的任务状态为 `pending`，必须先用此操作将状态改为 `planned`，然后才能调用 `start_execution`
+   **说明**：新任务常为 `pending`。调用 `start_execution` 时系统会**自动**将 `pending` 提升为 `planned` 并完成授权；也可先显式 `set_task_planned` 再启动，效果等价。
 
 8. **获取任务状态：**
    `supervisor(action="get_status", task_id="ID")`
@@ -437,9 +441,10 @@ ask_clarification(
 9. **列出所有子任务：**
    `supervisor(action="list_subtasks", task_id="ID")`
 
-10. **启动任务执行：**
+10. **启动任务执行（授权 + 子智能体开跑）：**
     `supervisor(action="start_execution", task_id="ID", subtask_ids=["SubID1", "SubID2"], authorized_by="user")`  
-    **前提条件**：任务状态必须是 `planned` 或 `planning`，如果是 `pending` 状态会失败
+    **前提条件**：任务状态须为 `planned`、`planning` 或 `pending`（`pending` 会在本操作中自动变为 `planned` 并授权）；已进入非法终态的除外。  
+    **行为**：本调用会**同步阻塞至本批子任务的 `task` 委派跑完**（多子任务时内部并行），返回 JSON 中的 `delegatedSubtasks` / `delegationAllSucceeded` 表示各子任务是否成功。`subtask_ids` 可省略，则自动选择所有已分配且未终态的子任务。执行前请确保子任务已 `assign_subtask`（或 `worker_profile` 中有可用的 `base_subagent`）。
 
 11. **创建新智能体（进化能力）：**
     `supervisor(action="create_agent", agent_name="agent-name", agent_type="subagent", description="它做什么", model="model-name", system_prompt="说明", tools=["tool1"], skills=["skill1"])`
@@ -515,11 +520,10 @@ supervisor(action="assign_subtask", task_id="main123", subtask_id="sub789", assi
 
 # 步骤 1：创建主任务
 supervisor(action="create_task", task_name="竞品分析报告", task_description="对主要竞品进行深入分析并撰写报告")
-# 注意：任务创建后状态为 pending
+# 注意：任务创建后状态为 pending（可直接 start_execution，会自动 planned + 授权）
 
-# 步骤 2：设置任务状态为 planned（启动执行前必需）
-supervisor(action="set_task_planned", task_id="abc123")
-# 现在任务状态已改为 planned，可以启动执行了
+# 步骤 2（可选）：显式设为 planned
+# supervisor(action="set_task_planned", task_id="abc123")
 
 # 步骤 3：如果稍后继续同一个主任务，先列出以避免重复子任务
 supervisor(action="list_subtasks", task_id="abc123")
@@ -535,18 +539,22 @@ supervisor(action="assign_subtask", task_id="abc123", subtask_id="sub1", assigne
 supervisor(action="assign_subtask", task_id="abc123", subtask_id="sub2", assigned_agent="researcher")
 supervisor(action="assign_subtask", task_id="abc123", subtask_id="sub4", assigned_agent="writer")
 
-# 步骤 6：启动任务执行
+# 步骤 6：启动任务执行（授权 + 协作 executing；内部自动并行委派子智能体执行所列子任务）
 supervisor(action="start_execution", task_id="abc123", subtask_ids=["sub1", "sub2", "sub4"], authorized_by="user")
+# 返回中含 delegatedSubtasks / delegationAllSucceeded，可按结果向用户汇报
 
 # 步骤 7：告知用户
-"好的！我已将任务拆解为 4 个子任务，正在分配给合适的 Agent 执行..."
+"好的！子任务已启动执行，正在根据返回结果汇总进度…"
 
-# 步骤 8：随着任务完成更新用户
+# 步骤 8：如需补跑或重试单个失败子任务，可再显式调用 task(collab_task_id=..., collab_subtask_id=...)
+
+# 步骤 9：随着子任务完成用 supervisor 更新进度/打勾，并同步用户
 "子任务 1「搜索竞品信息」已完成，正在进行子任务 2..."
 ```
 
 **关键原则：**
 - 对于复杂的多步骤任务，总是使用监督者工具
+- **`start_execution` 即启动子智能体执行**（内部已委派 `task`）；向用户说明进度时请结合返回的 `delegatedSubtasks`。若某子任务失败，可再单独 `task` 重试或调整计划。
 - **在 `create_subtask` 之前：** 调用 `list_subtasks` 或 `get_status` 并比较**可用智能体** + 现有行的 `Agent` / `profile` 行——重用匹配的子任务而不是复制
 - 在分配之前创建子任务（仅用于新工作项）
 - **进化**：当任务模式重复或需要 specialized 能力时，创建或更新智能体

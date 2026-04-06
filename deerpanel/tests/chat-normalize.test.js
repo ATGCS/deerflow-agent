@@ -9,6 +9,7 @@ import {
   stripThinkingTags,
   stripAgentMetaLines,
   upsertTool,
+  formatToolDisplayValue,
   CHAT_MAIN_SESSION_KEY,
 } from '../src/lib/chat-normalize.js'
 
@@ -140,6 +141,37 @@ describe('upsertTool', () => {
     expect(tools[0].id).toBe('call_a')
     expect(tools[1].id).toBe('call_b')
   })
+  it('updates tool name when merging placeholder entry with real tool call', () => {
+    const tools = []
+    upsertTool(tools, { id: 'tc1', name: '工具', input: null, output: null, status: 'pending' })
+    upsertTool(tools, {
+      id: 'tc1',
+      name: 'supervisor',
+      input: { action: 'create_task' },
+      status: 'running',
+    })
+    expect(tools).toHaveLength(1)
+    expect(tools[0].name).toBe('supervisor')
+  })
+  it('reads name from tool_name or function.name on merge', () => {
+    const tools = []
+    upsertTool(tools, { id: 'x', name: '工具', input: {}, status: 'running' })
+    upsertTool(tools, { id: 'x', tool_name: 'read_file', input: { path: '/a' }, status: 'running' })
+    expect(tools[0].name).toBe('read_file')
+    upsertTool(tools, {
+      id: 'y',
+      name: '工具',
+      input: {},
+      status: 'running',
+    })
+    upsertTool(tools, {
+      id: 'y',
+      function: { name: 'bash' },
+      input: { command: 'ls' },
+      status: 'running',
+    })
+    expect(tools.find((t) => t.id === 'y')?.name).toBe('bash')
+  })
 })
 
 describe('parseUsageToStats', () => {
@@ -164,6 +196,27 @@ describe('stripAgentMetaLines', () => {
   it('drops lines starting with known prefixes', () => {
     const raw = '核心任务：wait\n技能：17\n\n已完成'
     expect(stripAgentMetaLines(raw)).toBe('已完成')
+  })
+})
+
+describe('formatToolDisplayValue', () => {
+  it('pretty-prints JSON strings', () => {
+    expect(formatToolDisplayValue('{"a":1,"b":2}')).toBe(
+      `{
+  "a": 1,
+  "b": 2
+}`,
+    )
+  })
+  it('leaves non-JSON strings as-is (after stripAnsi)', () => {
+    expect(formatToolDisplayValue('plain ok')).toBe('plain ok')
+  })
+  it('stringifies objects like safeStringify', () => {
+    expect(formatToolDisplayValue({ x: 1 })).toBe(
+      `{
+  "x": 1
+}`,
+    )
   })
 })
 

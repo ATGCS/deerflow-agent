@@ -29,6 +29,10 @@ class ThreadCollabState(BaseModel):
     collab_phase: CollabPhase = Field(default=CollabPhase.IDLE, description="Collaboration phase")
     bound_task_id: str | None = Field(default=None, description="Main task id bound to this thread")
     bound_project_id: str | None = Field(default=None, description="Project / bundle id (storage bucket id)")
+    sidebar_supervisor_steps: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Persisted supervisor UI timeline steps for task sidebar restore",
+    )
     updated_at: str = Field(default_factory=_utc_iso_z, description="Last update (ISO8601 Z)")
 
 

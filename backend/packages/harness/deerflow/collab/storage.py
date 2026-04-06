@@ -518,6 +518,59 @@ def find_subtask_by_ids(
     return None
 
 
+def patch_collab_subtask_in_project_storage(
+    storage: ProjectStorage,
+    main_task_id: str,
+    subtask_id: str,
+    updates: dict[str, Any],
+) -> bool:
+    """Merge ``updates`` into a ``subtasks[]`` row and persist the project bundle."""
+    found = find_main_task(storage, main_task_id)
+    if not found:
+        return False
+    project, task = found
+    now = datetime.utcnow().isoformat() + "Z"
+    subs = list(task.get("subtasks") or [])
+    idx = -1
+    for i, st in enumerate(subs):
+        if isinstance(st, dict) and st.get("id") == subtask_id:
+            idx = i
+            break
+    if idx < 0:
+        return False
+    row = dict(subs[idx])
+    row.update(updates)
+    row["updated_at"] = now
+    subs[idx] = row
+    task["subtasks"] = subs
+    task["updated_at"] = now
+    project["updated_at"] = now
+    return storage.save_project(project)
+
+
+def rollup_root_task_progress_from_subtasks(storage: ProjectStorage, main_task_id: str) -> bool:
+    """Set root task ``progress`` to the mean of subtask ``progress`` values (0–100)."""
+    found = find_main_task(storage, main_task_id)
+    if not found:
+        return False
+    project, task = found
+    subs = [s for s in (task.get("subtasks") or []) if isinstance(s, dict)]
+    if not subs:
+        return False
+    total = 0
+    for st in subs:
+        try:
+            total += max(0, min(100, int(st.get("progress") or 0)))
+        except (TypeError, ValueError):
+            pass
+    overall = total // len(subs)
+    now = datetime.utcnow().isoformat() + "Z"
+    task["progress"] = overall
+    task["updated_at"] = now
+    project["updated_at"] = now
+    return storage.save_project(project)
+
+
 def find_subtask_row_by_id(
     storage: ProjectStorage,
     subtask_id: str,
@@ -644,25 +697,17 @@ def persist_task_memory_after_subagent_run(
 
 
 def collab_execution_gate_error(main_task_id: str, runtime_thread_id: str | None) -> str | None:
-    """Return user-facing error if collaborative main task cannot run workers; None if OK."""
+    """Return user-facing error if collaborative main task cannot run workers; None if OK.
+
+    ``execution_authorized`` and ``thread_id`` binding are no longer enforced here: if the
+    main task id exists in project storage, collaborative ``task`` runs are allowed. UI may
+    still call ``start_execution`` to advance collab phase / UX; it does not gate the tool.
+    """
+    _ = runtime_thread_id  # kept for backward-compatible call sites
     storage = get_project_storage()
     found = find_main_task(storage, main_task_id)
     if found is None:
         return f"Error: collaborative task id {main_task_id!r} was not found."
-    _project, task = found
-    if not task.get("execution_authorized"):
-        return (
-            "Error: This collaborative task is not authorized for worker execution. "
-            "After the plan is ready (status planned or planning), call "
-            "POST /api/tasks/{task_id}/authorize-execution or supervisor(action=start_execution, task_id=...). "
-            "Then invoke this tool with collab_task_id set to that task id (or set context collab_task_id)."
-        )
-    bound = task.get("thread_id")
-    if bound:
-        if not runtime_thread_id:
-            return "Error: collaborative task is bound to a thread; current runtime has no thread_id."
-        if bound != runtime_thread_id:
-            return "Error: collaborative task is bound to a different conversation (thread_id mismatch)."
     return None
 
 

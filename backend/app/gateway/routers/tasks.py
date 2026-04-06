@@ -1,5 +1,6 @@
 """Tasks API router for multi-agent collaboration - task-centric model."""
 
+import logging
 import uuid
 from datetime import datetime
 
@@ -13,7 +14,11 @@ from deerflow.collab.storage import (
     get_task_memory_storage,
     new_project_bundle_root_task,
 )
+from deerflow.collab.thread_collab import advance_collab_phase_to_executing_for_task
+from deerflow.config.paths import get_paths
 from app.gateway.routers.events import emit_task_completed, emit_task_progress
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
@@ -75,6 +80,10 @@ class AssignSubtaskRequest(BaseModel):
 
 class AuthorizeExecutionRequest(BaseModel):
     authorized_by: str = Field(default="user", description="user | lead | system")
+    thread_id: str | None = Field(
+        default=None,
+        description="Current LangGraph thread id: collab_state is written here when it differs from the task's bound thread_id",
+    )
 
 
 @router.get("", summary="List All Tasks", description="Get a list of all tasks.")
@@ -154,6 +163,13 @@ async def authorize_task_execution(
         if "not found" in msg.lower():
             raise HTTPException(status_code=404, detail=msg)
         raise HTTPException(status_code=400, detail=msg)
+
+    try:
+        advance_collab_phase_to_executing_for_task(
+            get_paths(), task_id, runtime_thread_id=body.thread_id
+        )
+    except Exception:
+        logger.exception("authorize-execution: advance_collab_phase_to_executing_for_task failed task_id=%s", task_id)
 
     for project_summary in storage.list_projects():
         project = storage.load_project(project_summary["id"])

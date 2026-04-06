@@ -77,6 +77,34 @@ export interface ThreadClarification {
   preview?: string
 }
 
+/** 聊天侧栏展示的协作任务（supervisor create_task 等工具产出） */
+export interface CollabTaskSnapshot {
+  taskId: string
+  projectId?: string
+  name?: string
+  status?: string
+  progress?: number
+}
+
+/** supervisor create_subtask 等在侧栏子任务卡片中展示 */
+export interface CollabSubtaskSnapshot {
+  subtaskId: string
+  parentTaskId?: string
+  name?: string
+  description?: string
+  status?: string
+  progress?: number
+  assignedAgent?: string
+}
+
+/** 流式 supervisor 每一步（有输出则 done，用于动态时间线） */
+export interface SupervisorStepSnapshot {
+  id: string
+  action: string
+  label: string
+  done: boolean
+}
+
 export interface ThreadPanelState {
   title: string | null
   todos: ThreadTodo[]
@@ -84,4 +112,10 @@ export interface ThreadPanelState {
   activityDetail: string
   reasoningPreview: string | null
   clarification: ThreadClarification | null
+  /** 与当前会话关联的 DeerFlow 主任务（用于侧栏展示，不依赖 plan todos） */
+  collabTask: CollabTaskSnapshot | null
+  /** supervisor 创建的子任务卡片（流式累积） */
+  collabSubtasks: CollabSubtaskSnapshot[]
+  /** supervisor 调用时间线 */
+  supervisorSteps: SupervisorStepSnapshot[]
 }

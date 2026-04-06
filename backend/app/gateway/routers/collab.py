@@ -4,9 +4,10 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, Body, HTTPException
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from deerflow.collab.models import CollabPhase, ThreadCollabState
+from deerflow.collab.task_progress_snapshot import build_task_progress_snapshot
 from deerflow.collab.thread_collab import (
     load_thread_collab_state,
     merge_thread_collab_state,
@@ -31,7 +32,21 @@ class ThreadCollabStateResponse(BaseModel):
     collab_phase: CollabPhase
     bound_task_id: str | None
     bound_project_id: str | None
+    sidebar_supervisor_steps: list[dict[str, Any]] = Field(default_factory=list)
     updated_at: str
+
+
+@router.get("/threads/{thread_id}/task-progress")
+async def get_thread_task_progress(thread_id: str) -> dict[str, Any]:
+    """Restore DeerPanel task sidebar after refresh: main task + subtasks bound to this chat thread."""
+    paths = get_paths()
+    try:
+        return build_task_progress_snapshot(paths, thread_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception:
+        logger.exception("task-progress failed for thread_id=%s", thread_id)
+        raise HTTPException(status_code=500, detail="Failed to load task progress for thread.") from None
 
 
 @router.get("/threads/{thread_id}", response_model=ThreadCollabStateResponse)
