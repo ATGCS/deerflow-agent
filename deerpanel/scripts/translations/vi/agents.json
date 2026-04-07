@@ -1,6 +1,6 @@
 {
   "title": "Quản lý Agent",
-  "desc": "Tạo và quản lý DeerPanel Agent",
+  "desc": "Tạo và quản lý YTPanel Agent",
   "addAgent": "+ Agent mới",
   "noAgents": "Không có Agent",
   "loadFailed": "Tải thất bại",

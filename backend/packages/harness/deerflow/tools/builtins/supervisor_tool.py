@@ -21,6 +21,7 @@ from deerflow.collab.storage import (
     get_task_memory_storage,
     load_task_memory_for_task_id,
     new_project_bundle_root_task,
+    rollup_root_task_progress_from_subtasks,
 )
 from deerflow.collab.thread_collab import advance_collab_phase_to_executing_for_task
 from deerflow.config.agents_config import load_agent_config, list_all_agents
@@ -91,8 +92,7 @@ async def delegate_collab_subtasks_for_start_execution(
         prompt = desc if desc else (
             f"完成子任务「{name}」。协作主任务 id: {main_task_id}；子任务 id: {sid}。"
         )
-        assigned = (st.get("assigned_to") or "").strip()
-        subagent_type = assigned or "general-purpose"
+        subagent_type = _resolved_subagent_type_for_subtask(st)
         tcid = f"supervisor-start-exec-{main_task_id}-{sid}-{uuid.uuid4().hex[:12]}"
         try:
             out = await coro(
@@ -114,6 +114,19 @@ async def delegate_collab_subtasks_for_start_execution(
             return {"subtaskId": sid, "ok": False, "error": str(e)}
 
     return list(await asyncio.gather(*[_one(sid) for sid in subtask_ids]))
+
+
+def _resolved_subagent_type_for_subtask(st: dict) -> str:
+    """Prefer explicit assign_subtask (assigned_to); else worker_profile.base_subagent; else default."""
+    a = (st.get("assigned_to") or "").strip()
+    if a:
+        return a
+    wp = st.get("worker_profile")
+    if isinstance(wp, dict):
+        b = str(wp.get("base_subagent") or "").strip()
+        if b:
+            return b
+    return "general-purpose"
 
 
 def _record_supervisor_ui_step(
@@ -316,6 +329,7 @@ async def supervisor_tool(
     assigned_agent: str | None = None,
     subtask_ids: list[str] | None = None,
     progress: int | None = None,
+    status: str | None = None,
     authorized_by: str | None = None,
     worker_profile_json: str | None = None,
 ) -> str:
@@ -349,6 +363,7 @@ async def supervisor_tool(
         subtask_ids: For start_execution: optional; if set, only these subtasks are delegated via `task` (must exist).
             If omitted/empty after normalize, all assigned non-terminal subtasks on the main task are delegated in parallel.
         progress: Progress 0-100 (required for update_progress).
+        status: Optional status for update_progress (e.g. `failed`, `cancelled`, `completed`). When provided, it will be persisted to subtask/main task and rolled up into main task status.
         authorized_by: Recorded on authorize/start_execution (default lead for start_execution).
         worker_profile_json: Optional JSON object string for create_subtask (worker constraints, tools, etc.).
     """
@@ -509,6 +524,10 @@ async def supervisor_tool(
                         }
                         if worker_profile is not None:
                             subtask_data["worker_profile"] = worker_profile
+                            bs = str(worker_profile.get("base_subagent") or "").strip()
+                            if bs:
+                                # 与 worker_profile 对齐，便于 list/get_status/侧栏展示；start_execution 委托仍可由 task_tool 读 profile 覆盖
+                                subtask_data["assigned_to"] = bs
 
                         task.setdefault("subtasks", []).append(subtask_data)
                         project["tasks"][i] = task
@@ -527,7 +546,12 @@ async def supervisor_tool(
                             "parentTaskId": task_id,
                             "task_id": task_id,
                             "status": "pending",
-                            "progress": 0
+                            "progress": 0,
+                            **(
+                                {"assignedTo": subtask_data["assigned_to"]}
+                                if subtask_data.get("assigned_to")
+                                else {}
+                            ),
                         }
                         _record_supervisor_ui_step(
                             runtime,
@@ -694,6 +718,25 @@ async def supervisor_tool(
             }, ensure_ascii=False)
 
         progress_value = _clamp_progress(progress)
+        status_norm: str | None = None
+        now: str | None = None
+        if status is not None:
+            status_norm = str(status).strip().lower()
+            if status_norm in {"done"}:
+                status_norm = "completed"
+            if status_norm in {"error"}:
+                status_norm = "failed"
+            if status_norm in {"canceled"}:
+                status_norm = "cancelled"
+            if status_norm in {"executing", "running", "in_progress"}:
+                status_norm = "in_progress"
+            if status_norm in {"pending", "planning", "planned"}:
+                status_norm = "in_progress"
+            if status_norm in {"completed", "failed", "cancelled"}:
+                from datetime import datetime as _dt
+                now = _dt.utcnow().isoformat() + "Z"
+
+        effective_progress = 100 if status_norm == "completed" else progress_value
 
         projects = storage.list_projects()
 
@@ -705,16 +748,34 @@ async def supervisor_tool(
                         if subtask_id:
                             for j, subtask in enumerate(task.get("subtasks", [])):
                                 if subtask.get("id") == subtask_id:
-                                    subtask["progress"] = progress_value
+                                    if status_norm == "completed":
+                                        subtask["status"] = "completed"
+                                        subtask["progress"] = effective_progress
+                                        if "completed_at" in subtask:
+                                            subtask["completed_at"] = subtask.get("completed_at") or now
+                                    elif status_norm == "failed":
+                                        subtask["status"] = "failed"
+                                        subtask["progress"] = effective_progress
+                                        subtask["failed_at"] = subtask.get("failed_at") or now
+                                    elif status_norm == "cancelled":
+                                        subtask["status"] = "cancelled"
+                                        subtask["progress"] = effective_progress
+                                    elif status_norm:
+                                        subtask["status"] = status_norm
+                                        subtask["progress"] = effective_progress
+                                    else:
+                                        subtask["progress"] = progress_value
                                     task["subtasks"][j] = subtask
                                     project["tasks"][i] = task
                                     storage.save_project(project)
+                                    # Root status convergence depends on all subtasks' terminal states.
+                                    rollup_root_task_progress_from_subtasks(storage, task_id)
                                     await _broadcast_task_event(
                                         project.get("id"),
                                         "task:progress",
                                         {
                                             "task_id": subtask_id,
-                                            "progress": progress_value,
+                                            "progress": effective_progress,
                                             "current_step": "",
                                         },
                                     )
@@ -725,7 +786,7 @@ async def supervisor_tool(
                                         "action": "update_progress",
                                         "subtaskId": subtask_id,
                                         "taskId": task_id,
-                                        "progress": progress_value,
+                                        "progress": effective_progress,
                                         "message": f"Updated progress of subtask {subtask_id} to {progress_value}%"
                                     }
                                     return json.dumps(result, ensure_ascii=False)
@@ -735,15 +796,30 @@ async def supervisor_tool(
                                 "error": f"Subtask '{subtask_id}' not found"
                             }, ensure_ascii=False)
                         task["progress"] = progress_value
+                        if status_norm:
+                            if status_norm == "completed":
+                                task["status"] = "completed"
+                                task["progress"] = effective_progress
+                                if "completed_at" in task:
+                                    task["completed_at"] = task.get("completed_at") or now
+                            elif status_norm == "failed":
+                                task["status"] = "failed"
+                                if "failed_at" in task:
+                                    task["failed_at"] = task.get("failed_at") or now
+                            elif status_norm == "cancelled":
+                                task["status"] = "cancelled"
+                            else:
+                                task["status"] = status_norm
                         project["tasks"][i] = task
                         storage.save_project(project)
                         _persist_main_task_memory_snapshot(project, task)
+                        rollup_root_task_progress_from_subtasks(storage, task_id)
                         await _broadcast_task_event(
                             project.get("id"),
                             "task:progress",
                             {
                                 "task_id": task_id,
-                                "progress": progress_value,
+                                "progress": effective_progress,
                                 "current_step": "",
                             },
                         )
@@ -753,14 +829,14 @@ async def supervisor_tool(
                             "success": True,
                             "action": "update_progress",
                             "taskId": task_id,
-                            "progress": progress_value,
-                            "message": f"Updated progress of main task {task_id} to {progress_value}%"
+                            "progress": effective_progress,
+                            "message": f"Updated progress of main task {task_id} to {effective_progress}%"
                         }
                         _record_supervisor_ui_step(
                             runtime,
                             tool_call_id,
                             "update_progress",
-                            f"主任务进度 {progress_value}%",
+                            f"主任务进度 {effective_progress}%",
                         )
                         return json.dumps(result, ensure_ascii=False)
 
@@ -921,6 +997,76 @@ async def supervisor_tool(
                 ]
 
         all_ok = all(d.get("ok") for d in delegated) if delegated else True
+
+        # Server-side convergence: persist delegated subtask/main-task status immediately,
+        # so UI does not depend on model remembering extra supervisor calls.
+        row_done = find_main_task(storage, task_id)
+        if row_done and delegated:
+            from datetime import datetime as _dt
+
+            proj_done, task_done = row_done
+            now_done = _dt.utcnow().isoformat() + "Z"
+            delegated_map: dict[str, dict[str, Any]] = {
+                str(d.get("subtaskId")): d for d in delegated if d.get("subtaskId")
+            }
+            for st in task_done.get("subtasks") or []:
+                sid = str(st.get("id") or "")
+                rec = delegated_map.get(sid)
+                if not rec:
+                    continue
+                st["updated_at"] = now_done
+                if rec.get("ok"):
+                    st["status"] = "completed"
+                    st["progress"] = 100
+                    st["completed_at"] = st.get("completed_at") or now_done
+                else:
+                    if (st.get("status") or "").strip().lower() != "completed":
+                        st["status"] = "failed"
+                    st["failed_at"] = st.get("failed_at") or now_done
+            subtasks_all = task_done.get("subtasks") or []
+            total = len(subtasks_all)
+            completed_cnt = sum(1 for s in subtasks_all if (s.get("status") or "").strip().lower() == "completed")
+            failed_cnt = sum(1 for s in subtasks_all if (s.get("status") or "").strip().lower() == "failed")
+            terminal_cnt = sum(
+                1
+                for s in subtasks_all
+                if (s.get("status") or "").strip().lower() in {"completed", "failed", "cancelled"}
+            )
+            if total > 0 and completed_cnt == total:
+                task_done["status"] = "completed"
+                task_done["progress"] = 100
+                task_done["completed_at"] = task_done.get("completed_at") or now_done
+            elif total > 0 and terminal_cnt == total and failed_cnt > 0:
+                # All subtasks terminated and at least one failed -> mark main task failed.
+                task_done["status"] = "failed"
+                task_done["failed_at"] = task_done.get("failed_at") or now_done
+                task_done["progress"] = int((completed_cnt / total) * 100)
+            elif total > 0:
+                task_done["status"] = "in_progress"
+                task_done["progress"] = int((completed_cnt / total) * 100)
+            task_done["updated_at"] = now_done
+            if storage.save_project(proj_done):
+                facts_count = _persist_main_task_memory_snapshot(proj_done, task_done)
+                await _broadcast_task_event(
+                    proj_done.get("id"),
+                    "task_memory:updated",
+                    {"task_id": task_id, "facts_count": facts_count},
+                )
+                await _broadcast_task_event(
+                    proj_done.get("id"),
+                    "task:progress",
+                    {
+                        "task_id": task_id,
+                        "progress": int(task_done.get("progress") or 0),
+                        "current_step": "",
+                    },
+                )
+                if (task_done.get("status") or "").strip().lower() == "completed":
+                    await _broadcast_task_event(
+                        proj_done.get("id"),
+                        "task:completed",
+                        {"task_id": task_id, "result": task_done.get("result")},
+                    )
 
         # 返回结构化的 JSON 格式
         result = {

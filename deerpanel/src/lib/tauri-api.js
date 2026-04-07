@@ -149,7 +149,7 @@ async function webInvoke(cmd, args) {
   })
   if (resp.status === 401) {
     // Tauri 模式下不触发登录浮层（Tauri 有自己的认证流程）
-    if (!isTauri && window.__clawpanel_show_login) window.__clawpanel_show_login()
+    if (!isTauri && window.__ytpanel_show_login) window.__ytpanel_show_login()
     throw new Error('需要登录')
   }
   // 检测后端是否可用：如果返回的是 HTML（非 JSON），说明后端未运行
@@ -397,7 +397,7 @@ export const api = {
   installQqbotPlugin: () => invoke('install_qqbot_plugin'),
   installChannelPlugin: (packageName, pluginId) => invoke('install_channel_plugin', { packageName, pluginId }),
 
-  // 面板配置 (clawpanel.json)
+  // 面板配置 (ytpanel.json)
   readPanelConfig: () => (isTauri ? invoke('read_panel_config') : Promise.resolve({})),
   writePanelConfig: (config) => invoke('write_panel_config', { config }),
   testProxy: (url) => invoke('test_proxy', { url: url || null }),

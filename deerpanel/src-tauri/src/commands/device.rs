@@ -4,7 +4,8 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::fs;
 
-const DEVICE_KEY_FILE: &str = "clawpanel-device-key.json";
+const DEVICE_KEY_FILE: &str = "ytpanel-device-key.json";
+const DEVICE_KEY_LEGACY: &str = "clawpanel-device-key.json";
 const SCOPES: &[&str] = &[
     "operator.admin",
     "operator.approvals",
@@ -13,13 +14,38 @@ const SCOPES: &[&str] = &[
     "operator.write",
 ];
 
+pub(crate) fn device_key_existing_path() -> Option<std::path::PathBuf> {
+    let dir = super::openclaw_dir();
+    let primary = dir.join(DEVICE_KEY_FILE);
+    if primary.exists() {
+        return Some(primary);
+    }
+    let legacy = dir.join(DEVICE_KEY_LEGACY);
+    if legacy.exists() {
+        return Some(legacy);
+    }
+    None
+}
+
 /// 获取或生成设备密钥
 pub(crate) fn get_or_create_key() -> Result<(String, String, SigningKey), String> {
     let dir = super::openclaw_dir();
     let path = dir.join(DEVICE_KEY_FILE);
 
-    if path.exists() {
-        let content = fs::read_to_string(&path).map_err(|e| format!("读取设备密钥失败: {e}"))?;
+    let read_from = if path.exists() {
+        Some(path.clone())
+    } else {
+        let legacy = dir.join(DEVICE_KEY_LEGACY);
+        if legacy.exists() {
+            Some(legacy)
+        } else {
+            None
+        }
+    };
+
+    if let Some(ref read_path) = read_from {
+        let content =
+            fs::read_to_string(read_path).map_err(|e| format!("读取设备密钥失败: {e}"))?;
         let json: Value =
             serde_json::from_str(&content).map_err(|e| format!("解析设备密钥失败: {e}"))?;
 
@@ -38,7 +64,7 @@ pub(crate) fn get_or_create_key() -> Result<(String, String, SigningKey), String
         return Ok((device_id, pub_b64, signing_key));
     }
 
-    // 生成新密钥
+    // 生成新密钥（写入新版路径）
     let mut rng = rand::thread_rng();
     let signing_key = SigningKey::generate(&mut rng);
     let verifying_key: VerifyingKey = (&signing_key).into();
@@ -136,7 +162,7 @@ pub fn create_connect_frame(nonce: String, gateway_token: String) -> Result<Valu
                 "signature": sig_b64,
             },
             "locale": "zh-CN",
-            "userAgent": format!("ClawPanel/{}", env!("CARGO_PKG_VERSION")),
+            "userAgent": format!("YTPanel/{}", env!("CARGO_PKG_VERSION")),
         }
     });
 

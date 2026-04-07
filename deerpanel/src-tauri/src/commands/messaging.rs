@@ -755,7 +755,7 @@ fn qqbot_plugin_dir() -> PathBuf {
 }
 
 fn qqbot_backup_dir() -> PathBuf {
-    plugin_backup_root().join("qqbot.__clawpanel_backup")
+    plugin_backup_root().join("qqbot.__ytpanel_backup")
 }
 
 fn qqbot_config_backup_path() -> PathBuf {
@@ -765,7 +765,7 @@ fn qqbot_config_backup_path() -> PathBuf {
 fn legacy_plugin_backup_dir(plugin_id: &str) -> PathBuf {
     super::openclaw_dir()
         .join("extensions")
-        .join(format!("{plugin_id}.__clawpanel_backup"))
+        .join(format!("{plugin_id}.__ytpanel_backup"))
 }
 
 fn cleanup_legacy_plugin_backup_dir(plugin_id: &str) -> Result<bool, String> {
@@ -968,7 +968,7 @@ fn generic_plugin_dir(plugin_id: &str) -> PathBuf {
 }
 
 fn generic_plugin_backup_dir(plugin_id: &str) -> PathBuf {
-    plugin_backup_root().join(format!("{plugin_id}.__clawpanel_backup"))
+    plugin_backup_root().join(format!("{plugin_id}.__ytpanel_backup"))
 }
 
 fn generic_plugin_config_backup_path(plugin_id: &str) -> PathBuf {

@@ -151,6 +151,16 @@ async def task_tool(
                 collab_memory_task_id = resolved_collab
                 collab_agent_for_memory = (main_task.get("assigned_to") or "") or ""
 
+    _collab_stream_scope: dict[str, str] = {}
+    if resolved_collab and resolved_subtask:
+        _collab_stream_scope = {
+            "collab_task_id": resolved_collab,
+            "collab_subtask_id": resolved_subtask,
+        }
+
+    def _ws(ev: dict) -> dict:
+        return {**ev, **_collab_stream_scope} if _collab_stream_scope else ev
+
     async def _persist_collab_task_memory(outcome: str, r: SubagentResult) -> None:
         if collab_project_id is None or not collab_memory_task_id:
             return
@@ -383,7 +393,16 @@ async def task_tool(
 
     writer = get_stream_writer()
     # Send Task Started message'
-    writer({"type": "task_started", "task_id": task_id, "description": description})
+    writer(
+        _ws(
+            {
+                "type": "task_started",
+                "task_id": task_id,
+                "description": description,
+                "subagent_type": effective_subagent_type,
+            }
+        )
+    )
     if collab_project_id and collab_memory_task_id:
         from deerflow.collab.sse_notify import broadcast_project_event
 
@@ -423,7 +442,7 @@ async def task_tool(
 
             if result is None:
                 logger.error(f"[trace={trace_id}] Task {task_id} not found in background tasks")
-                writer({"type": "task_failed", "task_id": task_id, "error": "Task disappeared from background tasks"})
+                writer(_ws({"type": "task_failed", "task_id": task_id, "error": "Task disappeared from background tasks"}))
                 cleanup_background_task(task_id)
                 return f"Error: Task {task_id} disappeared from background tasks"
 
@@ -432,39 +451,45 @@ async def task_tool(
                 logger.info(f"[trace={trace_id}] Task {task_id} status: {result.status.value}")
                 last_status = result.status
 
-            # Check for new AI messages and send task_running events
-            current_message_count = len(result.ai_messages)
+            # 新消息：优先 stream_messages（含 AIMessage + ToolMessage），否则仅 ai_messages
+            stream_list = result.stream_messages or []
+            legacy_list = result.ai_messages or []
+            use_stream = len(stream_list) > 0
+            current_message_count = len(stream_list) if use_stream else len(legacy_list)
             if current_message_count > last_message_count:
                 # Send task_running event for each new message
                 for i in range(last_message_count, current_message_count):
-                    message = result.ai_messages[i]
+                    message = stream_list[i] if use_stream else legacy_list[i]
                     writer(
-                        {
-                            "type": "task_running",
-                            "task_id": task_id,
-                            "message": message,
-                            "message_index": i + 1,  # 1-based index for display
-                            "total_messages": current_message_count,
-                        }
+                        _ws(
+                            {
+                                "type": "task_running",
+                                "task_id": task_id,
+                                "message": message,
+                                "message_index": i + 1,  # 1-based index for display
+                                "total_messages": current_message_count,
+                                "subagent_type": effective_subagent_type,
+                            }
+                        )
                     )
                     logger.info(f"[trace={trace_id}] Task {task_id} sent message #{i + 1}/{current_message_count}")
                 last_message_count = current_message_count
 
             # Check if task completed, failed, or timed out
             if result.status == SubagentStatus.COMPLETED:
-                writer({"type": "task_completed", "task_id": task_id, "result": result.result})
+                writer(_ws({"type": "task_completed", "task_id": task_id, "result": result.result}))
                 logger.info(f"[trace={trace_id}] Task {task_id} completed after {poll_count} polls")
                 await _persist_collab_task_memory("completed", result)
                 cleanup_background_task(task_id)
                 return f"Task Succeeded. Result: {result.result}"
             elif result.status == SubagentStatus.FAILED:
-                writer({"type": "task_failed", "task_id": task_id, "error": result.error})
+                writer(_ws({"type": "task_failed", "task_id": task_id, "error": result.error}))
                 logger.error(f"[trace={trace_id}] Task {task_id} failed: {result.error}")
                 await _persist_collab_task_memory("failed", result)
                 cleanup_background_task(task_id)
                 return f"Task failed. Error: {result.error}"
             elif result.status == SubagentStatus.TIMED_OUT:
-                writer({"type": "task_timed_out", "task_id": task_id, "error": result.error})
+                writer(_ws({"type": "task_timed_out", "task_id": task_id, "error": result.error}))
                 logger.warning(f"[trace={trace_id}] Task {task_id} timed out: {result.error}")
                 await _persist_collab_task_memory("timed_out", result)
                 cleanup_background_task(task_id)
@@ -483,7 +508,7 @@ async def task_tool(
             if poll_count > max_poll_count:
                 timeout_minutes = config.timeout_seconds // 60
                 logger.error(f"[trace={trace_id}] Task {task_id} polling timed out after {poll_count} polls (should have been caught by thread pool timeout)")
-                writer({"type": "task_timed_out", "task_id": task_id})
+                writer(_ws({"type": "task_timed_out", "task_id": task_id}))
                 return f"Task polling timed out after {timeout_minutes} minutes. This may indicate the background task is stuck. Status: {result.status.value}"
     except asyncio.CancelledError:
 

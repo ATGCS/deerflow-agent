@@ -9,9 +9,11 @@ use commands::{
 };
 
 pub fn run() {
-    let hot_update_dir = commands::openclaw_dir()
-        .join("clawpanel")
+    let openclaw = commands::openclaw_dir();
+    let hot_update_dir = openclaw
+        .join(commands::PANEL_DATA_DIR_NAME)
         .join("web-update");
+    let hot_update_legacy = openclaw.join("clawpanel").join("web-update");
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -23,10 +25,22 @@ pub fn run() {
                 uri_path.strip_prefix('/').unwrap_or(uri_path)
             };
 
-            // 1. 优先检查热更新目录
+            // 1. 优先检查热更新目录（新版 ytpanel，其次旧版 clawpanel）
             let update_file = hot_update_dir.join(path);
             if update_file.is_file() {
                 if let Ok(data) = std::fs::read(&update_file) {
+                    return tauri::http::Response::builder()
+                        .header(
+                            tauri::http::header::CONTENT_TYPE,
+                            update::mime_from_path(path),
+                        )
+                        .body(data)
+                        .unwrap();
+                }
+            }
+            let update_legacy = hot_update_legacy.join(path);
+            if update_legacy.is_file() {
+                if let Ok(data) = std::fs::read(&update_legacy) {
                     return tauri::http::Response::builder()
                         .header(
                             tauri::http::header::CONTENT_TYPE,
@@ -179,10 +193,11 @@ pub fn run() {
             update::get_update_status,
             // Gateway 代理
             gateway::gateway_proxy,
+            gateway::gateway_proxy_stream,
             gateway::gateway_health,
         ])
         .build(tauri::generate_context!())
-        .expect("启动 ClawPanel 失败")
+        .expect("启动 YTPanel 失败")
         .run(|_app, event| {
             if let tauri::RunEvent::Exit = event {
                 #[cfg(target_os = "windows")]

@@ -1,6 +1,6 @@
 {
   "title": "Registros",
-  "desc": "Ver registros del servicio DeerPanel",
+  "desc": "Ver registros del servicio YTPanel",
   "tabGateway": "Gateway",
   "tabGatewayErr": "Errores Gateway",
   "tabGuardian": "Guardian",

@@ -17,7 +17,7 @@ export function diagnoseInstallError(errStr) {
   const gitFixCommand = rootNpm ? GIT_HTTPS_ROOT_CMD : GIT_HTTPS_CMD
   const gitFixHint = rootNpm
     ? 'GitHub SSH 认证失败。检测到本次安装实际由 root/sudo 执行，请先为 root 用户配置 HTTPS 替代规则后重试：'
-    : 'GitHub SSH 认证失败。ClawPanel 已尝试自动配置 HTTPS 替代，但可能未生效。请在终端手动执行：'
+    : 'GitHub SSH 认证失败。YTPanel 已尝试自动配置 HTTPS 替代，但可能未生效。请在终端手动执行：'
 
   // ===== 1. Git 相关 =====
 
@@ -35,7 +35,7 @@ export function diagnoseInstallError(errStr) {
     if (s.includes('permission denied') || s.includes('publickey') || s.includes('host key verification')) {
       return {
         title: '安装失败 — Git SSH 认证被拒绝',
-        hint: rootNpm ? 'GitHub SSH 认证失败。检测到本次安装由 root/sudo 执行，请先为 root 用户配置 HTTPS 替代规则后重试：' : 'GitHub SSH 认证失败。ClawPanel 已尝试自动配置 HTTPS 替代，但可能未生效。请在终端手动执行后重试：',
+        hint: rootNpm ? 'GitHub SSH 认证失败。检测到本次安装由 root/sudo 执行，请先为 root 用户配置 HTTPS 替代规则后重试：' : 'GitHub SSH 认证失败。YTPanel 已尝试自动配置 HTTPS 替代，但可能未生效。请在终端手动执行后重试：',
         command: gitFixCommand,
       }
     }
@@ -70,7 +70,7 @@ export function diagnoseInstallError(errStr) {
   if (s.includes('eexist') || s.includes('file already exists') || s.includes('file exists')) {
     return {
       title: '安装失败 — 文件冲突',
-      hint: '旧版本的 openclaw 命令文件仍然存在。ClawPanel 已尝试自动清理，如仍失败请手动处理后重试：',
+      hint: '旧版本的 openclaw 命令文件仍然存在。YTPanel 已尝试自动清理，如仍失败请手动处理后重试：',
       command: 'npm install -g @qingchencloud/openclaw-zh --force --registry https://registry.npmmirror.com',
     }
   }

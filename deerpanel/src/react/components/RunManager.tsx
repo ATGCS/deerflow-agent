@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { tasksAPI } from '../../lib/api-client.js'
 
 interface RunInfo {
   run_id: string
@@ -21,6 +22,9 @@ interface RunsResponse {
 
 interface RunManagerProps {
   isOpen: boolean
+  taskNames?: Array<{ taskId: string; name: string }>
+  selectedTaskId?: string | null
+  onSelectTaskId?: (taskId: string) => void
   onClose: () => void
 }
 
@@ -67,8 +71,15 @@ function getStatusClass(status: string): string {
   }
 }
 
-export function RunManager({ isOpen, onClose }: RunManagerProps) {
+export function RunManager({
+  isOpen,
+  taskNames,
+  selectedTaskId,
+  onSelectTaskId,
+  onClose,
+}: RunManagerProps) {
   const [runs, setRuns] = useState<RunInfo[]>([])
+  const [taskNameFallback, setTaskNameFallback] = useState<Array<{ taskId: string; name: string }>>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [cancelling, setCancelling] = useState(false)
@@ -105,9 +116,28 @@ export function RunManager({ isOpen, onClose }: RunManagerProps) {
     }
   }
 
+  const fetchTaskNamesFallback = async () => {
+    try {
+      const data = await tasksAPI.listTasks()
+      const rows = Array.isArray(data) ? data : []
+      const next = rows
+        .map((r: any) => {
+          const taskId = String(r?.id || r?.task_id || '').trim()
+          if (!taskId) return null
+          const name = String(r?.name || r?.title || taskId).trim() || taskId
+          return { taskId, name }
+        })
+        .filter(Boolean) as Array<{ taskId: string; name: string }>
+      setTaskNameFallback(next)
+    } catch {
+      // 兜底也失败时静默，不覆盖主错误展示
+    }
+  }
+
   useEffect(() => {
     if (isOpen) {
       fetchRuns()
+      fetchTaskNamesFallback()
       // 每 5 秒刷新一次
       const interval = setInterval(fetchRuns, 5000)
       return () => clearInterval(interval)
@@ -118,6 +148,10 @@ export function RunManager({ isOpen, onClose }: RunManagerProps) {
 
   const runningRuns = runs.filter(r => r.status === 'running')
   const pendingRuns = runs.filter(r => r.status === 'pending')
+  const displayTaskNames =
+    taskNames && taskNames.length > 0
+      ? taskNames
+      : taskNameFallback
 
   return (
     <aside className="react-chat-run-manager">
@@ -137,6 +171,28 @@ export function RunManager({ isOpen, onClose }: RunManagerProps) {
       </div>
 
       <div className="react-chat-run-manager-content">
+        {displayTaskNames.length > 0 ? (
+          <div className="react-chat-run-task-names">
+            <div className="react-chat-run-task-names-title">任务列表</div>
+            <ul className="react-chat-run-task-names-list">
+              {displayTaskNames.map((t) => (
+                <li key={t.taskId}>
+                  <button
+                    type="button"
+                    className={`react-chat-run-task-name-item${
+                      selectedTaskId && selectedTaskId === t.taskId ? ' active' : ''
+                    }`}
+                    onClick={() => onSelectTaskId?.(t.taskId)}
+                    title={t.name}
+                  >
+                    {t.name}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+
         {/* 统计信息 */}
         <div className="react-chat-run-stats">
           <div className="react-chat-run-stat">

@@ -1,5 +1,5 @@
 /**
- * DeerPanel 开发模式 API 插件
+ * YTPanel 开发模式 API 插件
  * 在 Vite 开发服务器上提供真实 API 端点
  */
 import fs from 'fs'

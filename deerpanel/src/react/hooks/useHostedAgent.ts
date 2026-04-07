@@ -6,8 +6,8 @@ import { toast } from '../../components/toast.js'
 const HOSTED_STATUS = { IDLE: 'idle', RUNNING: 'running', WAITING: 'waiting_reply', PAUSED: 'paused', ERROR: 'error' } as const
 type HostedStatus = (typeof HOSTED_STATUS)[keyof typeof HOSTED_STATUS]
 
-const HOSTED_SESSIONS_KEY = 'clawpanel-hosted-agent-sessions'
-const STORAGE_SESSION_KEY = 'clawpanel-last-session'
+const HOSTED_SESSIONS_KEY = 'ytpanel-hosted-agent-sessions'
+const STORAGE_SESSION_KEY = 'ytpanel-last-session'
 
 const HOSTED_SYSTEM_PROMPT = `你是一个托管调度 Agent。你的职责是：根据用户设定的目标，持续引导 DeerFlow AI Agent 完成任务。
 规则：
@@ -87,7 +87,7 @@ function iconForStatus(status: HostedStatus) {
 
 async function readHostedAssistantConfig() {
   try {
-    const raw = localStorage.getItem('clawpanel-assistant')
+    const raw = localStorage.getItem('ytpanel-assistant') || localStorage.getItem('clawpanel-assistant')
     const stored = raw ? JSON.parse(raw) : {}
     return {
       baseUrl: stored.baseUrl || '',

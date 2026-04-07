@@ -1,6 +1,6 @@
 {
   "title": "Agenten-Verwaltung",
-  "desc": "DeerPanel-Agenten erstellen und verwalten",
+  "desc": "YTPanel-Agenten erstellen und verwalten",
   "addAgent": "+ Neuer Agent",
   "noAgents": "Keine Agenten",
   "loadFailed": "Laden fehlgeschlagen",

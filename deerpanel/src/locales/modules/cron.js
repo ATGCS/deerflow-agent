@@ -2,7 +2,7 @@ import { _ } from '../helper.js'
 
 export default {
   title: _('????', 'Scheduled Tasks', '????'),
-  desc: _('创建计划任务，让 AI 按设定时间自动执行指�?, 'Create scheduled tasks to let AI execute commands at set times', '建立計畫任務，讓 AI 按設定時間自動執行指�?, 'DeerPanel の定期タスクを管�?, 'DeerPanel 정기 작업 관�?, 'Quản lý tác v�?định k�?DeerPanel', 'Gestionar tareas programadas de DeerPanel', 'Gerenciar tarefas agendadas do DeerPanel', 'Управление периодическими задачами DeerPanel', 'Gérer les tâches planifiées DeerPanel', 'DeerPanel-Aufgaben verwalten'),
+  desc: _('创建计划任务，让 AI 按设定时间自动执行指�?, 'Create scheduled tasks to let AI execute commands at set times', '建立計畫任務，讓 AI 按設定時間自動執行指�?, 'YTPanel の定期タスクを管�?, 'YTPanel 정기 작업 관�?, 'Quản lý tác v�?định k�?YTPanel', 'Gestionar tareas programadas de YTPanel', 'Gerenciar tarefas agendadas do YTPanel', 'Управление периодическими задачами YTPanel', 'Gérer les tâches planifiées YTPanel', 'YTPanel-Aufgaben verwalten'),
   gwHint: _('定时任务通过 Gateway 管理。请先启�?Gateway 后使用此功能�?, 'Scheduled tasks are managed via Gateway. Please start Gateway first.', '定時任務通過 Gateway 管理。請先啟�?Gateway 后使用此功能�?),
   goServices: _('服务管理', 'Services', '服務管理'),
   newTask: _('+ 创建任务', '+ New Task', '+ 建立任務'),

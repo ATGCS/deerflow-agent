@@ -2,7 +2,7 @@ import { _ } from '../helper.js'
 
 export default {
   title: _('Gateway 配置', 'Gateway Config', 'Gateway 設定', 'Gateway', 'Gateway', 'Gateway', 'Gateway', 'Gateway', 'Gateway', 'Gateway', 'Gateway'),
-  desc: _('Gateway �?AI 模型的统一入口，所有应用通过它来调用模型服务', 'Gateway is the unified entry for AI models. All apps call model services through it.', 'Gateway �?AI 模型的統一入口，所有應用通過它來呼叫模型服務', 'DeerPanel Gateway サービスの設定と管理', 'DeerPanel Gateway 서비�?설정 �?관�?', 'Cấu hình và quản lý Gateway', 'Configurar y gestionar Gateway', 'Configurar e gerenciar Gateway', 'Настройка и управление Gateway', 'Configurer et gérer Gateway', 'Gateway konfigurieren und verwalten'),
+  desc: _('Gateway �?AI 模型的统一入口，所有应用通过它来调用模型服务', 'Gateway is the unified entry for AI models. All apps call model services through it.', 'Gateway �?AI 模型的統一入口，所有應用通過它來呼叫模型服務', 'YTPanel Gateway サービスの設定と管理', 'YTPanel Gateway 서비�?설정 �?관�?', 'Cấu hình và quản lý Gateway', 'Configurar y gestionar Gateway', 'Configurar e gerenciar Gateway', 'Настройка и управление Gateway', 'Configurer et gérer Gateway', 'Gateway konfigurieren und verwalten'),
   saveApply: _('保存并生效', 'Save and apply', '儲存並生效'),
   saveHint: _('修改后点击保存，Gateway 会自动重�?, 'Click save after changes, Gateway will auto-reload', '修改后点擊儲存，Gateway 會自動重�?),
   saving: _('保存�?..', 'Saving...', '儲存�?..', '保存�?..', '저�?�?..'),

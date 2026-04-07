@@ -1,13 +1,8 @@
 import { useRef, useEffect, useCallback, useMemo, type MutableRefObject } from 'react'
 import { MessageRow } from './MessageRow.js'
-import type { DisplayRow, StreamState } from '../chat-types.js'
+import type { DisplayRow, StreamState, SubagentStreamTask } from '../chat-types.js'
 
-type VItem =
-  | { kind: 'row'; row: DisplayRow; i: number }
-  | {
-      kind: 'stream'
-      row: DisplayRow
-    }
+type VItem = { kind: 'row'; row: DisplayRow; i: number } | { kind: 'stream'; row: DisplayRow }
 
 export function MessageVirtualList({
   rows,
@@ -15,6 +10,7 @@ export function MessageVirtualList({
   streamTick = 0,
   historyLoading = false,
   layoutKey = 0,
+  inlineSubagentTasks,
 }: {
   rows: DisplayRow[]
   streamRef: MutableRefObject<StreamState>
@@ -26,15 +22,25 @@ export function MessageVirtualList({
    * 不参与数据渲染，仅用于修复虚拟列表在高度变化时的“白块/不渲染”问题。
    */
   layoutKey?: number | string
+  /** final 后主会话气泡已落库，子任务事件仍写入此处时，合并进最后一条 assistant 的展示 */
+  inlineSubagentTasks?: Record<string, SubagentStreamTask>
 }) {
   const parentRef = useRef<HTMLDivElement | null>(null)
 
   const items = useMemo((): VItem[] => {
-    const list: VItem[] = rows.map((row, i) => ({ kind: 'row', row, i }))
+    const ink = inlineSubagentTasks || {}
+    const rawLast = rows[rows.length - 1]
+    let displayRows = rows
+    if (rawLast?.role === 'assistant' && Object.keys(ink).length > 0) {
+      displayRows = [...rows.slice(0, -1), { ...rawLast, subagentTasks: { ...ink } }]
+    }
+
+    const list: VItem[] = displayRows.map((row, i) => ({ kind: 'row', row, i }))
     // 只在最后一条消息是 user 消息时显示 stream（避免 AI 消息重复显示）
     const lastRow = rows[rows.length - 1]
     if (lastRow?.role === 'user') {
       const s = streamRef?.current
+      const hasSubagents = s && Object.keys(s.subagentTasks || {}).length > 0
       if (
         s &&
         (s.text ||
@@ -43,8 +49,11 @@ export function MessageVirtualList({
           (s.images && s.images.length) ||
           (s.videos && s.videos.length) ||
           (s.audios && s.audios.length) ||
-          (s.files && s.files.length))
+          (s.files && s.files.length) ||
+          hasSubagents)
       ) {
+        const st =
+          s.subagentTasks && Object.keys(s.subagentTasks).length ? { ...s.subagentTasks } : undefined
         list.push({
           kind: 'stream',
           row: {
@@ -56,12 +65,13 @@ export function MessageVirtualList({
             videos: s.videos || [],
             audios: s.audios || [],
             files: s.files || [],
+            ...(st ? { subagentTasks: st } : {}),
           },
         })
       }
     }
     return list
-  }, [rows, streamTick])  // 只依赖 rows 和 streamTick，不依赖 streamRef（引用不变）
+  }, [rows, streamTick, inlineSubagentTasks])
 
   const scrollToBottom = useCallback(() => {
     const el = parentRef.current

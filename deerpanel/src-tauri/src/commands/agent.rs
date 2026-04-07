@@ -181,7 +181,7 @@ pub async fn add_agent(
         .await
         .map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
-                "OpenClaw CLI 未找到，请确认已安装并重启 ClawPanel。".to_string()
+                "OpenClaw CLI 未找到，请确认已安装并重启 YTPanel。".to_string()
             } else {
                 format!("执行失败: {e}")
             }

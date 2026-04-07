@@ -1,7 +1,7 @@
 {
   "title": "Configuración inicial",
-  "desc": "Instalar y configurar DeerPanel",
-  "headerTitle": "Bienvenido a DeerPanel",
+  "desc": "Instalar y configurar YTPanel",
+  "headerTitle": "Bienvenido a YTPanel",
   "recheck": "Verificar de nuevo",
   "stepNode": "Entorno Node.js",
   "installed": "Instalado",
@@ -18,6 +18,6 @@
   "messageChannels": "Canales",
   "enterPanel": "Entrar al panel",
   "installBtn": "Instalación rápida",
-  "installOpenclaw": "Instalar DeerPanel",
+  "installOpenclaw": "Instalar YTPanel",
   "installComplete": "Instalación completada"
 }

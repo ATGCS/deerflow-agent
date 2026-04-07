@@ -445,6 +445,11 @@ ask_clarification(
     `supervisor(action="start_execution", task_id="ID", subtask_ids=["SubID1", "SubID2"], authorized_by="user")`  
     **前提条件**：任务状态须为 `planned`、`planning` 或 `pending`（`pending` 会在本操作中自动变为 `planned` 并授权）；已进入非法终态的除外。  
     **行为**：本调用会**同步阻塞至本批子任务的 `task` 委派跑完**（多子任务时内部并行），返回 JSON 中的 `delegatedSubtasks` / `delegationAllSucceeded` 表示各子任务是否成功。`subtask_ids` 可省略，则自动选择所有已分配且未终态的子任务。执行前请确保子任务已 `assign_subtask`（或 `worker_profile` 中有可用的 `base_subagent`）。
+    **强制收敛步骤（必须执行）**：拿到 `delegatedSubtasks` 后，逐个子任务立刻回写协作状态：  
+    - `ok=true`：`supervisor(action="update_progress", task_id="ID", subtask_id="SubID", progress=100)`，随后 `supervisor(action="complete_subtask", task_id="ID", subtask_id="SubID")`  
+    - `ok=false`：`supervisor(action="update_progress", task_id="ID", subtask_id="SubID", progress=<当前值>, status="failed")`  
+    - 全部结束后调用 `supervisor(action="get_status", task_id="ID")` 作为最终校验，确保 UI 与存储状态一致。  
+    **不要**只口头说“任务完成”，必须先完成上述状态回写。
 
 11. **创建新智能体（进化能力）：**
     `supervisor(action="create_agent", agent_name="agent-name", agent_type="subagent", description="它做什么", model="model-name", system_prompt="说明", tools=["tool1"], skills=["skill1"])`

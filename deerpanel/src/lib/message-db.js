@@ -1,9 +1,9 @@
 /**
  * 本地消息存储 - IndexedDB
- * 从 clawapp 移植，适配 ClawPanel
+ * 从 clawapp 移植，适配 YTPanel
  */
 
-const DB_NAME = 'clawpanel-messages'
+const DB_NAME = 'ytpanel-messages'
 const DB_VERSION = 1
 const STORE_NAME = 'messages'
 const STORE_SESSIONS = 'sessions'

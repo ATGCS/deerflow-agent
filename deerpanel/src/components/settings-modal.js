@@ -6,7 +6,7 @@ import { navigate } from '../router.js'
 /** @type {{ overlay: HTMLElement, onKeydown: (e: KeyboardEvent) => void, restoreHash: string, onThemePref?: () => void } | null} */
 let _instance = null
 
-const THEME_PREF_EVENT = 'deerpanel-theme-pref-changed'
+const THEME_PREF_EVENT = 'ytpanel-theme-pref-changed'
 
 function parseRestoreHash(opts) {
   if (opts.routeEntry) return '/chat'

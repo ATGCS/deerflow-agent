@@ -21,9 +21,9 @@ fn audit_log(action: &str, detail: &str) {
         .and_then(|mut f| std::io::Write::write_all(&mut f, line.as_bytes()));
 }
 
-/// ClawPanel 数据目录（~/.openclaw/clawpanel/）
+/// YTPanel 数据目录（~/.openclaw/ytpanel/）
 fn data_dir() -> PathBuf {
-    super::openclaw_dir().join("clawpanel")
+    super::openclaw_dir().join(super::PANEL_DATA_DIR_NAME)
 }
 
 /// 确保数据目录及子目录存在，返回目录路径

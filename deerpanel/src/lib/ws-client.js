@@ -22,6 +22,173 @@ function safeParseJSON(raw, fallback) {
   try { return JSON.parse(raw) } catch { return fallback }
 }
 
+/** 打包后的 Tauri WebView 无 Vite `/api` 代理，须走 Rust `gateway_proxy` / `gateway_proxy_stream`。 */
+function isDeerflowTauri() {
+  if (typeof window === 'undefined') return false
+  return !!(
+    window.__TAURI__?.core?.invoke ||
+    window.__TAURI_INTERNALS__ ||
+    window.isTauri
+  )
+}
+
+function buildGatewayProxyRequest(url, options = {}) {
+  const method = (options.method || 'GET').toUpperCase()
+  const [pathPart, search] = url.split('?')
+  let query = null
+  if (search) {
+    query = {}
+    new URLSearchParams(search).forEach((v, k) => {
+      query[k] = v
+    })
+  }
+  let body = null
+  if (options.body != null && options.body !== '') {
+    if (typeof options.body === 'string') {
+      try {
+        body = JSON.parse(options.body)
+      } catch {
+        body = options.body
+      }
+    } else {
+      body = options.body
+    }
+  }
+  return { method, path: pathPart, body, query }
+}
+
+async function deerflowInvokeGatewayJson(url, options = {}) {
+  const { invoke } = await import('@tauri-apps/api/core')
+  const request = buildGatewayProxyRequest(url, options)
+  const res = await invoke('gateway_proxy', { request })
+  if (!res?.ok) {
+    let msg = res?.error
+    if (!msg && res?.body != null && typeof res.body === 'object') {
+      msg = res.body.detail || res.body.error || res.body.message
+    }
+    if (!msg) msg = `HTTP ${res?.status ?? '?'}`
+    throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg))
+  }
+  const b = res.body
+  if (b === undefined) return null
+  return b
+}
+
+/** Tauri 下模拟 `fetch`：仅提供本文件用到的 `ok` / `status` / `text()`。 */
+async function deerflowFetch(url, options = {}) {
+  if (!isDeerflowTauri() || !url.startsWith('/')) {
+    return fetch(url, options)
+  }
+  const { invoke } = await import('@tauri-apps/api/core')
+  const request = buildGatewayProxyRequest(url, options)
+  const res = await invoke('gateway_proxy', { request })
+  const status = res?.status ?? 0
+  const ok = !!res?.ok
+  let text = ''
+  if (res.body == null || res.body === '') {
+    text = ''
+  } else if (typeof res.body === 'string') {
+    text = res.body
+  } else {
+    try {
+      text = JSON.stringify(res.body)
+    } catch {
+      text = String(res.body)
+    }
+  }
+  return {
+    ok,
+    status,
+    async text() {
+      return text
+    },
+  }
+}
+
+const DEERFLOW_STREAM_EOF = '__DF_EOF__'
+
+/** LangGraph `runs/stream` 等 SSE：Rust 读上游字节后经 Channel 推 base64，再拼成 `ReadableStream`。 */
+async function deerflowFetchStream(url, options = {}) {
+  if (!isDeerflowTauri() || !url.startsWith('/')) {
+    return fetch(url, options)
+  }
+  const { invoke, Channel } = await import('@tauri-apps/api/core')
+  const request = buildGatewayProxyRequest(url, options)
+  const chunks = []
+  const waiters = []
+  let streamError = null
+  let streamFinished = false
+
+  const notify = () => {
+    waiters.splice(0).forEach((w) => w())
+  }
+
+  const onChunk = new Channel((b64) => {
+    if (b64 === DEERFLOW_STREAM_EOF) {
+      streamFinished = true
+      notify()
+      return
+    }
+    try {
+      const bin = Uint8Array.from(globalThis.atob(b64), (c) => c.charCodeAt(0))
+      chunks.push(bin)
+    } catch (e) {
+      streamError = e
+    }
+    notify()
+  })
+
+  invoke('gateway_proxy_stream', { request, onChunk }).catch((e) => {
+    streamError = streamError || e
+    streamFinished = true
+    notify()
+  })
+
+  const stream = new ReadableStream({
+    async pull(controller) {
+      while (true) {
+        if (chunks.length > 0) {
+          controller.enqueue(chunks.shift())
+          return
+        }
+        if (streamError) {
+          controller.error(streamError)
+          return
+        }
+        if (streamFinished) {
+          controller.close()
+          return
+        }
+        await new Promise((r) => waiters.push(r))
+      }
+    },
+  })
+
+  return new Response(stream, {
+    status: 200,
+    statusText: 'OK',
+    headers: { 'Content-Type': 'text/event-stream' },
+  })
+}
+
+/**
+ * LangGraph stream_mode=custom 的 data 形态因版本而异：可能是 writer 原对象、或 [namespace, chunk]、或 { chunk }。
+ * 仅解析含 type: task_* 的 payload，供子智能体进度条使用。
+ */
+function normalizeCustomTaskPayload(data) {
+  if (!data) return null
+  if (Array.isArray(data) && data.length >= 2 && data[1] != null && typeof data[1] === 'object' && !Array.isArray(data[1])) {
+    return data[1]
+  }
+  if (typeof data === 'object' && !Array.isArray(data) && data.chunk != null && typeof data.chunk === 'object' && !Array.isArray(data.chunk)) {
+    return data.chunk
+  }
+  if (typeof data === 'object' && !Array.isArray(data) && typeof data.type === 'string') {
+    return data
+  }
+  return null
+}
+
 function clampProgress01(v) {
   const n = Number.parseInt(v, 10)
   if (Number.isNaN(n)) return 0
@@ -35,7 +202,7 @@ async function buildTaskProgressSnapshotFromLegacyApis(threadId) {
   const enc = encodeURIComponent(threadId)
   let collab = null
   try {
-    const resp = await fetch(`/api/collab/threads/${enc}`)
+    const resp = await deerflowFetch(`/api/collab/threads/${enc}`)
     const text = await resp.text().catch(() => '')
     collab = text ? safeParseJSON(text, null) : null
     if (!resp.ok) collab = null
@@ -194,7 +361,126 @@ function normalizeThreadsSearchResponse(data) {
   return []
 }
 
+/**
+ * 兼容不同网关/代理返回结构，尽量提取线程 ID。
+ * 常见形态：
+ * - { thread_id: "..." } / { threadId: "..." } / { id: "..." }
+ * - { thread: { thread_id: "..." } } / { data: { thread_id: "..." } }
+ * - 直接返回字符串 id
+ */
+function extractThreadId(payload) {
+  if (!payload) return ''
+  if (typeof payload === 'string') {
+    const s = payload.trim()
+    if (!s) return ''
+    // 兼容 "{"thread_id":"..."}" 这类字符串化 JSON 返回
+    if ((s.startsWith('{') && s.endsWith('}')) || (s.startsWith('[') && s.endsWith(']'))) {
+      try {
+        const parsed = JSON.parse(s)
+        const nested = extractThreadId(parsed)
+        if (nested) return nested
+      } catch {
+        // keep raw string fallback
+      }
+    }
+    return s
+  }
+  if (typeof payload === 'number') return String(payload)
+  if (Array.isArray(payload)) {
+    for (const item of payload) {
+      const id = extractThreadId(item)
+      if (id) return id
+    }
+    return ''
+  }
+  if (typeof payload !== 'object') return ''
+  const direct =
+    payload.thread_id ||
+    payload.threadId ||
+    payload.id
+  if (typeof direct === 'string' && direct.trim()) return direct.trim()
+  if (typeof direct === 'number') return String(direct)
+  // 某些返回把 id 放在字符串字段里
+  for (const k of ['thread', 'thread_id', 'threadId', 'id']) {
+    const v = payload[k]
+    if (typeof v === 'string') {
+      const nested = extractThreadId(v)
+      if (nested) return nested
+    }
+  }
+  const nested = payload.thread || payload.data || payload.result
+  if (nested && typeof nested === 'object') {
+    const nid = nested.thread_id || nested.threadId || nested.id
+    if (typeof nid === 'string' && nid.trim()) return nid.trim()
+    if (typeof nid === 'number') return String(nid)
+  }
+  return ''
+}
+
+function debugPayloadSnippet(payload, maxLen = 300) {
+  try {
+    if (payload == null) return 'null'
+    if (typeof payload === 'string') return payload.slice(0, maxLen)
+    return JSON.stringify(payload).slice(0, maxLen)
+  } catch {
+    return String(payload).slice(0, maxLen)
+  }
+}
+
+async function createThreadViaApi(sessionKey) {
+  return fetchJson('/api/langgraph/threads', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ metadata: { session_key: sessionKey } }),
+  })
+}
+
+async function createThreadViaTauriProxy(sessionKey) {
+  if (!isDeerflowTauri()) return null
+  const { invoke } = await import('@tauri-apps/api/core')
+  const res = await invoke('gateway_proxy', {
+    request: {
+      method: 'POST',
+      path: '/api/langgraph/threads',
+      body: { metadata: { session_key: sessionKey } },
+      query: null,
+    },
+  })
+  if (!res?.ok) {
+    throw new Error(res?.error || `创建会话失败（gateway_proxy ${res?.status || 'unknown'}）`)
+  }
+  return res?.body ?? null
+}
+
+async function createThreadRobust(sessionKey) {
+  const tryProxy = async () => {
+    const viaProxy = await createThreadViaTauriProxy(sessionKey)
+    return viaProxy
+  }
+  try {
+    const viaApi = await createThreadViaApi(sessionKey)
+    // 有些桌面环境会返回 200 但 body 不是线程对象（例如网关错误页/代理壳响应），
+    // 这类情况之前不会进入 catch，导致后续报“未返回 thread_id”。
+    if (extractThreadId(viaApi)) return viaApi
+    const viaProxy = await tryProxy()
+    if (viaProxy && extractThreadId(viaProxy)) return viaProxy
+    return viaApi
+  } catch (primaryErr) {
+    // 桌面端 fetch 可能受本地代理/端口配置影响，退回 Tauri gateway_proxy 再试一次。
+    try {
+      const viaProxy = await tryProxy()
+      if (viaProxy != null) return viaProxy
+    } catch {
+      // ignore and throw primary error below
+    }
+    throw primaryErr
+  }
+}
+
 async function fetchJson(url, options = {}) {
+  if (isDeerflowTauri() && url.startsWith('/')) {
+    return deerflowInvokeGatewayJson(url, options)
+  }
   const resp = await fetch(url, options)
   const text = await resp.text().catch(() => '')
   const data = text ? safeParseJSON(text, null) : null
@@ -567,7 +853,7 @@ export class WsClient {
     ]
     for (const p of fallbacks) {
       try {
-        const resp = await fetch(p)
+        const resp = await deerflowFetch(p)
         const text = await resp.text().catch(() => '')
         const data = text ? safeParseJSON(text, null) : null
         if (resp.ok && data) return data
@@ -591,13 +877,12 @@ export class WsClient {
     const key = sessionKey || MAIN_SESSION_KEY
     const map = loadSessionMap()
     if (map[key]?.threadId) return map[key].threadId
-    const created = await fetchJson('/api/langgraph/threads', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ metadata: { session_key: key } }),
-    })
-    const threadId = created?.thread_id || created?.threadId
-    if (!threadId) throw new Error('创建会话失败：未返回 thread_id')
+    const created = await createThreadRobust(key)
+    const threadId = extractThreadId(created)
+    if (!threadId) {
+      const snippet = debugPayloadSnippet(created)
+      throw new Error(`创建会话失败：未返回 thread_id（返回=${snippet}）`)
+    }
     map[key] = {
       threadId,
       createdAt: nowTs(),
@@ -671,7 +956,7 @@ export class WsClient {
       const st = String(r?.status || '').toLowerCase()
       if (!runId || !target.has(st)) continue
       try {
-        await fetch(`/api/langgraph/threads/${encodeURIComponent(threadId)}/runs/${encodeURIComponent(runId)}/cancel`, {
+        await deerflowFetch(`/api/langgraph/threads/${encodeURIComponent(threadId)}/runs/${encodeURIComponent(runId)}/cancel`, {
           method: 'POST',
         })
         cancelled.push(runId)
@@ -716,7 +1001,7 @@ export class WsClient {
       }
     }
     try {
-      const resp = await fetch('/api/langgraph/runs/cancel', {
+      const resp = await deerflowFetch('/api/langgraph/runs/cancel', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: 'all' }),
@@ -812,7 +1097,7 @@ export class WsClient {
     const body = {
       assistant_id: 'lead_agent',
       input: { messages: [{ role: 'user', content: blocks }] },
-      stream_mode: ['values', 'messages-tuple'],
+      stream_mode: ['values', 'messages-tuple', 'custom'],
       streamSubgraphs: true,
       streamResumable: true,
       config: {
@@ -836,7 +1121,7 @@ export class WsClient {
     }
 
     try {
-      const resp = await fetch(`/api/langgraph/threads/${encodeURIComponent(threadId)}/runs/stream`, {
+      const resp = await deerflowFetchStream(`/api/langgraph/threads/${encodeURIComponent(threadId)}/runs/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -1029,6 +1314,24 @@ export class WsClient {
             } else if (root?.role === 'assistant' && typeof root.content === 'string') {
               emitAssistantChunkIfNew(root.content)
             }
+          } else if (eventName === 'custom') {
+            const chunk = normalizeCustomTaskPayload(data)
+            if (!chunk || typeof chunk !== 'object') return
+            const t = chunk.type
+            if (
+              t === 'task_started' ||
+              t === 'task_running' ||
+              t === 'task_completed' ||
+              t === 'task_failed' ||
+              t === 'task_timed_out'
+            ) {
+              this._emitEvent('chat', {
+                sessionKey: key,
+                runId,
+                state: 'subtask',
+                subtaskEvent: chunk,
+              })
+            }
           }
       }
 
@@ -1197,8 +1500,8 @@ export class WsClient {
     delete map[key]
     saveSessionMap(map)
     if (threadId) {
-      await fetch(`/api/langgraph/threads/${encodeURIComponent(threadId)}`, { method: 'DELETE' }).catch(() => {})
-      await fetch(`/api/threads/${encodeURIComponent(threadId)}`, { method: 'DELETE' }).catch(() => {})
+      await deerflowFetch(`/api/langgraph/threads/${encodeURIComponent(threadId)}`, { method: 'DELETE' }).catch(() => {})
+      await deerflowFetch(`/api/threads/${encodeURIComponent(threadId)}`, { method: 'DELETE' }).catch(() => {})
     }
     return { ok: true }
   }
@@ -1209,16 +1512,15 @@ export class WsClient {
     const oldThread = map[sessionKey]?.threadId
     const oldContext = map[sessionKey]?.context
     if (oldThread) {
-      await fetch(`/api/langgraph/threads/${encodeURIComponent(oldThread)}`, { method: 'DELETE' }).catch(() => {})
-      await fetch(`/api/threads/${encodeURIComponent(oldThread)}`, { method: 'DELETE' }).catch(() => {})
+      await deerflowFetch(`/api/langgraph/threads/${encodeURIComponent(oldThread)}`, { method: 'DELETE' }).catch(() => {})
+      await deerflowFetch(`/api/threads/${encodeURIComponent(oldThread)}`, { method: 'DELETE' }).catch(() => {})
     }
-    const created = await fetchJson('/api/langgraph/threads', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ metadata: { session_key: sessionKey } }),
-    })
-    const threadId = created?.thread_id || created?.threadId
-    if (!threadId) throw new Error('重置会话失败：未返回 thread_id')
+    const created = await createThreadRobust(sessionKey)
+    const threadId = extractThreadId(created)
+    if (!threadId) {
+      const snippet = debugPayloadSnippet(created)
+      throw new Error(`重置会话失败：未返回 thread_id（返回=${snippet}）`)
+    }
     map[sessionKey] = {
       threadId,
       createdAt: map[sessionKey]?.createdAt || nowTs(),
@@ -1358,5 +1660,5 @@ export function threadStatePayloadFromValues(sessionKey, values) {
 }
 
 const _g = typeof window !== 'undefined' ? window : globalThis
-if (!_g.__clawpanelWsClient) _g.__clawpanelWsClient = new WsClient()
-export const wsClient = _g.__clawpanelWsClient
+if (!_g.__ytpanelWsClient) _g.__ytpanelWsClient = new WsClient()
+export const wsClient = _g.__ytpanelWsClient

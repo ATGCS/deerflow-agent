@@ -15,7 +15,7 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let gateway_stop = MenuItemBuilder::with_id("gateway_stop", "停止 Gateway").build(app)?;
     let gateway_restart = MenuItemBuilder::with_id("gateway_restart", "重启 Gateway").build(app)?;
     let separator2 = PredefinedMenuItem::separator(app)?;
-    let quit = MenuItemBuilder::with_id("quit", "退出 ClawPanel").build(app)?;
+    let quit = MenuItemBuilder::with_id("quit", "退出 YTPanel").build(app)?;
 
     let menu = MenuBuilder::new(app)
         .item(&show)
@@ -32,7 +32,7 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
 
     let _tray = TrayIconBuilder::new()
         .icon(icon)
-        .tooltip("ClawPanel")
+        .tooltip("YTPanel")
         .menu(&menu)
         .on_menu_event(move |app, event| {
             handle_menu_event(app, event.id().as_ref());

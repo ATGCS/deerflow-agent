@@ -89,7 +89,7 @@ function _checkMultiInstances(el) {
   }).catch(() => {})
 }
 
-const LS_SIDEBAR_COLLAPSED = 'clawpanel_sidebar_collapsed'
+const LS_SIDEBAR_COLLAPSED = 'ytpanel_sidebar_collapsed'
 
 function _isDesktopSidebarCollapsed() {
   try { return localStorage.getItem(LS_SIDEBAR_COLLAPSED) === '1' } catch { return false }
@@ -116,9 +116,9 @@ export function renderSidebar(el) {
   let html = `
     <div class="sidebar-header">
       <div class="sidebar-logo">
-        <img src="/images/logo.png" alt="DeerPanel">
+        <img src="/images/logo.png" alt="YTPanel">
       </div>
-      <span class="sidebar-title">DeerPanel</span>
+      <span class="sidebar-title">YTPanel</span>
       <button class="sidebar-collapse-btn" id="btn-sidebar-collapse" title="折叠/展开">${collapsed ? '»' : '«'}</button>
       <button class="sidebar-close-btn" id="btn-sidebar-close" title="关闭菜单">&times;</button>
     </div>
@@ -334,7 +334,7 @@ async function _showAddInstanceDialog(sidebarEl) {
         <input class="form-input" id="inst-gw-port" type="number" value="18789" />
       </div>
       <div class="docker-dialog-hint">
-        远程服务器需要运行 DeerPanel (serve.js)。<br/>
+        远程服务器需要运行 YTPanel (serve.js)。<br/>
         示例: <code>http://192.168.1.100:1420</code>
       </div>
       <div id="inst-add-error" style="color:var(--error);font-size:12px;margin-top:var(--space-sm)"></div>

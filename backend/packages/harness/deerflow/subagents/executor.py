@@ -13,7 +13,7 @@ from typing import Any
 
 from langchain.agents import create_agent
 from langchain.tools import BaseTool
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 
 from deerflow.agents.thread_state import SandboxState, ThreadDataState, ThreadState
@@ -46,6 +46,7 @@ class SubagentResult:
         started_at: When execution started.
         completed_at: When execution completed.
         ai_messages: List of complete AI messages (as dicts) generated during execution.
+        stream_messages: AI + Tool 消息按对话顺序（供 task_running 推送，含工具返回）。
     """
 
     task_id: str
@@ -56,11 +57,14 @@ class SubagentResult:
     started_at: datetime | None = None
     completed_at: datetime | None = None
     ai_messages: list[dict[str, Any]] | None = None
+    stream_messages: list[dict[str, Any]] | None = None
 
     def __post_init__(self):
         """Initialize mutable defaults."""
         if self.ai_messages is None:
             self.ai_messages = []
+        if self.stream_messages is None:
+            self.stream_messages = []
 
 
 # Global storage for background task results
@@ -239,31 +243,36 @@ class SubagentExecutor:
             logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} starting async execution with max_turns={self.config.max_turns}")
 
             # Use stream instead of invoke to get real-time updates
-            # This allows us to collect AI messages as they are generated
+            # Walk full messages list so we capture ToolMessage (tool results), not only last AIMessage.
             final_state = None
+            stream_upto = 0
             async for chunk in agent.astream(state, config=run_config, context=context, stream_mode="values"):  # type: ignore[arg-type]
                 final_state = chunk
 
-                # Extract AI messages from the current state
                 messages = chunk.get("messages", [])
-                if messages:
-                    last_message = messages[-1]
-                    # Check if this is a new AI message
-                    if isinstance(last_message, AIMessage):
-                        # Convert message to dict for serialization
-                        message_dict = last_message.model_dump()
-                        # Only add if it's not already in the list (avoid duplicates)
-                        # Check by comparing message IDs if available, otherwise compare full dict
+                while stream_upto < len(messages):
+                    raw = messages[stream_upto]
+                    stream_upto += 1
+                    if isinstance(raw, AIMessage):
+                        message_dict = raw.model_dump()
+                        result.stream_messages.append(message_dict)
                         message_id = message_dict.get("id")
                         is_duplicate = False
                         if message_id:
                             is_duplicate = any(msg.get("id") == message_id for msg in result.ai_messages)
                         else:
                             is_duplicate = message_dict in result.ai_messages
-
                         if not is_duplicate:
                             result.ai_messages.append(message_dict)
-                            logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} captured AI message #{len(result.ai_messages)}")
+                            logger.info(
+                                f"[trace={self.trace_id}] Subagent {self.config.name} captured AI message #{len(result.ai_messages)}"
+                            )
+                    elif isinstance(raw, ToolMessage):
+                        result.stream_messages.append(raw.model_dump())
+                        logger.info(
+                            f"[trace={self.trace_id}] Subagent {self.config.name} captured tool result "
+                            f"name={getattr(raw, 'name', None)}"
+                        )
 
             logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} completed async execution")
 
@@ -434,6 +443,7 @@ class SubagentExecutor:
                         _background_tasks[task_id].error = exec_result.error
                         _background_tasks[task_id].completed_at = datetime.now()
                         _background_tasks[task_id].ai_messages = exec_result.ai_messages
+                        _background_tasks[task_id].stream_messages = exec_result.stream_messages
                 except FuturesTimeoutError:
                     logger.error(f"[trace={self.trace_id}] Subagent {self.config.name} execution timed out after {self.config.timeout_seconds}s")
                     with _background_tasks_lock:

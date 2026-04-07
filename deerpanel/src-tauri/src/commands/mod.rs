@@ -22,14 +22,43 @@ pub fn openclaw_dir() -> PathBuf {
     dirs::home_dir().unwrap_or_default().join(".openclaw")
 }
 
-fn panel_config_path() -> PathBuf {
-    openclaw_dir().join("clawpanel.json")
+/// 面板主配置文件（写入始终用此文件）
+pub const PANEL_CONFIG_FILE: &str = "ytpanel.json";
+/// 旧版配置名；读取时若无主文件则回退，便于从 ClawPanel 迁移
+pub const PANEL_CONFIG_LEGACY_FILE: &str = "clawpanel.json";
+
+/// 面板数据目录名（热更新、助手数据等）
+pub const PANEL_DATA_DIR_NAME: &str = "ytpanel";
+
+pub fn panel_config_primary_path() -> PathBuf {
+    openclaw_dir().join(PANEL_CONFIG_FILE)
+}
+
+pub fn panel_config_legacy_path() -> PathBuf {
+    openclaw_dir().join(PANEL_CONFIG_LEGACY_FILE)
+}
+
+/// 已存在的面板配置文件路径（优先 `ytpanel.json`）
+pub fn panel_config_existing_path() -> Option<PathBuf> {
+    let primary = panel_config_primary_path();
+    if primary.exists() {
+        return Some(primary);
+    }
+    let legacy = panel_config_legacy_path();
+    if legacy.exists() {
+        return Some(legacy);
+    }
+    None
+}
+
+pub fn app_user_agent() -> String {
+    format!("YTPanel/{}", env!("CARGO_PKG_VERSION"))
 }
 
 fn read_panel_config_value() -> Option<serde_json::Value> {
-    std::fs::read_to_string(panel_config_path())
-        .ok()
-        .and_then(|content| serde_json::from_str(&content).ok())
+    let path = panel_config_existing_path()?;
+    let content = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str(&content).ok()
 }
 
 pub fn configured_proxy_url() -> Option<String> {
@@ -73,7 +102,15 @@ pub fn build_http_client(
     timeout: Duration,
     user_agent: Option<&str>,
 ) -> Result<reqwest::Client, String> {
-    build_http_client_opt(timeout, user_agent, true)
+    build_http_client_opt(timeout, user_agent, true, true)
+}
+
+/// LangGraph SSE：关闭 gzip，避免上游对 chunked 响应做整包解压缓冲，导致首字延迟或前端「一闪就停」。
+pub fn build_http_streaming_client(
+    timeout: Duration,
+    user_agent: Option<&str>,
+) -> Result<reqwest::Client, String> {
+    build_http_client_opt(timeout, user_agent, true, false)
 }
 
 /// 构建模型请求用的 HTTP 客户端
@@ -85,15 +122,21 @@ pub fn build_http_client_no_proxy(
     let use_proxy = read_panel_config_value()
         .and_then(|v| v.get("networkProxy")?.get("proxyModelRequests")?.as_bool())
         .unwrap_or(false);
-    build_http_client_opt(timeout, user_agent, use_proxy)
+    build_http_client_opt(timeout, user_agent, use_proxy, true)
 }
 
 fn build_http_client_opt(
     timeout: Duration,
     user_agent: Option<&str>,
     use_proxy: bool,
+    use_gzip: bool,
 ) -> Result<reqwest::Client, String> {
-    let mut builder = reqwest::Client::builder().timeout(timeout).gzip(true);
+    let mut builder = reqwest::Client::builder().timeout(timeout);
+    builder = if use_gzip {
+        builder.gzip(true)
+    } else {
+        builder.no_gzip()
+    };
     if let Some(ua) = user_agent {
         builder = builder.user_agent(ua);
     }
@@ -171,17 +214,9 @@ fn build_enhanced_path() -> String {
     let current = std::env::var("PATH").unwrap_or_default();
     let home = dirs::home_dir().unwrap_or_default();
 
-    // 读取用户保存的自定义 Node.js 路径
-    let custom_path = openclaw_dir()
-        .join("clawpanel.json")
-        .exists()
-        .then(|| {
-            std::fs::read_to_string(openclaw_dir().join("clawpanel.json"))
-                .ok()
-                .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-                .and_then(|v| v.get("nodePath")?.as_str().map(String::from))
-        })
-        .flatten();
+    // 读取用户保存的自定义 Node.js 路径（新版 ytpanel.json 或旧版 clawpanel.json）
+    let custom_path = read_panel_config_value()
+        .and_then(|v| v.get("nodePath")?.as_str().map(String::from));
 
     #[cfg(target_os = "macos")]
     {

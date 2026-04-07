@@ -26,6 +26,8 @@ export interface DisplayRow {
   videos?: unknown[]
   audios?: unknown[]
   files?: unknown[]
+  /** 助手 / _stream：展示子智能体并行进度（流式与落库快照） */
+  subagentTasks?: Record<string, SubagentStreamTask>
   timestamp?: number
   durationStr?: string
   tokenStr?: string
@@ -38,6 +40,25 @@ export interface TokenTotals {
 }
 
 /** 与 ChatApp streamRef 一致 */
+/** LangGraph custom 通道中 task_tool 的 task_* 事件在前端的聚合态（按 task_id，支持并行多子任务） */
+export interface SubagentStreamTask {
+  taskId: string
+  /** 后端 task_started / task_running 中的 subagent_type（如 general-purpose、bash） */
+  subagentType?: string
+  description?: string
+  phase: 'running' | 'completed' | 'failed' | 'timed_out'
+  /** 子智能体内部工具轨迹（复用主聊天 ToolCallList UI） */
+  tools?: unknown[]
+  /** 最近一条 task_running 的短摘要（兼容旧 UI） */
+  progressHint?: string
+  /** 多轮 task_running 拼接的实时正文（较长，供独立 dock 展示） */
+  liveOutput?: string
+  messageIndex?: number
+  totalMessages?: number
+  error?: string
+  startedAt?: number
+}
+
 export interface StreamState {
   runId: string | null
   /** 已封存的文本 / 工具块（当前轮内交错顺序） */
@@ -50,6 +71,8 @@ export interface StreamState {
   audios: unknown[]
   files: unknown[]
   startTs: number | null
+  /** 当前轮流式：子智能体 task_started / task_running / … 聚合（与 tool_call_id 对齐的 task_id） */
+  subagentTasks: Record<string, SubagentStreamTask>
 }
 
 export interface ChatWsPayload {
@@ -57,6 +80,8 @@ export interface ChatWsPayload {
   state?: string
   runId?: string
   message?: unknown
+  /** state === 'subtask' 时：单条 task_* 事件（与 ws-client custom 解析一致） */
+  subtaskEvent?: Record<string, unknown>
   durationMs?: number
   errorMessage?: string
   error?: { message?: string }
@@ -118,4 +143,8 @@ export interface ThreadPanelState {
   collabSubtasks: CollabSubtaskSnapshot[]
   /** supervisor 调用时间线 */
   supervisorSteps: SupervisorStepSnapshot[]
+  /** GET /api/collab/threads/:id / task-progress 快照中的协作阶段 */
+  collabPhase?: string | null
+  boundTaskId?: string | null
+  boundProjectId?: string | null
 }

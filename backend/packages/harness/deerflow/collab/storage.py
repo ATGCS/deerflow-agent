@@ -549,7 +549,19 @@ def patch_collab_subtask_in_project_storage(
 
 
 def rollup_root_task_progress_from_subtasks(storage: ProjectStorage, main_task_id: str) -> bool:
-    """Set root task ``progress`` to the mean of subtask ``progress`` values (0–100)."""
+    """Roll up root task progress/status from subtasks.
+
+    Currently the UI expects the *total* task status (main_task.status) to converge when
+    all subtasks reach a terminal state, not only the numeric progress.
+
+    Rules:
+    - progress: integer mean of subtask progress (0-100); force 100 when root becomes completed
+    - status:
+      - all subtasks completed -> root completed
+      - any subtask failed -> root failed
+      - otherwise (no non-terminal) any subtask cancelled -> root cancelled
+      - otherwise (at least one non-terminal) -> root in_progress
+    """
     found = find_main_task(storage, main_task_id)
     if not found:
         return False
@@ -557,14 +569,44 @@ def rollup_root_task_progress_from_subtasks(storage: ProjectStorage, main_task_i
     subs = [s for s in (task.get("subtasks") or []) if isinstance(s, dict)]
     if not subs:
         return False
+    terminal = {"completed", "failed", "cancelled"}
+
+    def _norm_status(v: Any) -> str:
+        return str(v or "").strip().lower()
+
     total = 0
+    statuses: list[str] = []
     for st in subs:
+        statuses.append(_norm_status(st.get("status")))
         try:
             total += max(0, min(100, int(st.get("progress") or 0)))
         except (TypeError, ValueError):
             pass
+
     overall = total // len(subs)
     now = datetime.utcnow().isoformat() + "Z"
+
+    # Converge root status when *all* subtasks are terminal.
+    non_terminal_exists = any((s not in terminal) for s in statuses)
+    if not non_terminal_exists:
+        if all(s == "completed" for s in statuses):
+            root_status = "completed"
+            overall = 100
+            if "completed_at" in task:
+                task["completed_at"] = task.get("completed_at") or now
+        elif any(s == "failed" for s in statuses):
+            root_status = "failed"
+            if "failed_at" in task:
+                task["failed_at"] = task.get("failed_at") or now
+        elif any(s == "cancelled" for s in statuses):
+            root_status = "cancelled"
+        else:
+            root_status = task.get("status") or "in_progress"
+    else:
+        # Keep numeric progress rollup, but status should not pretend completion.
+        root_status = "in_progress"
+
+    task["status"] = root_status
     task["progress"] = overall
     task["updated_at"] = now
     project["updated_at"] = now

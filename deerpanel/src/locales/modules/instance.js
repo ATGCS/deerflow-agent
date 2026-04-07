@@ -17,6 +17,6 @@ export default {
   adding: _('添加�?..', 'Adding...', '新增�?..', '追加�?..', '추가 �?..', 'Đang thêm...', 'Agregando...', 'Adicionando...', 'Добавление...', 'Ajout...', 'Wird hinzugefügt...'),
   switchedTo: _('已切换到 {name} �?模型配置、Agent 等将管理该实�?, 'Switched to {name} �?Models, Agents, etc. will manage this instance', '已切換到 {name} �?模型設定、Agent 等將管理該執行個體', '{name} に切り替えました', '{name}(�?�?전환�?),
   current: _('当前', 'Active', '目前', '現在', '현재', 'Hiện tại', 'Actual', 'Atual', 'Текущий', 'Actuel', 'Aktuell'),
-  remoteHint: _('远程服务器需要运�?DeerPanel (serve.js)�?', 'The remote server must be running DeerPanel (serve.js).', '遠程伺服器需要執�?DeerPanel (serve.js)�?, 'リモートサーバー�?DeerPanel (serve.js) が実行されている必要があります�?, '원격 서버에서 DeerPanel (serve.js)�?실행 중이어야 합니�?'),
+  remoteHint: _('远程服务器需要运�?YTPanel (serve.js)�?', 'The remote server must be running YTPanel (serve.js).', '遠程伺服器需要執�?YTPanel (serve.js)�?, 'リモートサーバー�?YTPanel (serve.js) が実行されている必要があります�?, '원격 서버에서 YTPanel (serve.js)�?실행 중이어야 합니�?'),
   example: _('示例', 'Example', '', '�?', '예시'),
 }

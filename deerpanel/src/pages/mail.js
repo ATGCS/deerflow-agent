@@ -1,5 +1,5 @@
 /**
- * 邮箱 / SMTP 设置：写入 clawpanel.json 的 email 字段（Web 模式写入 localStorage 备份）
+ * 邮箱 / SMTP 设置：写入 ytpanel.json 的 email 字段（Web 模式写入 localStorage 备份）
  */
 import { api } from '../lib/tauri-api.js'
 import { toast } from '../components/toast.js'
@@ -105,7 +105,7 @@ export async function mountMailInto(container) {
   const hasStoredPassword = !!(state.password && String(state.password).length > 0)
 
   container.innerHTML = `
-      ${!isTauri ? `<p class="form-hint" style="margin-bottom:var(--space-md)">Web 模式下配置保存在浏览器 localStorage，仅作开发预览；桌面版写入本机 clawpanel.json。</p>` : ''}
+      ${!isTauri ? `<p class="form-hint" style="margin-bottom:var(--space-md)">Web 模式下配置保存在浏览器 localStorage，仅作开发预览；桌面版写入本机 ytpanel.json。</p>` : ''}
       <div class="config-section">
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:var(--font-size-sm)">
           <input type="checkbox" id="mail-enabled" ${state.enabled ? 'checked' : ''}>

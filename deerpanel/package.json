@@ -1,8 +1,8 @@
 {
-  "name": "deerpanel",
+  "name": "ytpanel",
   "version": "1.0.0",
   "private": true,
-  "description": "DeerPanel - DeerPanel 可视化管理面板，基于 Tauri v2 的跨平台桌面应用",
+  "description": "YTPanel - 可视化管理面板，基于 Tauri v2 的跨平台桌面应用",
   "type": "module",
   "author": "qingchencloud",
   "license": "AGPL-3.0",
@@ -15,7 +15,7 @@
     "url": "https://github.com/qingchencloud/deerpanel/issues"
   },
   "keywords": [
-    "deerpanel",
+    "ytpanel",
     "ai-agent",
     "tauri",
     "desktop-app",
@@ -26,7 +26,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "icon:regen": "tauri icon docs/logo.png -o src-tauri/icons",
+    "icon:regen": "tauri icon docs/ytpanel-app-icon-square.png -o src-tauri/icons",
+    "icon:generate": "python scripts/gen-ytpanel-icon.py && tauri icon docs/ytpanel-app-icon-square.png -o src-tauri/icons && node -e \"require('fs').copyFileSync('src-tauri/icons/icon.ico','public/favicon.ico')\"",
     "serve": "node scripts/serve.js",
     "version:sync": "node scripts/sync-version.js",
     "version:set": "node scripts/sync-version.js",

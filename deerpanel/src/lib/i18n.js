@@ -5,7 +5,8 @@
 import { buildLocales } from '../locales/index.js'
 
 const LANGS = buildLocales()
-const LANG_KEY = 'deerpanel_lang'
+const LANG_KEY = 'ytpanel_lang'
+const LANG_KEY_LEGACY = 'deerpanel_lang'
 const FALLBACK = 'zh-CN'
 
 let _lang = FALLBACK
@@ -80,7 +81,18 @@ export function onLangChange(fn) {
 
 /** 初始化：localStorage > navigator.language > fallback */
 export function initI18n() {
-  const saved = localStorage.getItem(LANG_KEY)
+  let saved = localStorage.getItem(LANG_KEY)
+  if (!saved) {
+    try {
+      const legacy = localStorage.getItem(LANG_KEY_LEGACY)
+      if (legacy && LANGS[legacy]) {
+        localStorage.setItem(LANG_KEY, legacy)
+        saved = legacy
+      }
+    } catch {
+      /* ignore */
+    }
+  }
   if (saved && LANGS[saved]) {
     _lang = saved
     _dict = LANGS[saved]

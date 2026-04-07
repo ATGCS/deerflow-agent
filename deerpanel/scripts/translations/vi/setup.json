@@ -1,7 +1,7 @@
 {
   "title": "Thiết lập ban đầu",
-  "desc": "Cài đặt và cấu hình DeerPanel",
-  "headerTitle": "Chào mừng đến DeerPanel",
+  "desc": "Cài đặt và cấu hình YTPanel",
+  "headerTitle": "Chào mừng đến YTPanel",
   "recheck": "Kiểm tra lại",
   "stepNode": "Môi trường Node.js",
   "installed": "Đã cài đặt",
@@ -18,6 +18,6 @@
   "messageChannels": "Kênh",
   "enterPanel": "Vào panel",
   "installBtn": "Cài đặt nhanh",
-  "installOpenclaw": "Cài đặt DeerPanel",
+  "installOpenclaw": "Cài đặt YTPanel",
   "installComplete": "Cài đặt hoàn tất"
 }

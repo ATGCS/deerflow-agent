@@ -2,7 +2,7 @@ import { _ } from '../helper.js'
 
 export default {
   title: _('???', 'Dashboard', '???'),
-  desc: _('DeerPanel 运行状态概�?', 'DeerPanel runtime status overview', 'DeerPanel 執行狀態概�?, 'DeerPanel 実行状況の概�?, 'DeerPanel 실행 상태 개요', 'Tổng quan trạng thái DeerPanel', 'Resumen del estado de DeerPanel', 'Visão geral do estado do DeerPanel', 'Обзор состояния DeerPanel', 'Vue d\'ensemble de l\'état DeerPanel', 'DeerPanel-Statusübersicht'),
+  desc: _('YTPanel 运行状态概�?', 'YTPanel runtime status overview', 'YTPanel 執行狀態概�?, 'YTPanel 実行状況の概�?, 'YTPanel 실행 상태 개요', 'Tổng quan trạng thái YTPanel', 'Resumen del estado de YTPanel', 'Visão geral do estado do YTPanel', 'Обзор состояния YTPanel', 'Vue d\'ensemble de l\'état YTPanel', 'YTPanel-Statusübersicht'),
   gateway: _('Gateway', 'Gateway'),
   portDetect: _('端口检�?', 'Port detection', '連接埠檢�?, 'ポート検�?, '포트 감지'),
   notStarted: _('未启�?, 'Not started', '未啟�?, '未起�?, '미시�?, 'Chưa khởi động', 'No iniciado', 'Não iniciado', 'Не запущен', 'Non démarré', 'Nicht gestartet'),
@@ -21,7 +21,7 @@ export default {
   basedOnProviders: _('基于 {count} 个渠道商', 'From {count} providers', '基於 {count} 個頻道商', '{count} プロバイダーか�?', '{count}�?프로바이�?기반'),
   baseServices: _('基础服务', 'Services', '基礎服務', '基本サービス', '기본 서비�?', 'Dịch v�?cơ bản', 'Servicios base', 'Serviços base', 'Базовые сервисы', 'Services de base', 'Basisdienste'),
   controlUI: _('Control UI', 'Control UI'),
-  controlUIDesc: _('DeerPanel 原生面板', 'DeerPanel native panel', '', 'DeerPanel ネイティブパネル', 'DeerPanel 네이티브 패널'),
+  controlUIDesc: _('YTPanel 原生面板', 'YTPanel native panel', '', 'YTPanel ネイティブパネル', 'YTPanel 네이티브 패널'),
   controlUIClick: _('点击打开浏览�?', 'Click to open in browser', '点擊開啟瀏覽�?, 'ブラウザで開�?, '브라우저에서 열기'),
   controlUINotRunning: _('Gateway 未运�?, 'Gateway not running', 'Gateway 未執�?, 'Gateway 未実�?, 'Gateway 미실�?),
   restartGw: _('重启 Gateway', 'Restart Gateway', '重啟 Gateway', 'Gateway 再起�?, 'Gateway 재시�?, 'Khởi động lại Gateway', 'Reiniciar Gateway', 'Reiniciar Gateway', 'Перезапустить Gateway', 'Redémarrer Gateway', 'Gateway neustarten'),

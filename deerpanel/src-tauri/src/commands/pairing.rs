@@ -162,10 +162,9 @@ fn patch_gateway_origins() {
 #[tauri::command]
 pub fn check_pairing_status() -> Result<bool, String> {
     // 读取设备密钥
-    let device_key_path = crate::commands::openclaw_dir().join("clawpanel-device-key.json");
-    if !device_key_path.exists() {
+    let Some(device_key_path) = crate::commands::device::device_key_existing_path() else {
         return Ok(false);
-    }
+    };
 
     let device_key_content =
         std::fs::read_to_string(&device_key_path).map_err(|e| format!("读取设备密钥失败: {e}"))?;

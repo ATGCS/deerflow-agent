@@ -1,28 +1,12 @@
-import type { ThreadPanelState, CollabSubtaskSnapshot } from '../chat-types.js'
+import type { ThreadPanelState, CollabSubtaskSnapshot, CollabTaskSnapshot, SupervisorStepSnapshot } from '../chat-types.js'
 
 interface TaskSidebarProps {
   state: ThreadPanelState
+  taskHistory?: CollabTaskSnapshot[]
+  selectedTaskId?: string | null
+  activeTaskSubtasks?: CollabSubtaskSnapshot[]
+  activeTaskSteps?: SupervisorStepSnapshot[]
   isOpen: boolean
-  /** 收起为右侧窄条（仍占位），与主导航 « » 类似 */
-  collapsed: boolean
-  onToggleCollapse: () => void
-  onClose: () => void
-}
-
-function IconChevronLeft() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="18" height="18" aria-hidden>
-      <polyline points="15 18 9 12 15 6" />
-    </svg>
-  )
-}
-
-function IconChevronRight() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="18" height="18" aria-hidden>
-      <polyline points="9 18 15 12 9 6" />
-    </svg>
-  )
 }
 
 function getStatusIcon(status?: string): string {
@@ -39,15 +23,36 @@ function getStatusIcon(status?: string): string {
   }
 }
 
+function normalizeSubtaskStatus(status?: string): string {
+  return String(status || '')
+    .trim()
+    .toLowerCase()
+    .replace(/-/g, '_')
+}
+
+function isSubtaskRunning(status?: string): boolean {
+  const s = normalizeSubtaskStatus(status)
+  return s === 'in_progress' || s === 'running' || s === 'executing' || s === 'active'
+}
+
+function isSubtaskCompleted(status?: string): boolean {
+  const s = normalizeSubtaskStatus(status)
+  return s === 'completed' || s === 'done'
+}
+
 function getStatusClass(status?: string): string {
-  switch (status) {
+  const s = normalizeSubtaskStatus(status)
+  switch (s) {
     case 'completed':
+    case 'done':
       return 'task-status-completed'
     case 'in_progress':
     case 'running':
     case 'executing':
+    case 'active':
       return 'task-status-progress'
     case 'pending':
+    case 'planned':
     default:
       return 'task-status-pending'
   }
@@ -63,143 +68,144 @@ function subtaskStatusZh(status?: string): string {
   return status
 }
 
+function taskStatusZh(status?: string): string {
+  return subtaskStatusZh(status)
+}
+
+function toProgress(progress?: number): number | null {
+  if (typeof progress !== 'number' || Number.isNaN(progress)) return null
+  return Math.min(100, Math.max(0, Math.round(progress)))
+}
+
+function stagePercent(step: SupervisorStepSnapshot): number {
+  const action = String(step.action || '').toLowerCase()
+  const label = String(step.label || '').toLowerCase()
+  if (action.includes('create_task') || label.includes('创建主任务')) return 10
+  if (action.includes('create_subtask') || label.includes('创建子任务')) return 25
+  if (action.includes('assign_subtask') || label.includes('分配子任务')) return 40
+  if (action.includes('start_execution') || label.includes('开始执行')) return 55
+  if (label.includes('执行中') || action.includes('execute')) return 75
+  if (label.includes('完成') || action.includes('complete')) return 100
+  return step.done ? 80 : 65
+}
+
+function deriveScheduleProgress(steps: SupervisorStepSnapshot[]): { percent: number | null; text: string } {
+  if (!steps.length) return { percent: null, text: '' }
+  let maxPct = 0
+  for (const st of steps) {
+    maxPct = Math.max(maxPct, stagePercent(st))
+  }
+  const latest = steps[steps.length - 1]
+  const latestLabel = (latest?.label || latest?.action || '处理中').toString()
+  const text = latest.done ? `已完成：${latestLabel}` : `进行中：${latestLabel}`
+  return { percent: Math.min(100, Math.max(0, maxPct)), text }
+}
+
+function isTerminalStatus(status?: string): boolean {
+  const s = String(status || '').toLowerCase()
+  return s === 'completed' || s === 'failed' || s === 'cancelled'
+}
+
 function SubtaskCard({ s }: { s: CollabSubtaskSnapshot }) {
-  const title = (s.name || s.subtaskId || '').trim() || '子任务'
-  const agent = (s.assignedAgent || '').trim()
+  const contentText =
+    (s.name || s.description || s.subtaskId || '').trim() || '子任务'
+  const agentName = (s.assignedAgent || '').trim() || '未分配'
+  const running = isSubtaskRunning(s.status)
+  const done = isSubtaskCompleted(s.status)
+  const showTrailingLabel = !running && !done
+  const fullTitle = `${agentName} · ${contentText}`
   return (
     <div className={`react-chat-subtask-card ${getStatusClass(s.status)}`}>
-      <div className="react-chat-subtask-card-top">
-        <span className="react-chat-subtask-card-icon" aria-hidden>
-          {getStatusIcon(s.status)}
+      <div className="react-chat-subtask-card-row">
+        <span className="react-chat-subtask-card-icon-slot" aria-hidden>
+          {running ? (
+            <span className="react-chat-subtask-spinner" />
+          ) : done ? (
+            <span className="react-chat-subtask-check">✓</span>
+          ) : (
+            <span className="react-chat-subtask-dot" />
+          )}
         </span>
-        <div className="react-chat-subtask-card-head">
-          <div className="react-chat-subtask-card-title" title={title}>
-            {title}
-          </div>
-          <div className="react-chat-subtask-card-badges">
-            <span className="react-chat-subtask-badge react-chat-subtask-badge--status">
-              {subtaskStatusZh(s.status)}
+        <div className="react-chat-subtask-card-main" title={fullTitle}>
+          <span className="react-chat-subtask-agent">
+            <span className="react-chat-subtask-agent-ico" aria-hidden>
+              🤖
             </span>
-            {agent ? (
-              <span className="react-chat-subtask-badge react-chat-subtask-badge--agent" title={agent}>
-                {agent}
-              </span>
-            ) : null}
-          </div>
+            <span className="react-chat-subtask-agent-name">{agentName}</span>
+          </span>
+          <span className="react-chat-subtask-card-text">{contentText}</span>
         </div>
+        {showTrailingLabel ? (
+          <span className="react-chat-subtask-badge react-chat-subtask-badge--status">
+            {subtaskStatusZh(s.status)}
+          </span>
+        ) : null}
       </div>
-      {s.description ? (
-        <p className="react-chat-subtask-card-desc" title={s.description}>
-          {s.description}
-        </p>
-      ) : null}
-      {typeof s.progress === 'number' ? (
-        <div className="react-chat-subtask-card-progress">
-          <div
-            className="react-chat-subtask-card-progress-bar"
-            style={{ width: `${Math.min(100, Math.max(0, s.progress))}%` }}
-          />
-        </div>
-      ) : null}
     </div>
   )
 }
 
-export function TaskSidebar({ state, isOpen, collapsed, onToggleCollapse, onClose }: TaskSidebarProps) {
+export function TaskSidebar({
+  state,
+  taskHistory,
+  selectedTaskId,
+  activeTaskSubtasks,
+  activeTaskSteps,
+  isOpen,
+}: TaskSidebarProps) {
   const hasTodos = Array.isArray(state.todos) && state.todos.length > 0
-  const hasTitle = !!(state.title || '').trim()
-  const hasActivity = !!(state.activityDetail || '').trim() && state.activityKind !== 'idle'
-  const collab = state.collabTask
-  const hasCollab = !!(collab?.taskId && String(collab.taskId).trim())
-  const steps = state.supervisorSteps || []
-  const subtasks = state.collabSubtasks || []
+  const history = (taskHistory || []).filter((t) => !!(t.taskId || '').trim())
+  const collabFromHistory =
+    history.find((t) => (t.taskId || '').trim() === (selectedTaskId || '').trim()) ||
+    history.find((t) => (t.taskId || '').trim() === (selectedTaskId || '').trim()) ||
+    history[0] ||
+    null
+  const collab = collabFromHistory || state.collabTask
+  const latestTaskId = (collab?.taskId || '').trim()
+  const hasCollab = !!latestTaskId
+  const steps = activeTaskSteps || state.supervisorSteps || []
+  const subtasksAll = state.collabSubtasks || []
+  const subtasksSrc = activeTaskSubtasks || subtasksAll
+  const subtasks = latestTaskId ? subtasksSrc.filter((s) => !s.parentTaskId || s.parentTaskId === latestTaskId) : []
   const hasSteps = steps.length > 0
   const hasSubtasks = subtasks.length > 0
+  const schedule = deriveScheduleProgress(steps)
+  // 协作总进度融合：
+  // - schedule.percent 体现创建/分配/启动等“编排阶段”
+  // - collab.progress 体现子任务执行阶段（后端快照）
+  // 目标：既保留后端稳定值，又让“创建/分配”成为总进度的一部分，避免过早 100%。
+  const collabProgressPct = toProgress(collab?.progress)
+  const schedulePct = toProgress(schedule.percent ?? undefined)
+  const terminal = isTerminalStatus(collab?.status)
+  const hasOpenSubtasks = subtasks.some((s) => !isTerminalStatus(s.status))
+  let displayCollabPct: number | null = null
+  if (collabProgressPct != null && schedulePct != null) {
+    // 将编排阶段（约 0-55）作为下限，执行阶段取后端快照。
+    const scheduleFloor = Math.min(schedulePct, 55)
+    displayCollabPct = Math.max(collabProgressPct, scheduleFloor)
+  } else {
+    displayCollabPct = collabProgressPct ?? schedulePct
+  }
+  // 若主任务尚未终态或仍有未终态子任务，不展示 100%，避免“看起来已结束”。
+  if (displayCollabPct != null && displayCollabPct >= 100 && (!terminal || hasOpenSubtasks)) {
+    displayCollabPct = 99
+  }
 
   const showEmpty =
     !hasTodos &&
     !hasCollab &&
     !hasSteps &&
     !hasSubtasks &&
-    !hasTitle &&
-    !hasActivity &&
     !state.reasoningPreview &&
     !state.clarification?.preview
 
   if (!isOpen) return null
 
-  const asideClass = `react-chat-task-sidebar${collapsed ? ' react-chat-task-sidebar--collapsed' : ''}`
-
-  if (collapsed) {
-    return (
-      <aside className={asideClass} aria-label="任务进度（已收起）">
-        <div className="react-chat-task-sidebar-rail">
-          <button
-            type="button"
-            className="react-chat-task-sidebar-collapse-btn"
-            onClick={onToggleCollapse}
-            title="展开任务进度"
-          >
-            <IconChevronLeft />
-          </button>
-          <button type="button" className="react-chat-task-sidebar-close" onClick={onClose} title="关闭任务面板">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="18" height="18">
-              <line x1="18" y1="6" x2="6" y2="18" />
-              <line x1="6" y1="6" x2="18" y2="18" />
-            </svg>
-          </button>
-        </div>
-      </aside>
-    )
-  }
+  const asideClass = 'react-chat-thread-panel react-chat-task-sidebar'
 
   return (
     <aside className={asideClass}>
-      <div className="react-chat-task-sidebar-header">
-        <h3 className="react-chat-task-sidebar-title">任务进度</h3>
-        <div className="react-chat-task-sidebar-header-actions">
-          <button
-            type="button"
-            className="react-chat-task-sidebar-collapse-btn"
-            onClick={onToggleCollapse}
-            title="收起为窄条"
-          >
-            <IconChevronRight />
-          </button>
-          <button
-            type="button"
-            className="react-chat-task-sidebar-close"
-            onClick={onClose}
-            title="关闭任务面板"
-          >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="18" height="18">
-              <line x1="18" y1="6" x2="6" y2="18" />
-              <line x1="6" y1="6" x2="18" y2="18" />
-            </svg>
-          </button>
-        </div>
-      </div>
-
       <div className="react-chat-task-sidebar-content">
-        {hasTitle && (
-          <div className="react-chat-task-section">
-            <div className="react-chat-task-section-label">任务名称</div>
-            <div className="react-chat-task-title">{state.title}</div>
-          </div>
-        )}
-
-        {hasActivity && (
-          <div className="react-chat-task-section">
-            <div className="react-chat-task-section-label">当前活动</div>
-            <div className="react-chat-task-activity">
-              {state.activityKind === 'tools' && '🔧 '}
-              {state.activityKind === 'thinking' && '🤔 '}
-              {state.activityKind === 'clarification' && '❓ '}
-              {state.activityDetail || '处理中...'}
-            </div>
-          </div>
-        )}
-
         {state.reasoningPreview && (
           <div className="react-chat-task-section">
             <div className="react-chat-task-section-label">思考过程</div>
@@ -214,44 +220,33 @@ export function TaskSidebar({ state, isOpen, collapsed, onToggleCollapse, onClos
           </div>
         )}
 
-        {hasSteps && (
-          <div className="react-chat-task-section">
-            <div className="react-chat-task-section-label">调度进度</div>
-            <ul className="react-chat-task-steps" aria-label="Supervisor 步骤">
-              {steps.map((st) => (
-                <li
-                  key={st.id}
-                  className={`react-chat-task-step ${st.done ? 'react-chat-task-step--done' : 'react-chat-task-step--pending'}`}
-                >
-                  <span className="react-chat-task-step-dot" aria-hidden />
-                  <span className="react-chat-task-step-label">{st.label}</span>
-                  <span className="react-chat-task-step-state">{st.done ? '完成' : '…'}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-
         {hasCollab && collab && (
           <div className="react-chat-task-section">
-            <div className="react-chat-task-section-label">协作主任务</div>
             <div className="react-chat-task-title">{collab.name?.trim() || collab.taskId}</div>
-            <div className="react-chat-task-meta">
-              {collab.status != null && collab.status !== '' ? `状态: ${collab.status}` : ''}
-              {collab.progress != null ? ` · 进度: ${collab.progress}%` : ''}
+            <div className="react-chat-task-state-row">
+              <span className={`react-chat-task-state-badge ${getStatusClass(collab.status)}`}>
+                {taskStatusZh(collab.status)}
+              </span>
+              {displayCollabPct != null ? (
+                <span className="react-chat-task-state-percent">
+                  {displayCollabPct}%
+                </span>
+              ) : null}
             </div>
-            {collab.projectId ? (
-              <div className="react-chat-task-meta">项目: {collab.projectId}</div>
+            {displayCollabPct != null ? (
+              <div className="react-chat-task-progress">
+                <div
+                  className="react-chat-task-progress-bar"
+                  style={{ width: `${displayCollabPct}%` }}
+                />
+              </div>
             ) : null}
-            <a className="react-chat-task-link" href={`#/task/${encodeURIComponent(collab.taskId)}`}>
-              打开任务详情
-            </a>
           </div>
         )}
 
         {hasSubtasks && (
           <div className="react-chat-task-section">
-            <div className="react-chat-task-section-label">子任务</div>
+            <div className="react-chat-task-section-label">TODO</div>
             <div className="react-chat-task-subgrid">
               {subtasks.map((s) => (
                 <SubtaskCard key={s.subtaskId} s={s} />

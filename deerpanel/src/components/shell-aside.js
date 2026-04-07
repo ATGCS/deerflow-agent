@@ -1,15 +1,36 @@
 /**
- * 应用全局左侧壳：聊天式主导航 + 任务记录
+ * 应用全局左侧壳：聊天式主导航 + 会话列表
  * 会话列表由 ChatApp 同步；离开聊天页后仍从 sessionStorage / API 恢复展示
  */
 import { navigate, getCurrentRoute } from '../router.js'
 
-const LS_SHELL_COLLAPSED = 'deerpanel_shell_aside_collapsed'
+const LS_SHELL_COLLAPSED = 'ytpanel_shell_aside_collapsed'
+const LS_SHELL_COLLAPSED_LEGACY = 'deerpanel_shell_aside_collapsed'
 /** 与 ChatApp.tsx 中 SHELL_SIDEBAR_SYNC_STORAGE_KEY 一致 */
-const SS_SHELL_SYNC = 'deerpanel_shell_sidebar_sync'
+const SS_SHELL_SYNC = 'ytpanel_shell_sidebar_sync'
+const SS_SHELL_SYNC_LEGACY = 'deerpanel_shell_sidebar_sync'
 const CHAT_MAIN_SESSION_KEY = 'agent:main:main'
-/** 从 MCP/技能等页点任务记录进入 /chat 时要选中的会话（ChatApp 挂载后读取） */
-const SS_PENDING_SHELL_SESSION = 'deerpanel_pending_shell_session'
+/** 从 MCP/技能等页点会话列表进入 /chat 时要选中的会话（ChatApp 挂载后读取） */
+const SS_PENDING_SHELL_SESSION = 'ytpanel_pending_shell_session'
+const SS_PENDING_SHELL_SESSION_LEGACY = 'deerpanel_pending_shell_session'
+
+function migrateShellSessionStorage() {
+  try {
+    const o = sessionStorage.getItem(SS_SHELL_SYNC_LEGACY)
+    if (o != null && !sessionStorage.getItem(SS_SHELL_SYNC)) sessionStorage.setItem(SS_SHELL_SYNC, o)
+  } catch {
+    /* ignore */
+  }
+}
+
+function getShellSyncRaw() {
+  try {
+    migrateShellSessionStorage()
+    return sessionStorage.getItem(SS_SHELL_SYNC) || sessionStorage.getItem(SS_SHELL_SYNC_LEGACY)
+  } catch {
+    return null
+  }
+}
 
 function escHtml(s) {
   return String(s || '')
@@ -52,7 +73,7 @@ function _parseSessionLabel(key) {
 
 function _sessionDisplayTitle(key) {
   try {
-    const names = JSON.parse(localStorage.getItem('clawpanel-chat-session-names') || '{}')
+    const names = JSON.parse(localStorage.getItem('ytpanel-chat-session-names') || localStorage.getItem('clawpanel-chat-session-names') || '{}')
     if (names[key]) return names[key]
   } catch {
     /* ignore */
@@ -85,7 +106,7 @@ function _formatSessionMeta(s) {
 async function _bootstrapShellSessionsIfEmpty() {
   if (_lastChatSidebarSync?.rows?.length) return
   try {
-    const raw = sessionStorage.getItem(SS_SHELL_SYNC)
+    const raw = getShellSyncRaw()
     if (raw) {
       const d = JSON.parse(raw)
       if (d && Array.isArray(d.rows) && d.rows.length) {
@@ -172,8 +193,8 @@ function _renderSessionList(detail) {
     .map((row) => {
       const key = escHtml(row.sessionKey)
       const title = escHtml(row.title)
-      const meta = escHtml(row.meta)
-      const pill = row.modePill ? `<span class="react-chat-history-pill">${escHtml(row.modePill)}</span>` : ''
+      const timeRaw = row.time != null && row.time !== '' ? row.time : row.meta
+      const time = escHtml(typeof timeRaw === 'string' ? timeRaw : '')
       const active = onChatRoute && row.active ? ' active' : ''
       const moreOpen = moreKey === row.sessionKey
       const menu = moreOpen
@@ -184,14 +205,12 @@ function _renderSessionList(detail) {
         : ''
       return `<li>
         <div class="react-chat-history-item${active}" role="button" tabindex="0" data-shell-session="${key}">
-          <div class="react-chat-history-item-top">
-            <span class="react-chat-history-item-title" title="${title}">${title}</span>
-            <div class="react-chat-session-more-wrap" data-session-more-root>
-              <button type="button" class="react-chat-session-more-btn" data-shell-more-btn="${key}" aria-expanded="${moreOpen ? 'true' : 'false'}">···</button>
-              ${menu}
-            </div>
+          <span class="react-chat-history-item-title" title="${title}">${title}</span>
+          <span class="react-chat-history-item-time">${time}</span>
+          <div class="react-chat-session-more-wrap" data-session-more-root>
+            <button type="button" class="react-chat-session-more-btn" data-shell-more-btn="${key}" aria-expanded="${moreOpen ? 'true' : 'false'}">···</button>
+            ${menu}
           </div>
-          <div class="react-chat-history-item-meta">${meta}${pill ? ` ${pill}` : ''}</div>
         </div>
       </li>`
     })
@@ -213,7 +232,7 @@ function _onChatSync(ev) {
     let snapshot = _lastChatSidebarSync
     if (!snapshot?.rows?.length) {
       try {
-        const raw = sessionStorage.getItem(SS_SHELL_SYNC)
+        const raw = getShellSyncRaw()
         if (raw) snapshot = JSON.parse(raw)
       } catch {
         snapshot = null
@@ -251,7 +270,7 @@ function _bindShell(el) {
     }
     if (e.target.closest('#shell-btn-new-task')) {
       navigate('/chat')
-      window.dispatchEvent(new CustomEvent('deerpanel:shell-new-session'))
+      window.dispatchEvent(new CustomEvent('ytpanel:shell-new-session'))
       _closeMobileShell()
       return
     }
@@ -272,7 +291,7 @@ function _bindShell(el) {
           }
           navigate('/chat')
         } else {
-          window.dispatchEvent(new CustomEvent('deerpanel:shell-select-session', { detail: { sessionKey: key } }))
+          window.dispatchEvent(new CustomEvent('ytpanel:shell-select-session', { detail: { sessionKey: key } }))
         }
       }
       _closeMobileShell()
@@ -281,15 +300,15 @@ function _bindShell(el) {
     const moreBtn = e.target.closest('[data-shell-more-btn]')
     if (moreBtn) {
       const key = moreBtn.dataset.shellMoreBtn
-      if (key) window.dispatchEvent(new CustomEvent('deerpanel:shell-more-toggle', { detail: { sessionKey: key } }))
+      if (key) window.dispatchEvent(new CustomEvent('ytpanel:shell-more-toggle', { detail: { sessionKey: key } }))
       return
     }
     const mi = e.target.closest('[data-shell-more]')
     if (mi) {
       const action = mi.dataset.shellMore
       const key = mi.dataset.key
-      if (action === 'delete') window.dispatchEvent(new CustomEvent('deerpanel:shell-delete-session', { detail: { sessionKey: key } }))
-      if (action === 'refresh') window.dispatchEvent(new CustomEvent('deerpanel:shell-refresh-session', { detail: { sessionKey: key } }))
+      if (action === 'delete') window.dispatchEvent(new CustomEvent('ytpanel:shell-delete-session', { detail: { sessionKey: key } }))
+      if (action === 'refresh') window.dispatchEvent(new CustomEvent('ytpanel:shell-refresh-session', { detail: { sessionKey: key } }))
       return
     }
   })
@@ -309,7 +328,7 @@ function _bindShell(el) {
       }
       navigate('/chat')
     } else {
-      window.dispatchEvent(new CustomEvent('deerpanel:shell-select-session', { detail: { sessionKey: key } }))
+      window.dispatchEvent(new CustomEvent('ytpanel:shell-select-session', { detail: { sessionKey: key } }))
     }
     _closeMobileShell()
   })
@@ -318,7 +337,7 @@ function _bindShell(el) {
   if (filterEl) {
     filterEl.addEventListener('input', () => {
       window.dispatchEvent(
-        new CustomEvent('deerpanel:shell-session-filter', { detail: { value: filterEl.value } }),
+        new CustomEvent('ytpanel:shell-session-filter', { detail: { value: filterEl.value } }),
       )
     })
   }
@@ -360,7 +379,7 @@ export function initShellAside(el) {
 
   el.innerHTML = `
     <div class="react-chat-aside-toolbar">
-      <span class="react-chat-aside-toolbar-title">DeerPanel</span>
+      <span class="react-chat-aside-toolbar-title">YTPanel</span>
       <button type="button" class="react-chat-aside-icon-btn" id="shell-aside-collapse" title="折叠/展开侧栏">«</button>
     </div>
     <nav class="react-chat-aside-primary" aria-label="快捷入口">
@@ -418,8 +437,8 @@ export function initShellAside(el) {
     </nav>
     <div id="shell-chat-panel">
       <div class="react-chat-aside-history-head">
-        <span class="react-chat-aside-history-label">任务记录</span>
-        <input type="search" class="react-chat-aside-history-search" id="shell-session-filter" placeholder="筛选…" aria-label="筛选任务记录" />
+        <span class="react-chat-aside-history-label">会话列表</span>
+        <input type="search" class="react-chat-aside-history-search" id="shell-session-filter" placeholder="筛选…" aria-label="筛选会话" />
       </div>
       <ul class="react-chat-session-list" id="shell-session-list"></ul>
     </div>
@@ -438,7 +457,12 @@ export function initShellAside(el) {
   `
 
   try {
-    if (localStorage.getItem(LS_SHELL_COLLAPSED) === '1') _applyCollapsed(true)
+    const leg = localStorage.getItem(LS_SHELL_COLLAPSED_LEGACY)
+    if (leg != null && localStorage.getItem(LS_SHELL_COLLAPSED) == null) {
+      localStorage.setItem(LS_SHELL_COLLAPSED, leg)
+    }
+    if (localStorage.getItem(LS_SHELL_COLLAPSED) === '1' || localStorage.getItem(LS_SHELL_COLLAPSED_LEGACY) === '1')
+      _applyCollapsed(true)
     else _applyCollapsed(false)
   } catch {
     _applyCollapsed(false)
@@ -451,7 +475,7 @@ export function initShellAside(el) {
       _renderSessionList(_lastChatSidebarSync)
     }
   })
-  window.addEventListener('deerpanel:chat-sidebar-sync', _onChatSync)
+  window.addEventListener('ytpanel:chat-sidebar-sync', _onChatSync)
 
   _syncNavActive()
   void _bootstrapShellSessionsIfEmpty()

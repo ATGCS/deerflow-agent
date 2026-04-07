@@ -4,7 +4,6 @@ import {
   upsertTool,
   extractChatContent,
   normalizeChatToolPayloadToEntries,
-  accumulateStreamAssistantText,
   parseUsageToStats,
   flattenStreamDisplayText,
   CHAT_MAIN_SESSION_KEY,
@@ -17,9 +16,9 @@ import { HostedAgentPanel } from './components/HostedAgentPanel.js'
 import { TaskSidebar } from './components/TaskSidebar.js'
 import { RunManager } from './components/RunManager.js'
 import { toast } from '../components/toast.js'
+import { showConfirm } from '../components/modal.js'
 import { openMobileShellAside, toggleShellAsideCollapsed } from '../components/shell-aside.js'
 import { useHostedAgent } from './hooks/useHostedAgent.js'
-import { getBackendBaseURL } from '../lib/tauri-api.js'
 
 // ========== 任务进度可视化系统集成 ==========
 import { tasksAPI } from '../lib/api-client.js'
@@ -33,18 +32,20 @@ import type {
   DisplayRow,
   MessageSegment,
   StreamState,
+  SubagentStreamTask,
   CollabTaskSnapshot,
   CollabSubtaskSnapshot,
   SupervisorStepSnapshot,
   ThreadPanelState,
 } from './chat-types.js'
+import { mergeSubagentStreamEvent } from './subagent-stream-merge.js'
 
-const STORAGE_SESSION_META_KEY = 'clawpanel-chat-session-meta'
-const STORAGE_MODEL_KEY = 'clawpanel-chat-selected-model'
-const STORAGE_SESSION_NAMES_KEY = 'clawpanel-chat-session-names'
-const STORAGE_SELECTED_SESSION_KEY = 'clawpanel-chat-selected-session'
-/** 与 shell-aside 共用：离开聊天路由后仍渲染「任务记录」列表（shell-aside 内字符串须一致） */
-const SHELL_SIDEBAR_SYNC_STORAGE_KEY = 'deerpanel_shell_sidebar_sync'
+const STORAGE_SESSION_META_KEY = 'ytpanel-chat-session-meta'
+const STORAGE_MODEL_KEY = 'ytpanel-chat-selected-model'
+const STORAGE_SESSION_NAMES_KEY = 'ytpanel-chat-session-names'
+const STORAGE_SELECTED_SESSION_KEY = 'ytpanel-chat-selected-session'
+/** 与 shell-aside 共用：离开聊天路由后仍渲染「会话列表」快照（shell-aside 内结构须一致） */
+const SHELL_SIDEBAR_SYNC_STORAGE_KEY = 'ytpanel_shell_sidebar_sync'
 /** 与「新建任务」等生成的草稿会话 id 一致，避免 includes(':new-') 误匹配普通会话 key */
 const NEW_DRAFT_SESSION_KEY_RE = /^agent:[^:]+:new-[a-z0-9]+$/i
 
@@ -80,6 +81,7 @@ function emptyStream(): StreamState {
     audios: [],
     files: [],
     startTs: null,
+    subagentTasks: {},
   }
 }
 
@@ -94,12 +96,81 @@ function emptyThreadPanel(): ThreadPanelState {
     collabTask: null,
     collabSubtasks: [],
     supervisorSteps: [],
+    collabPhase: null,
+    boundTaskId: null,
+    boundProjectId: null,
   }
+}
+
+/** 子智能体流事件 → 协作子任务 status（与 DeerFlow 存储 / TaskSidebar 一致） */
+function collabStatusFromSubagentStreamEv(ev: Record<string, unknown>): string | null {
+  const t = ev.type
+  if (t === 'task_started' || t === 'task_running') return 'executing'
+  if (t === 'task_completed') return 'completed'
+  if (t === 'task_failed' || t === 'task_timed_out') return 'failed'
+  return null
+}
+
+function patchCollabSubtasksById(
+  list: CollabSubtaskSnapshot[],
+  subtaskId: string,
+  status: string,
+): CollabSubtaskSnapshot[] {
+  let changed = false
+  const next = list.map((s) => {
+    if (s.subtaskId !== subtaskId) return s
+    changed = true
+    return { ...s, status, ...(status === 'completed' ? { progress: 100 } : {}) }
+  })
+  return changed ? next : list
+}
+
+function mapSnapSupervisorSteps(raw: unknown): SupervisorStepSnapshot[] {
+  if (!Array.isArray(raw)) return []
+  return raw.map((x, i) => {
+    const r = x as Record<string, unknown>
+    return {
+      id: String(r.id ?? r.step_id ?? `step-${i}`),
+      action: String(r.action ?? ''),
+      label: String(r.label ?? r.action ?? '步骤'),
+      done: !!(r.done ?? r.completed),
+    }
+  })
+}
+
+type SidebarTaskView = {
+  task: CollabTaskSnapshot
+  subtasks: CollabSubtaskSnapshot[]
+  steps: SupervisorStepSnapshot[]
+  updatedAt: number
+}
+
+function trimStepsToLatestTask(steps?: SupervisorStepSnapshot[]): SupervisorStepSnapshot[] | undefined {
+  if (!steps || !steps.length) return steps
+  let start = -1
+  for (let i = 0; i < steps.length; i++) {
+    const s = steps[i]
+    const label = String(s.label || '').toLowerCase()
+    const action = String(s.action || '').toLowerCase()
+    if (
+      label.includes('创建主任务') ||
+      label.includes('create task') ||
+      action.includes('create_task')
+    ) {
+      start = i
+    }
+  }
+  if (start <= 0) return steps
+  return steps.slice(start)
 }
 
 function safeReadSessionMetaMap(): Record<string, any> {
   try {
-    return JSON.parse(localStorage.getItem(STORAGE_SESSION_META_KEY) || '{}')
+    return JSON.parse(
+      localStorage.getItem(STORAGE_SESSION_META_KEY) ||
+        localStorage.getItem('clawpanel-chat-session-meta') ||
+        '{}',
+    )
   } catch {
     return {}
   }
@@ -107,7 +178,11 @@ function safeReadSessionMetaMap(): Record<string, any> {
 
 function getSessionNames(): Record<string, string> {
   try {
-    return JSON.parse(localStorage.getItem(STORAGE_SESSION_NAMES_KEY) || '{}')
+    return JSON.parse(
+      localStorage.getItem(STORAGE_SESSION_NAMES_KEY) ||
+        localStorage.getItem('clawpanel-chat-session-names') ||
+        '{}',
+    )
   } catch {
     return {}
   }
@@ -139,6 +214,22 @@ function getDisplayLabel(key: string) {
   return custom || parseSessionLabel(key)
 }
 
+function persistSessionTitleIfMissing(sessionKey: string, title: string): boolean {
+  const cleanKey = String(sessionKey || '').trim()
+  const cleanTitle = String(title || '').trim()
+  if (!cleanKey || !cleanTitle) return false
+  try {
+    const names = getSessionNames()
+    if (typeof names[cleanKey] === 'string' && names[cleanKey].trim()) return false
+    names[cleanKey] = cleanTitle
+    localStorage.setItem(STORAGE_SESSION_NAMES_KEY, JSON.stringify(names))
+    window.dispatchEvent(new CustomEvent('session-name-updated'))
+    return true
+  } catch {
+    return false
+  }
+}
+
 function formatSessionTime(ts: number) {
   const d = new Date(typeof ts === 'number' && ts < 1e12 ? ts * 1000 : ts)
   if (isNaN(d.getTime())) return ''
@@ -151,23 +242,10 @@ function formatSessionTime(ts: number) {
   return `${(d.getMonth() + 1).toString().padStart(2, '0')}-${d.getDate().toString().padStart(2, '0')}`
 }
 
-function getSessionMessageCount(s: ChatSessionRow): number {
-  if (typeof s.messageCount === 'number') return s.messageCount
-  if (typeof s.messages === 'number') return s.messages
-  return 0
-}
-
-function formatSessionRecordMeta(
-  s: ChatSessionRow,
-  opts: { isSelectedStreaming: boolean },
-): string {
-  const n = getSessionMessageCount(s)
+/** 侧栏会话列表右侧仅展示相对时间 */
+function formatSessionListTime(s: ChatSessionRow): string {
   const ts = s.updatedAt ?? s.lastActivity ?? s.createdAt ?? 0
-  const timeStr = ts ? formatSessionTime(ts) : ''
-  let status = '已完成'
-  if (opts.isSelectedStreaming) status = '进行中'
-  else if (!n) status = '草稿'
-  return timeStr ? `${timeStr} · ${status}` : status
+  return ts ? formatSessionTime(ts) : ''
 }
 
 function safeWriteSessionMetaMap(map: Record<string, any>) {
@@ -304,9 +382,7 @@ export default function ChatApp() {
   const [modeMenuOpen, setModeMenuOpen] = useState(false)
   const [collabBusy, setCollabBusy] = useState(false)
   const [taskSidebarOpen, setTaskSidebarOpen] = useState(false)
-  const [taskSidebarCollapsed, setTaskSidebarCollapsed] = useState(false)
   const openTaskSidebar = useCallback(() => {
-    setTaskSidebarCollapsed(false)
     setTaskSidebarOpen(true)
   }, [])
   const [runManagerOpen, setRunManagerOpen] = useState(false)
@@ -334,11 +410,40 @@ export default function ChatApp() {
   const [newAgentNameDraft, setNewAgentNameDraft] = useState('')
   const [newAgentModalBusy, setNewAgentModalBusy] = useState(false)
   const [newAgentModalError, setNewAgentModalError] = useState<string | null>(null)
+  const [subagentDockTasks, setSubagentDockTasks] = useState<Record<string, SubagentStreamTask>>({})
+  const [sidebarTaskViews, setSidebarTaskViews] = useState<Record<string, SidebarTaskView>>({})
+  const [sidebarSelectedTaskId, setSidebarSelectedTaskId] = useState<string | null>(null)
   const bottomModelRootRef = useRef<HTMLDivElement | null>(null)
   const bottomAgentRootRef = useRef<HTMLDivElement | null>(null)
   const bottomCreativeRootRef = useRef<HTMLDivElement | null>(null)
   const newAgentNameInputRef = useRef<HTMLInputElement | null>(null)
   const [sessionFilter, setSessionFilter] = useState('')
+
+  const upsertSidebarTaskView = useCallback(
+    (
+      task: CollabTaskSnapshot | null | undefined,
+      subtasks?: CollabSubtaskSnapshot[],
+      steps?: SupervisorStepSnapshot[],
+    ) => {
+      const taskId = (task?.taskId || '').trim()
+      if (!taskId || !task) return
+      const normalizedSteps = trimStepsToLatestTask(steps)
+      setSidebarTaskViews((prev) => {
+        const cur = prev[taskId]
+        return {
+          ...prev,
+          [taskId]: {
+            task: { ...(cur?.task || {}), ...task },
+            subtasks: subtasks ?? cur?.subtasks ?? [],
+            steps: normalizedSteps ?? cur?.steps ?? [],
+            updatedAt: Date.now(),
+          },
+        }
+      })
+      setSidebarSelectedTaskId(taskId)
+    },
+    [],
+  )
 
   /** 流式 supervisor 工具一有结果就刷新侧栏（create_task / create_subtask 等） */
   const patchCollabFromStreamTools = useCallback(() => {
@@ -353,20 +458,123 @@ export default function ChatApp() {
       built.subtasks.length > 0 ||
       built.supervisorSteps.length > 0
     if (!hasAny) return
-    setThreadPanelState((prev) => ({
-      ...prev,
-      ...(built.main?.taskId
-        ? { collabTask: { ...(prev.collabTask || {}), ...built.main } as CollabTaskSnapshot }
-        : {}),
-      ...(built.supervisorSteps.length ? { supervisorSteps: built.supervisorSteps } : {}),
-      ...(built.subtasks.length ? { collabSubtasks: built.subtasks } : {}),
-    }))
+    setThreadPanelState((prev) => {
+      const incomingTaskId = (built.main?.taskId || '').trim()
+      const prevTaskId = (prev.collabTask?.taskId || '').trim()
+      const switchedTask = !!incomingTaskId && !!prevTaskId && incomingTaskId !== prevTaskId
+      return {
+        ...prev,
+        ...(built.main?.taskId
+          ? { collabTask: { ...(switchedTask ? {} : prev.collabTask || {}), ...built.main } as CollabTaskSnapshot }
+          : {}),
+        ...(built.supervisorSteps.length
+          ? { supervisorSteps: built.supervisorSteps }
+          : switchedTask
+            ? { supervisorSteps: [] }
+            : {}),
+        ...(built.subtasks.length
+          ? { collabSubtasks: built.subtasks }
+          : switchedTask
+            ? { collabSubtasks: [] }
+            : {}),
+      }
+    })
+    upsertSidebarTaskView(built.main || null, built.subtasks, built.supervisorSteps)
     if (built.main?.taskId || built.subtasks.length > 0 || built.supervisorSteps.length > 0) {
       openTaskSidebar()
     }
-  }, [openTaskSidebar])
+  }, [openTaskSidebar, upsertSidebarTaskView])
 
-  /** 从 MCP/技能等页点侧栏任务记录进入聊天时，shell-aside 写入待选会话 */
+  /** task-progress / 刷新 / 本轮 final 后：合并 collab_phase、bound_*、持久化 supervisor_steps 与主任务快照 */
+  const applyTaskProgressSnapshot = useCallback(
+    (snap: Record<string, unknown> | null) => {
+      if (!snap) return
+      const phase = typeof snap.collab_phase === 'string' ? snap.collab_phase : null
+      const boundTaskId =
+        typeof snap.bound_task_id === 'string' && snap.bound_task_id.trim()
+          ? snap.bound_task_id.trim()
+          : null
+      const boundProjectId =
+        typeof snap.bound_project_id === 'string' && snap.bound_project_id.trim()
+          ? snap.bound_project_id.trim()
+          : null
+      const stepsFromSnap = mapSnapSupervisorSteps(snap.supervisor_steps)
+
+      const mainRaw = snap.main_task
+      if (!mainRaw || typeof mainRaw !== 'object') {
+        setThreadPanelState((prev) => ({
+          ...prev,
+          ...(phase != null ? { collabPhase: phase } : {}),
+          ...(boundTaskId != null ? { boundTaskId } : {}),
+          ...(boundProjectId != null ? { boundProjectId } : {}),
+          ...(stepsFromSnap.length ? { supervisorSteps: stepsFromSnap } : {}),
+        }))
+        return
+      }
+      const main = mainRaw as Record<string, unknown>
+      const taskId = typeof main.taskId === 'string' ? main.taskId.trim() : ''
+      if (!taskId) {
+        setThreadPanelState((prev) => ({
+          ...prev,
+          ...(phase != null ? { collabPhase: phase } : {}),
+          ...(boundTaskId != null ? { boundTaskId } : {}),
+          ...(boundProjectId != null ? { boundProjectId } : {}),
+          ...(stepsFromSnap.length ? { supervisorSteps: stepsFromSnap } : {}),
+        }))
+        return
+      }
+      const subsRaw = snap.subtasks
+      const collabSubtasks: CollabSubtaskSnapshot[] = Array.isArray(subsRaw)
+        ? (subsRaw
+            .map((row) => {
+              const r = row as Record<string, unknown>
+              const sid = typeof r.subtaskId === 'string' ? r.subtaskId.trim() : ''
+              if (!sid) return null
+              const out: CollabSubtaskSnapshot = {
+                subtaskId: sid,
+                ...(typeof r.parentTaskId === 'string' ? { parentTaskId: r.parentTaskId } : {}),
+                ...(typeof r.name === 'string' ? { name: r.name } : {}),
+                ...(typeof r.description === 'string' ? { description: r.description } : {}),
+                ...(typeof r.status === 'string' ? { status: r.status } : {}),
+                ...(typeof r.progress === 'number' ? { progress: r.progress } : {}),
+                ...(typeof r.assignedAgent === 'string' ? { assignedAgent: r.assignedAgent } : {}),
+              }
+              return out
+            })
+            .filter(Boolean) as CollabSubtaskSnapshot[])
+        : []
+
+      const collabTask: CollabTaskSnapshot = {
+        taskId,
+        ...(typeof main.projectId === 'string' && main.projectId.trim()
+          ? { projectId: main.projectId.trim() }
+          : {}),
+        ...(typeof main.name === 'string' ? { name: main.name } : {}),
+        ...(typeof main.status === 'string' ? { status: main.status } : {}),
+        ...(typeof main.progress === 'number' ? { progress: main.progress } : {}),
+      }
+
+      setThreadPanelState((prev) => {
+        const prevTaskId = (prev.collabTask?.taskId || '').trim()
+        const switchedTask = !!prevTaskId && prevTaskId !== taskId
+        return {
+          ...prev,
+          collabPhase: phase ?? prev.collabPhase,
+          boundTaskId: boundTaskId ?? prev.boundTaskId,
+          boundProjectId: boundProjectId ?? prev.boundProjectId,
+          // 如果快照缺少 progress（或进度暂时未返回），避免把旧的 progress 覆盖成空
+          // 只有在 taskId 切换时才重置为新快照的 collabTask。
+          collabTask: switchedTask ? collabTask : { ...(prev.collabTask || {}), ...collabTask },
+          collabSubtasks: switchedTask ? collabSubtasks : collabSubtasks,
+          supervisorSteps: stepsFromSnap.length ? stepsFromSnap : switchedTask ? [] : prev.supervisorSteps,
+        }
+      })
+      upsertSidebarTaskView(collabTask, collabSubtasks, stepsFromSnap)
+    },
+    [upsertSidebarTaskView],
+  )
+
+  /** 从 MCP/技能等页点侧栏会话列表进入聊天时，shell-aside 写入待选会话 */
   useEffect(() => {
     console.log('%c====== [ChatApp] 组件初始化 ======', 'color: #00ff00; font-size: 16px; font-weight: bold;')
     console.log('[ChatApp] 时间:', new Date().toLocaleTimeString())
@@ -378,8 +586,11 @@ export default function ChatApp() {
     console.log('%c====== [ChatApp] 任务系统初始化完成 ======', 'color: #00ff00; font-size: 16px; font-weight: bold;')
     
     try {
-      const pending = sessionStorage.getItem('deerpanel_pending_shell_session')
+      const pending =
+        sessionStorage.getItem('ytpanel_pending_shell_session') ||
+        sessionStorage.getItem('deerpanel_pending_shell_session')
       if (pending) {
+        sessionStorage.removeItem('ytpanel_pending_shell_session')
         sessionStorage.removeItem('deerpanel_pending_shell_session')
         setSelectedSessionKey(pending)
       }
@@ -832,6 +1043,9 @@ export default function ChatApp() {
     
     streamRef.current = emptyStream()
     seenRunIdsRef.current = new Set()
+    setSubagentDockTasks({})
+    setSidebarTaskViews({})
+    setSidebarSelectedTaskId(null)
     setThreadPanelState(emptyThreadPanel())
     setHasReceivedTodos(false)  // 重置 todos 接收标志
     // 清除新会话的活跃时间，让它立即过期
@@ -847,57 +1061,6 @@ export default function ChatApp() {
     let cancelled = false
     const sk = selectedSessionKey
     if (!sk) return
-
-    const applySnap = (snap: Record<string, unknown> | null) => {
-      if (cancelled || !snap) return
-      const mainRaw = snap.main_task
-      if (!mainRaw || typeof mainRaw !== 'object') return
-      const main = mainRaw as Record<string, unknown>
-      const taskId = typeof main.taskId === 'string' ? main.taskId.trim() : ''
-      if (!taskId) return
-      const subsRaw = snap.subtasks
-      const collabSubtasks: CollabSubtaskSnapshot[] = Array.isArray(subsRaw)
-        ? (subsRaw
-            .map((row) => {
-              const r = row as Record<string, unknown>
-              const sid = typeof r.subtaskId === 'string' ? r.subtaskId.trim() : ''
-              if (!sid) return null
-              const out: CollabSubtaskSnapshot = {
-                subtaskId: sid,
-                ...(typeof r.parentTaskId === 'string' ? { parentTaskId: r.parentTaskId } : {}),
-                ...(typeof r.name === 'string' ? { name: r.name } : {}),
-                ...(typeof r.description === 'string' ? { description: r.description } : {}),
-                ...(typeof r.status === 'string' ? { status: r.status } : {}),
-                ...(typeof r.progress === 'number' ? { progress: r.progress } : {}),
-                ...(typeof r.assignedAgent === 'string' ? { assignedAgent: r.assignedAgent } : {}),
-              }
-              return out
-            })
-            .filter(Boolean) as CollabSubtaskSnapshot[])
-        : []
-
-      const collabTask: CollabTaskSnapshot = {
-        taskId,
-        ...(typeof main.projectId === 'string' && main.projectId.trim()
-          ? { projectId: main.projectId.trim() }
-          : {}),
-        ...(typeof main.name === 'string' ? { name: main.name } : {}),
-        ...(typeof main.status === 'string' ? { status: main.status } : {}),
-        ...(typeof main.progress === 'number' ? { progress: main.progress } : {}),
-      }
-
-      setThreadPanelState((prev) => ({
-        ...prev,
-        collabTask,
-        collabSubtasks,
-        supervisorSteps: [] as SupervisorStepSnapshot[],
-      }))
-
-      // 刷新恢复：只要有主任务或子任务就展开侧栏（collab_phase 常为 idle，不能依赖「非 idle 才打开」）
-      if (taskId || collabSubtasks.length > 0) {
-        openTaskSidebar()
-      }
-    }
 
     const mergeTaskFromApi = (taskId: string) => {
       void tasksAPI
@@ -939,10 +1102,18 @@ export default function ChatApp() {
                 ? t.project_id.trim()
                 : ''
           if (cancelled) return
+          const snapTask: CollabTaskSnapshot = {
+            taskId: resolvedId,
+            projectId: projRaw || undefined,
+            name: typeof t.name === 'string' ? t.name : undefined,
+            status: typeof t.status === 'string' ? t.status : undefined,
+            progress: typeof t.progress === 'number' ? t.progress : undefined,
+          }
+          upsertSidebarTaskView(snapTask, collabSubtasks, undefined)
           setThreadPanelState((prev) => ({
             ...prev,
             collabTask: {
-              ...(prev.collabTask || {}),
+              ...(((prev.collabTask?.taskId || '').trim() !== resolvedId) ? {} : (prev.collabTask || {})),
               taskId: resolvedId,
               projectId: projRaw || prev.collabTask?.projectId,
               name:
@@ -958,7 +1129,8 @@ export default function ChatApp() {
                   ? t.progress
                   : prev.collabTask?.progress,
             },
-            collabSubtasks: Array.isArray(rawSubs) ? collabSubtasks : prev.collabSubtasks,
+            collabSubtasks: Array.isArray(rawSubs) ? collabSubtasks : ((prev.collabTask?.taskId || '').trim() !== resolvedId ? [] : prev.collabSubtasks),
+            supervisorSteps: (prev.collabTask?.taskId || '').trim() !== resolvedId ? [] : prev.supervisorSteps,
           }))
         })
         .catch(() => {})
@@ -973,7 +1145,7 @@ export default function ChatApp() {
           string,
           unknown
         > | null
-        applySnap(snap)
+        if (!cancelled) applyTaskProgressSnapshot(snap)
         if (snap && typeof snap === 'object') {
           const mainRaw = snap.main_task
           if (mainRaw && typeof mainRaw === 'object') {
@@ -996,7 +1168,7 @@ export default function ChatApp() {
       window.clearTimeout(t1)
       window.clearTimeout(t2)
     }
-  }, [selectedSessionKey, historyLoading])
+  }, [selectedSessionKey, historyLoading, applyTaskProgressSnapshot, upsertSidebarTaskView])
 
   useEffect(() => {
     if (unsubRef.current) {
@@ -1025,13 +1197,13 @@ export default function ChatApp() {
         const prevTitle = threadPanelState.title
         const newTitle = typeof p.title === 'string' && p.title.trim() ? p.title.trim() : null
         const newTodos = Array.isArray(p.todos) ? p.todos : []
-        
+
         // 自动打开任务侧边栏：当首次收到 todos 且不为空时
         if (newTodos.length > 0 && !hasReceivedTodos) {
           setHasReceivedTodos(true)
           openTaskSidebar()
         }
-        
+
         setThreadPanelState((prev) => ({
           title: newTitle,
           todos: newTodos,
@@ -1047,17 +1219,13 @@ export default function ChatApp() {
           collabTask: prev.collabTask,
           collabSubtasks: prev.collabSubtasks,
           supervisorSteps: prev.supervisorSteps,
+          collabPhase: prev.collabPhase,
+          boundTaskId: prev.boundTaskId,
+          boundProjectId: prev.boundProjectId,
         }))
-        // 如果是新会话（sessionKey 包含 new-）且之前没有标题，现在有标题了，自动保存
-        if (NEW_DRAFT_SESSION_KEY_RE.test(selectedSessionKey) && !prevTitle && newTitle) {
-          try {
-            const names = JSON.parse(localStorage.getItem('clawpanel-chat-session-names') || '{}')
-            names[selectedSessionKey] = newTitle
-            localStorage.setItem('clawpanel-chat-session-names', JSON.stringify(names))
-            window.dispatchEvent(new CustomEvent('session-name-updated'))
-          } catch {
-            // ignore
-          }
+        // 首次拿到标题时自动写入会话名（不覆盖已有手动命名）
+        if (!prevTitle && newTitle) {
+          persistSessionTitleIfMissing(selectedSessionKey, newTitle)
         }
         return
       }
@@ -1149,6 +1317,51 @@ export default function ChatApp() {
         if (!S.startTs) S.startTs = Date.now()
         scheduleBump()
         patchCollabFromStreamTools()
+        return
+      }
+
+      if (state === 'subtask') {
+        const ev = payload.subtaskEvent
+        if (ev && typeof ev === 'object' && !Array.isArray(ev)) {
+          const evObj = ev as Record<string, unknown>
+          if (!S.subagentTasks) S.subagentTasks = {}
+          mergeSubagentStreamEvent(S.subagentTasks, evObj)
+          setSubagentDockTasks((prev) => {
+            const next = { ...prev }
+            mergeSubagentStreamEvent(next, evObj)
+            return next
+          })
+          const collabSid =
+            typeof evObj.collab_subtask_id === 'string'
+              ? evObj.collab_subtask_id.trim()
+              : typeof evObj.collabSubtaskId === 'string'
+                ? evObj.collabSubtaskId.trim()
+                : ''
+          const nextStatus = collabStatusFromSubagentStreamEv(evObj)
+          if (collabSid && nextStatus) {
+            setThreadPanelState((prev) => ({
+              ...prev,
+              collabSubtasks: patchCollabSubtasksById(prev.collabSubtasks || [], collabSid, nextStatus),
+            }))
+            setSidebarTaskViews((prev) => {
+              let touched = false
+              const out = { ...prev }
+              for (const k of Object.keys(out)) {
+                const v = out[k]
+                if (!v?.subtasks?.some((s) => s.subtaskId === collabSid)) continue
+                const patched = patchCollabSubtasksById(v.subtasks || [], collabSid, nextStatus)
+                if (patched !== v.subtasks) {
+                  out[k] = { ...v, subtasks: patched, updatedAt: Date.now() }
+                  touched = true
+                }
+              }
+              return touched ? out : prev
+            })
+          }
+          if (!S.runId && runId) S.runId = runId
+          if (!S.startTs) S.startTs = Date.now()
+          scheduleBump()
+        }
         return
       }
 
@@ -1252,6 +1465,8 @@ export default function ChatApp() {
         void hosted.hostedCapture.onChatFinal(payload, finalText || textOut || S.text || '')
 
         // 添加新消息到 rows
+        const subagentSnap =
+          S.subagentTasks && Object.keys(S.subagentTasks).length > 0 ? { ...S.subagentTasks } : undefined
         setRows((r) => {
           const newRows = [
             ...r,
@@ -1267,6 +1482,7 @@ export default function ChatApp() {
               timestamp: Date.now(),
               durationStr: durStr || undefined,
               tokenStr: tokenStr || undefined,
+              ...(subagentSnap ? { subagentTasks: subagentSnap } : {}),
             },
           ]
           return newRows
@@ -1280,6 +1496,7 @@ export default function ChatApp() {
           supervisorSteps: SupervisorStepSnapshot[]
         }
         const collabSnap = built.main
+        upsertSidebarTaskView(collabSnap || null, built.subtasks, built.supervisorSteps)
         if (collabSnap?.taskId) {
           openTaskSidebar()
           void tasksAPI
@@ -1311,13 +1528,35 @@ export default function ChatApp() {
           activityDetail: '',
           reasoningPreview: null,
           clarification: null,
+          collabPhase: prev.collabPhase,
+          boundTaskId: prev.boundTaskId,
+          boundProjectId: prev.boundProjectId,
           collabTask:
             collabSnap?.taskId != null
               ? { ...(prev.collabTask || {}), ...collabSnap }
               : prev.collabTask,
-          collabSubtasks: built.subtasks.length ? built.subtasks : prev.collabSubtasks,
-          supervisorSteps: built.supervisorSteps.length ? built.supervisorSteps : prev.supervisorSteps,
+          collabSubtasks:
+            collabSnap?.taskId && (prev.collabTask?.taskId || '').trim() !== collabSnap.taskId
+              ? built.subtasks
+              : built.subtasks.length
+                ? built.subtasks
+                : prev.collabSubtasks,
+          supervisorSteps:
+            collabSnap?.taskId && (prev.collabTask?.taskId || '').trim() !== collabSnap.taskId
+              ? built.supervisorSteps
+              : built.supervisorSteps.length
+                ? built.supervisorSteps
+                : prev.supervisorSteps,
         }))
+        const skFinal = sessionRef.current
+        if (getSessionCollabModeFromMeta(skFinal)) {
+          const tid = wsClient.getSessionThreadId(skFinal)
+          if (tid) {
+            void wsClient.getTaskProgressSnapshot(tid).then((snap: Record<string, unknown> | null) => {
+              applyTaskProgressSnapshot(snap)
+            })
+          }
+        }
         setIsSending(false)
         scheduleBump()
         void refreshSessions()
@@ -1351,6 +1590,7 @@ export default function ChatApp() {
         }
         setRows((r) => [...r, { role: 'system' as const, text: '生成已停止', timestamp: Date.now() }])
         streamRef.current = emptyStream()
+        setSubagentDockTasks({})
         setThreadPanelState(emptyThreadPanel())
         setIsSending(false)
         scheduleBump()
@@ -1377,7 +1617,19 @@ export default function ChatApp() {
         unsubRef.current = null
       }
     }
-  }, [scheduleBump, setRows, refreshSessions, patchCollabFromStreamTools])
+  }, [
+    scheduleBump,
+    setRows,
+    refreshSessions,
+    patchCollabFromStreamTools,
+    applyTaskProgressSnapshot,
+    upsertSidebarTaskView,
+    hasReceivedTodos,
+    isSending,
+    openTaskSidebar,
+    selectedSessionKey,
+    threadPanelState.title,
+  ])
 
   const streaming = !!(
     streamRef.current.text ||
@@ -1386,30 +1638,35 @@ export default function ChatApp() {
     streamRef.current.images?.length ||
     streamRef.current.videos?.length ||
     streamRef.current.audios?.length ||
-    streamRef.current.files?.length
+    streamRef.current.files?.length ||
+    Object.keys(streamRef.current.subagentTasks || {}).length > 0
   )
-  const hasTodos = Array.isArray(threadPanelState.todos) && threadPanelState.todos.length > 0
-  const hasCollabTask = !!(threadPanelState.collabTask?.taskId && String(threadPanelState.collabTask.taskId).trim())
-  const hasCollabSidebar =
-    hasCollabTask ||
-    (threadPanelState.collabSubtasks?.length ?? 0) > 0 ||
-    (threadPanelState.supervisorSteps?.length ?? 0) > 0
+  const sidebarHistory = useMemo(
+    () =>
+      Object.values(sidebarTaskViews)
+        .sort((a, b) => b.updatedAt - a.updatedAt)
+        .map((x) => x.task),
+    [sidebarTaskViews],
+  )
+  const sidebarActiveTaskId = sidebarSelectedTaskId || sidebarHistory[0]?.taskId || threadPanelState.collabTask?.taskId || null
+  const sidebarActiveView = sidebarActiveTaskId ? sidebarTaskViews[sidebarActiveTaskId] : undefined
+  const runManagerTaskNames = useMemo(
+    () =>
+      sidebarHistory.map((t) => ({
+        taskId: t.taskId,
+        name: (t.name || '').trim() || t.taskId,
+      })),
+    [sidebarHistory],
+  )
 
   const shellSyncPayload = useMemo(() => {
-    const rows = filteredSessions.map((s) => {
-      const mode = getSessionModeFromMeta(s.sessionKey)
-      const modePill = mode === 'pro' ? null : modeLabel(mode)
-      return {
-        sessionKey: s.sessionKey,
-        title: getDisplayLabel(s.sessionKey),
-        meta: formatSessionRecordMeta(s, {
-          isSelectedStreaming: selectedSessionKey === s.sessionKey && (streaming || isSending),
-        }),
-        active: selectedSessionKey === s.sessionKey,
-        modePill,
-        canDelete: s.sessionKey !== CHAT_MAIN_SESSION_KEY,
-      }
-    })
+    const rows = filteredSessions.map((s) => ({
+      sessionKey: s.sessionKey,
+      title: getDisplayLabel(s.sessionKey),
+      time: formatSessionListTime(s),
+      active: selectedSessionKey === s.sessionKey,
+      canDelete: s.sessionKey !== CHAT_MAIN_SESSION_KEY,
+    }))
     return {
       listLoading,
       sessionFilter,
@@ -1417,16 +1674,7 @@ export default function ChatApp() {
       newTaskActive: NEW_DRAFT_SESSION_KEY_RE.test(selectedSessionKey),
       rows,
     }
-  }, [
-    filteredSessions,
-    listLoading,
-    sessionFilter,
-    moreMenuKey,
-    selectedSessionKey,
-    streaming,
-    isSending,
-    sessionNamesTick,
-  ])
+  }, [filteredSessions, listLoading, sessionFilter, moreMenuKey, selectedSessionKey, sessionNamesTick])
 
   useEffect(() => {
     try {
@@ -1434,7 +1682,7 @@ export default function ChatApp() {
     } catch {
       /* ignore */
     }
-    window.dispatchEvent(new CustomEvent('deerpanel:chat-sidebar-sync', { detail: shellSyncPayload }))
+    window.dispatchEvent(new CustomEvent('ytpanel:chat-sidebar-sync', { detail: shellSyncPayload }))
     return () => {
       let detail: typeof shellSyncPayload | null = null
       try {
@@ -1443,7 +1691,7 @@ export default function ChatApp() {
       } catch {
         detail = null
       }
-      window.dispatchEvent(new CustomEvent('deerpanel:chat-sidebar-sync', { detail }))
+      window.dispatchEvent(new CustomEvent('ytpanel:chat-sidebar-sync', { detail }))
     }
   }, [shellSyncPayload])
 
@@ -1453,6 +1701,9 @@ export default function ChatApp() {
     if (!selectedSessionKey) return
     // 更新活跃时间，防止状态被过期
     lastActivityRef.current[selectedSessionKey] = Date.now()
+
+    setSubagentDockTasks({})
+    if (streamRef.current.subagentTasks) streamRef.current.subagentTasks = {}
     
     setIsSending(true)
     const userRow: DisplayRow = {
@@ -1515,7 +1766,8 @@ export default function ChatApp() {
       toast('主会话不能删除', 'info')
       return
     }
-    if (!confirm('删除此会话？')) return
+    const yes = await showConfirm('删除此会话？')
+    if (!yes) return
     try {
       const { api } = await import('../lib/tauri-api.js')
       await api.chatSessionsDelete(targetKey)
@@ -1554,19 +1806,19 @@ export default function ChatApp() {
       if (!k) return
       setMoreMenuKey((cur) => (cur === k ? null : k))
     }
-    window.addEventListener('deerpanel:shell-select-session', onSelect as EventListener)
-    window.addEventListener('deerpanel:shell-new-session', onNew)
-    window.addEventListener('deerpanel:shell-session-filter', onFilter as EventListener)
-    window.addEventListener('deerpanel:shell-delete-session', onDelete as EventListener)
-    window.addEventListener('deerpanel:shell-refresh-session', onRefresh as EventListener)
-    window.addEventListener('deerpanel:shell-more-toggle', onMoreToggle as EventListener)
+    window.addEventListener('ytpanel:shell-select-session', onSelect as EventListener)
+    window.addEventListener('ytpanel:shell-new-session', onNew)
+    window.addEventListener('ytpanel:shell-session-filter', onFilter as EventListener)
+    window.addEventListener('ytpanel:shell-delete-session', onDelete as EventListener)
+    window.addEventListener('ytpanel:shell-refresh-session', onRefresh as EventListener)
+    window.addEventListener('ytpanel:shell-more-toggle', onMoreToggle as EventListener)
     return () => {
-      window.removeEventListener('deerpanel:shell-select-session', onSelect as EventListener)
-      window.removeEventListener('deerpanel:shell-new-session', onNew)
-      window.removeEventListener('deerpanel:shell-session-filter', onFilter as EventListener)
-      window.removeEventListener('deerpanel:shell-delete-session', onDelete as EventListener)
-      window.removeEventListener('deerpanel:shell-refresh-session', onRefresh as EventListener)
-      window.removeEventListener('deerpanel:shell-more-toggle', onMoreToggle as EventListener)
+      window.removeEventListener('ytpanel:shell-select-session', onSelect as EventListener)
+      window.removeEventListener('ytpanel:shell-new-session', onNew)
+      window.removeEventListener('ytpanel:shell-session-filter', onFilter as EventListener)
+      window.removeEventListener('ytpanel:shell-delete-session', onDelete as EventListener)
+      window.removeEventListener('ytpanel:shell-refresh-session', onRefresh as EventListener)
+      window.removeEventListener('ytpanel:shell-more-toggle', onMoreToggle as EventListener)
     }
   }, [handleNewSession, handleDeleteSession])
 
@@ -1592,23 +1844,6 @@ export default function ChatApp() {
                   <line x1="3" y1="6" x2="21" y2="6" />
                   <line x1="3" y1="12" x2="21" y2="12" />
                   <line x1="3" y1="18" x2="21" y2="18" />
-                </svg>
-              </button>
-              <button
-                type="button"
-                className="react-chat-toggle-sidebar-btn"
-                title="任务进度"
-                onClick={() =>
-                  setTaskSidebarOpen((v) => {
-                    if (!v) setTaskSidebarCollapsed(false)
-                    return !v
-                  })
-                }
-                disabled={!hasTodos && !threadPanelState.title && !hasCollabSidebar}
-              >
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
-                  <path d="M9 11l3 3L22 4" />
-                  <path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11" />
                 </svg>
               </button>
               <button
@@ -1644,6 +1879,7 @@ export default function ChatApp() {
               streamTick={streamTick}
               historyLoading={historyLoading}
               layoutKey={hosted.hosted.panelOpen ? 1 : 0}
+              inlineSubagentTasks={subagentDockTasks}
             />
           </div>
           {streaming || isSending ? (
@@ -1654,26 +1890,33 @@ export default function ChatApp() {
                   {(() => {
                     const d = (threadPanelState.activityDetail || '').trim()
                     const k = threadPanelState.activityKind
-                    if (d && (k === 'tools' || k === 'thinking')) return `正在处理 · ${d}`
+                    const hideGenericSupervisor =
+                      k === 'tools' &&
+                      (d.startsWith('调用：supervisor') || d.toLowerCase().includes('supervisor'))
+                    if (d && (k === 'tools' || k === 'thinking') && !hideGenericSupervisor) return `正在处理 · ${d}`
                     return '正在处理中'
                   })()}
                 </span>
               </div>
             </div>
           ) : null}
-          <ThreadPanel state={threadPanelState} sessionKey={selectedSessionKey} />
+          <ThreadPanel state={threadPanelState} />
           <TaskSidebar
             state={threadPanelState}
+            taskHistory={sidebarHistory}
+            selectedTaskId={sidebarActiveTaskId}
+            activeTaskSubtasks={sidebarActiveView?.subtasks}
+            activeTaskSteps={sidebarActiveView?.steps}
             isOpen={taskSidebarOpen}
-            collapsed={taskSidebarCollapsed}
-            onToggleCollapse={() => setTaskSidebarCollapsed((c) => !c)}
-            onClose={() => {
-              setTaskSidebarOpen(false)
-              setTaskSidebarCollapsed(false)
-            }}
           />
           <RunManager
             isOpen={runManagerOpen}
+            taskNames={runManagerTaskNames}
+            selectedTaskId={sidebarActiveTaskId}
+            onSelectTaskId={(taskId) => {
+              setSidebarSelectedTaskId(taskId)
+              setTaskSidebarOpen(true)
+            }}
             onClose={() => setRunManagerOpen(false)}
           />
           <HostedAgentPanel

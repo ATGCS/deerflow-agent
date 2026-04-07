@@ -1,6 +1,6 @@
 {
   "title": "Logs",
-  "desc": "Ver logs do serviço DeerPanel",
+  "desc": "Ver logs do serviço YTPanel",
   "tabGateway": "Gateway",
   "tabGatewayErr": "Erros Gateway",
   "tabGuardian": "Guardian",

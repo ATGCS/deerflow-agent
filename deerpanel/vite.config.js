@@ -12,13 +12,20 @@ const pkg = JSON.parse(fs.readFileSync(new URL('./package.json', import.meta.url
 // 注意：Gateway 默认端口是 18789，不是 18790
 let gatewayPort = 18789
 try {
-  const cfgPath = path.join(homedir(), '.deerpanel', 'deerpanel.json')
-  if (fs.existsSync(cfgPath)) {
+  const home = homedir()
+  const cfgCandidates = [
+    path.join(home, '.openclaw', 'ytpanel.json'),
+    path.join(home, '.openclaw', 'clawpanel.json'),
+    path.join(home, '.ytpanel', 'ytpanel.json'),
+    path.join(home, '.deerpanel', 'deerpanel.json'),
+  ]
+  for (const cfgPath of cfgCandidates) {
+    if (!fs.existsSync(cfgPath)) continue
     const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'))
-    // 端口必须 > 0 且 < 65536
     const port = cfg?.gateway?.port
     if (port && typeof port === 'number' && port > 0 && port < 65536) {
       gatewayPort = port
+      break
     }
   }
 } catch (e) {

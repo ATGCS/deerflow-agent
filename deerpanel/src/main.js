@@ -1,5 +1,5 @@
 /**
- * DeerPanel 入口
+ * YTPanel 入口
  */
 import { registerRoute, initRouter, navigate, setDefaultRoute } from './router.js'
 import { initShellAside, openMobileShellAside } from './components/shell-aside.js'
@@ -33,12 +33,12 @@ const isTauri = !!window.__TAURI_INTERNALS__
 
 async function checkAuth() {
   if (isTauri) {
-    // 桌面端：读 clawpanel.json，检查密码配置
+    // 桌面端：读 ytpanel.json（旧版 clawpanel.json），检查密码配置
     try {
       const { api } = await import('./lib/tauri-api.js')
       const cfg = await api.readPanelConfig()
       if (!cfg.accessPassword) return { ok: true }
-      if (sessionStorage.getItem('clawpanel_authed') === '1') return { ok: true }
+      if (sessionStorage.getItem('ytpanel_authed') === '1' || sessionStorage.getItem('clawpanel_authed') === '1') return { ok: true }
       // 默认密码：直接传给登录页，避免二次读取
       const defaultPw = (cfg.mustChangePassword && cfg.accessPassword) ? cfg.accessPassword : null
       return { ok: false, defaultPw }
@@ -76,7 +76,7 @@ function showBackendDownOverlay() {
       ${_logoSvg}
       <div class="login-title" style="color:var(--error,#ef4444)">后端未启动</div>
       <div class="login-desc" style="line-height:1.8">
-        DeerPanel 后端服务未运行，无法获取真实数据。<br>
+        YTPanel 后端服务未运行，无法获取真实数据。<br>
         <span style="font-size:12px;color:var(--text-tertiary)">请在服务器上启动后端服务后刷新页面。</span>
       </div>
       <div style="background:var(--bg-tertiary);border-radius:var(--radius-md,8px);padding:14px 18px;margin:16px 0;text-align:left;font-family:var(--font-mono,monospace);font-size:12px;line-height:1.8;user-select:all;color:var(--text-secondary)">
@@ -155,7 +155,7 @@ function showLoginOverlay(defaultPw) {
   overlay.innerHTML = `
     <div class="login-card">
       ${_logoSvg}
-      <div class="login-title">DeerPanel</div>
+      <div class="login-title">YTPanel</div>
       <div class="login-desc">${hasDefault
         ? '首次使用，默认密码已自动填充<br><span style="font-size:12px;color:#6366f1;font-weight:600">登录后请前往「安全设置」修改密码</span>'
         : (isTauri ? '应用已锁定，请输入密码' : '请输入访问密码')}</div>
@@ -172,8 +172,8 @@ function showLoginOverlay(defaultPw) {
         <summary style="font-size:11px;color:#aaa;cursor:pointer;list-style:none;user-select:none">忘记密码？</summary>
         <div style="margin-top:8px;font-size:11px;color:#888;line-height:1.8;text-align:left;background:rgba(0,0,0,.03);border-radius:8px;padding:10px 14px">
           ${isTauri
-            ? '删除配置文件中的 <code style="background:rgba(99,102,241,.1);padding:1px 5px;border-radius:3px;font-size:10px">accessPassword</code> 字段即可重置：<br><code style="background:rgba(99,102,241,.1);padding:2px 6px;border-radius:3px;font-size:10px;word-break:break-all">~/.openclaw/clawpanel.json</code>'
-            : '编辑服务器上的配置文件，删除 <code style="background:rgba(99,102,241,.1);padding:1px 5px;border-radius:3px;font-size:10px">accessPassword</code> 字段后重启服务：<br><code style="background:rgba(99,102,241,.1);padding:2px 6px;border-radius:3px;font-size:10px;word-break:break-all">~/.openclaw/clawpanel.json</code>'
+            ? '删除配置文件中的 <code style="background:rgba(99,102,241,.1);padding:1px 5px;border-radius:3px;font-size:10px">accessPassword</code> 字段即可重置：<br><code style="background:rgba(99,102,241,.1);padding:2px 6px;border-radius:3px;font-size:10px;word-break:break-all">~/.openclaw/ytpanel.json</code>（旧版可能为 clawpanel.json）'
+            : '编辑服务器上的配置文件，删除 <code style="background:rgba(99,102,241,.1);padding:1px 5px;border-radius:3px;font-size:10px">accessPassword</code> 字段后重启服务：<br><code style="background:rgba(99,102,241,.1);padding:2px 6px;border-radius:3px;font-size:10px;word-break:break-all">~/.openclaw/ytpanel.json</code>（旧版可能为 clawpanel.json）'
           }
         </div>
       </details>` : ''}
@@ -225,7 +225,7 @@ function showLoginOverlay(defaultPw) {
             btn.textContent = '登 录'
             return
           }
-          sessionStorage.setItem('clawpanel_authed', '1')
+          sessionStorage.setItem('ytpanel_authed', '1')
           // 同步建立 web session（WEB_ONLY_CMDS 需要 cookie 认证）
           try {
             await fetch('/__api/auth_login', {
@@ -237,7 +237,7 @@ function showLoginOverlay(defaultPw) {
           overlay.classList.add('hide')
           setTimeout(() => overlay.remove(), 400)
           if (cfg.accessPassword === '123456') {
-            sessionStorage.setItem('clawpanel_must_change_pw', '1')
+            sessionStorage.setItem('ytpanel_must_change_pw', '1')
           }
           resolve()
         } else {
@@ -263,7 +263,7 @@ function showLoginOverlay(defaultPw) {
           overlay.classList.add('hide')
           setTimeout(() => overlay.remove(), 400)
           if (data.mustChangePassword || data.defaultPassword === '123456') {
-            sessionStorage.setItem('clawpanel_must_change_pw', '1')
+            sessionStorage.setItem('ytpanel_must_change_pw', '1')
           }
           resolve()
         }
@@ -277,7 +277,7 @@ function showLoginOverlay(defaultPw) {
 }
 
 // 全局 401 拦截：API 返回 401 时弹出登录
-window.__clawpanel_show_login = async function() {
+window.__ytpanel_show_login = async function() {
   if (document.getElementById('login-overlay')) return
   await showLoginOverlay()
   location.reload()
@@ -341,7 +341,7 @@ async function boot() {
     <button class="mobile-hamburger" id="btn-mobile-menu">
       <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
     </button>
-    <span class="mobile-topbar-title">DeerPanel</span>
+    <span class="mobile-topbar-title">YTPanel</span>
   `
   topbar.querySelector('.mobile-hamburger').addEventListener('click', openMobileShellAside)
   mainCol.prepend(topbar)
@@ -544,7 +544,7 @@ async function checkGlobalUpdate() {
     if (!ver) return
 
     // 用户已忽略过该版本，不再打扰
-    const dismissed = sessionStorage.getItem('clawpanel_update_dismissed')
+    const dismissed = sessionStorage.getItem('ytpanel_update_dismissed') || sessionStorage.getItem('clawpanel_update_dismissed')
     if (dismissed === ver) return
 
     const changelog = info.manifest?.changelog || ''
@@ -555,14 +555,14 @@ async function checkGlobalUpdate() {
       <div class="update-banner-content">
         <div class="update-banner-text">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-          <span class="update-banner-ver">DeerPanel v${ver} 可用</span>
+          <span class="update-banner-ver">YTPanel v${ver} 可用</span>
           ${changelog ? `<span class="update-banner-changelog">· ${changelog}</span>` : ''}
         </div>
         ${isWeb
           ? `<button class="btn btn-sm" id="btn-update-show-cmd">更新方法</button>
-             <a class="btn btn-sm" href="https://github.com/qingchencloud/clawpanel/releases" target="_blank" rel="noopener">Release Notes</a>`
+             <a class="btn btn-sm" href="https://github.com/qingchencloud/deerpanel/releases" target="_blank" rel="noopener">Release Notes</a>`
           : `<button class="btn btn-sm" id="btn-update-hot">热更新</button>
-             <a class="btn btn-sm" href="https://github.com/qingchencloud/clawpanel/releases" target="_blank" rel="noopener">完整安装包</a>`
+             <a class="btn btn-sm" href="https://github.com/qingchencloud/deerpanel/releases" target="_blank" rel="noopener">完整安装包</a>`
         }
         <button class="update-banner-close" id="btn-update-dismiss" title="忽略此版本">✕</button>
       </div>
@@ -570,7 +570,7 @@ async function checkGlobalUpdate() {
 
     // 关闭按钮：记住忽略的版本
     banner.querySelector('#btn-update-dismiss')?.addEventListener('click', () => {
-      sessionStorage.setItem('clawpanel_update_dismissed', ver)
+      sessionStorage.setItem('ytpanel_update_dismissed', ver)
       banner.classList.add('update-banner-hidden')
     })
 
@@ -583,14 +583,14 @@ async function checkGlobalUpdate() {
           <div class="modal-title">更新到 v${ver}</div>
           <div style="font-size:var(--font-size-sm);line-height:1.8">
             <p style="margin-bottom:12px">在服务器上执行以下命令：</p>
-            <pre style="background:var(--bg-tertiary);padding:12px 16px;border-radius:var(--radius-md);font-family:var(--font-mono);font-size:var(--font-size-xs);overflow-x:auto;white-space:pre-wrap;user-select:all">cd /opt/clawpanel
+            <pre style="background:var(--bg-tertiary);padding:12px 16px;border-radius:var(--radius-md);font-family:var(--font-mono);font-size:var(--font-size-xs);overflow-x:auto;white-space:pre-wrap;user-select:all">cd /opt/ytpanel
 git pull origin main
 npm install
 npm run build
-sudo systemctl restart clawpanel</pre>
+sudo systemctl restart ytpanel</pre>
             <p style="margin-top:12px;color:var(--text-tertiary);font-size:var(--font-size-xs)">
               如果 git pull 失败，可先执行 <code style="background:var(--bg-tertiary);padding:2px 6px;border-radius:4px">git checkout -- .</code> 丢弃本地修改。<br>
-              路径请替换为实际的 DeerPanel 安装目录。
+              路径请替换为实际的 YTPanel 安装目录。
             </p>
           </div>
           <div class="modal-actions">
@@ -660,7 +660,7 @@ function startUpdateChecker() {
         <div style="font-size:18px;font-weight:600;margin-bottom:8px;color:#18181b">页面加载失败</div>
         <div style="font-size:13px;color:#71717a;max-width:400px;line-height:1.6;margin-bottom:16px">${String(bootErr?.message || bootErr).replace(/</g,'&lt;')}</div>
         <button onclick="location.reload()" style="padding:8px 20px;border-radius:8px;border:none;background:#6366f1;color:#fff;font-size:13px;cursor:pointer">刷新重试</button>
-        <div style="margin-top:24px;font-size:11px;color:#a1a1aa">如果问题持续出现，请尝试重新安装 DeerPanel<br>或在 <a href="https://github.com/qingchencloud/clawpanel/issues" target="_blank" style="color:#6366f1">GitHub Issues</a> 反馈</div>
+        <div style="margin-top:24px;font-size:11px;color:#a1a1aa">如果问题持续出现，请尝试重新安装 YTPanel<br>或在 <a href="https://github.com/qingchencloud/deerpanel/issues" target="_blank" style="color:#6366f1">GitHub Issues</a> 反馈</div>
       </div>`
   }
   startUpdateChecker()

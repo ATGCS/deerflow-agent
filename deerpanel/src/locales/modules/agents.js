@@ -2,7 +2,7 @@ import { _ } from '../helper.js'
 
 export default {
   title: _('Agent 管理', 'Agents', '', 'Agent 管理', 'Agent 관�?', 'Quản lý Agent', 'Gestión de Agentes', 'Gestão de Agentes', 'Управление агентами', 'Gestion des Agents', 'Agenten-Verwaltung'),
-  desc: _('创建和管�?DeerPanel Agent，配置身份、模型和工作�?, 'Create and manage DeerPanel Agents, configure identity, model and workspace', '建立和管�?DeerPanel Agent，設定身份、模型和工作區', 'DeerPanel Agent の作成と管理、ID・モデル・ワークスペースの設�?, 'DeerPanel Agent 생성 �?관�? ID·모델·워크스페이스 설정', 'Tạo và quản lý DeerPanel Agent', 'Crear y gestionar DeerPanel Agents', 'Criar e gerenciar DeerPanel Agents', 'Создание и управление агентами DeerPanel', 'Créer et gérer les Agents DeerPanel', 'DeerPanel-Agenten erstellen und verwalten'),
+  desc: _('创建和管�?YTPanel Agent，配置身份、模型和工作�?, 'Create and manage YTPanel Agents, configure identity, model and workspace', '建立和管�?YTPanel Agent，設定身份、模型和工作區', 'YTPanel Agent の作成と管理、ID・モデル・ワークスペースの設�?, 'YTPanel Agent 생성 �?관�? ID·모델·워크스페이스 설정', 'Tạo và quản lý YTPanel Agent', 'Crear y gestionar YTPanel Agents', 'Criar e gerenciar YTPanel Agents', 'Создание и управление агентами YTPanel', 'Créer et gérer les Agents YTPanel', 'YTPanel-Agenten erstellen und verwalten'),
   addAgent: _('+ 新建 Agent', '+ New Agent', '', '+ 新規 Agent', '+ �?Agent', '+ Agent mới', '+ Nuevo Agent', '+ Novo Agent', '+ Новый агент', '+ Nouvel Agent', '+ Neuer Agent'),
   noAgents: _('暂无 Agent', 'No agents', '暫無 Agent', 'Agent なし', 'Agent 없음', 'Không có Agent', 'Sin Agentes', 'Sem Agentes', 'Нет агентов', 'Aucun Agent', 'Keine Agenten'),
   loadFailed: _('加载失败', 'Load failed', '載入失敗', '読み込み失敗', '로드 실패', 'Tải thất bại', 'Error al cargar', 'Falha ao carregar', 'Ошибка загрузки', 'Échec du chargement', 'Laden fehlgeschlagen'),

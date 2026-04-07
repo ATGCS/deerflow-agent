@@ -1,6 +1,6 @@
 {
   "title": "Tableau de bord",
-  "desc": "Vue d'ensemble de l'état DeerPanel",
+  "desc": "Vue d'ensemble de l'état YTPanel",
   "gateway": "Gateway",
   "notStarted": "Non démarré",
   "versionLabel": "Version",

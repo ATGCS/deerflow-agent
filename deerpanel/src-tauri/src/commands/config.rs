@@ -666,11 +666,11 @@ fn has_ui_fields(val: &Value) -> bool {
     false
 }
 
-/// 清理 ClawPanel 内部字段，避免污染 openclaw.json 导致 Gateway 启动失败
+/// 清理 YTPanel 内部字段，避免污染 openclaw.json 导致 Gateway 启动失败
 /// Issue #89: version info 字段被写入 openclaw.json → Unknown config keys
 fn strip_ui_fields(mut val: Value) -> Value {
     if let Some(obj) = val.as_object_mut() {
-        // 清理根层级 ClawPanel 内部字段（version info 等）
+        // 清理根层级 YTPanel 内部字段（version info 等）
         for key in &[
             "current",
             "latest",
@@ -1821,7 +1821,7 @@ async fn upgrade_openclaw_inner(
             let _ = app.emit(
                 "upgrade-log",
                 format!(
-                    "ClawPanel {} 默认绑定 OpenClaw 稳定版: {}",
+                    "YTPanel {} 默认绑定 OpenClaw 稳定版: {}",
                     panel_version(),
                     recommended
                 ),
@@ -2403,21 +2403,25 @@ pub fn scan_node_paths() -> Result<Value, String> {
     Ok(Value::Array(found))
 }
 
-/// 保存用户自定义的 Node.js 路径到 ~/.openclaw/clawpanel.json
+/// 保存用户自定义的 Node.js 路径到 ~/.openclaw/ytpanel.json
 #[tauri::command]
 pub fn save_custom_node_path(node_dir: String) -> Result<(), String> {
-    let config_path = super::openclaw_dir().join("clawpanel.json");
-    let mut config: serde_json::Map<String, Value> = if config_path.exists() {
-        let content =
-            std::fs::read_to_string(&config_path).map_err(|e| format!("读取配置失败: {e}"))?;
-        serde_json::from_str(&content).unwrap_or_default()
-    } else {
-        serde_json::Map::new()
-    };
+    let write_path = super::panel_config_primary_path();
+    let mut config: serde_json::Map<String, Value> =
+        if let Some(read_path) = super::panel_config_existing_path() {
+            let content =
+                std::fs::read_to_string(&read_path).map_err(|e| format!("读取配置失败: {e}"))?;
+            serde_json::from_str(&content).unwrap_or_default()
+        } else {
+            serde_json::Map::new()
+        };
     config.insert("nodePath".into(), Value::String(node_dir));
     let json = serde_json::to_string_pretty(&Value::Object(config))
         .map_err(|e| format!("序列化失败: {e}"))?;
-    std::fs::write(&config_path, json).map_err(|e| format!("写入配置失败: {e}"))?;
+    if let Some(parent) = write_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    std::fs::write(&write_path, json).map_err(|e| format!("写入配置失败: {e}"))?;
     // 立即刷新 PATH 缓存，使新路径生效（无需重启应用）
     super::refresh_enhanced_path();
     crate::commands::service::invalidate_cli_detection_cache();
@@ -3026,23 +3030,24 @@ pub fn patch_model_vision() -> Result<bool, String> {
     Ok(changed)
 }
 
-/// 检查 ClawPanel 自身是否有新版本（GitHub → Gitee 自动降级）
+/// 检查 YTPanel 自身是否有新版本（GitHub → Gitee 自动降级）
 #[tauri::command]
 pub async fn check_panel_update() -> Result<Value, String> {
+    let ua = crate::commands::app_user_agent();
     let client =
-        crate::commands::build_http_client(std::time::Duration::from_secs(8), Some("ClawPanel"))
+        crate::commands::build_http_client(std::time::Duration::from_secs(8), Some(&ua))
             .map_err(|e| format!("创建 HTTP 客户端失败: {e}"))?;
 
     // 先尝试 GitHub，失败后降级 Gitee
     let sources = [
         (
-            "https://api.github.com/repos/qingchencloud/clawpanel/releases/latest",
-            "https://github.com/qingchencloud/clawpanel/releases",
+            "https://api.github.com/repos/qingchencloud/deerpanel/releases/latest",
+            "https://github.com/qingchencloud/deerpanel/releases",
             "github",
         ),
         (
-            "https://gitee.com/api/v5/repos/QtCodeCreators/clawpanel/releases/latest",
-            "https://gitee.com/QtCodeCreators/clawpanel/releases",
+            "https://gitee.com/api/v5/repos/QtCodeCreators/deerpanel/releases/latest",
+            "https://gitee.com/QtCodeCreators/deerpanel/releases",
             "gitee",
         ),
     ];
@@ -3095,14 +3100,13 @@ pub async fn check_panel_update() -> Result<Value, String> {
     Err(last_err)
 }
 
-// === 面板配置 (clawpanel.json) ===
+// === 面板配置 (ytpanel.json，读取兼容 clawpanel.json) ===
 
 #[tauri::command]
 pub fn read_panel_config() -> Result<Value, String> {
-    let path = super::openclaw_dir().join("clawpanel.json");
-    if !path.exists() {
+    let Some(path) = super::panel_config_existing_path() else {
         return Ok(serde_json::json!({}));
-    }
+    };
     let content = fs::read_to_string(&path).map_err(|e| format!("读取失败: {e}"))?;
     serde_json::from_str(&content).map_err(|e| format!("解析失败: {e}"))
 }
@@ -3113,7 +3117,7 @@ pub fn write_panel_config(config: Value) -> Result<(), String> {
     if !dir.exists() {
         fs::create_dir_all(&dir).map_err(|e| format!("创建目录失败: {e}"))?;
     }
-    let path = dir.join("clawpanel.json");
+    let path = super::panel_config_primary_path();
     let json = serde_json::to_string_pretty(&config).map_err(|e| format!("序列化失败: {e}"))?;
     fs::write(&path, json).map_err(|e| format!("写入失败: {e}"))
 }
@@ -3126,8 +3130,9 @@ pub async fn test_proxy(url: Option<String>) -> Result<Value, String> {
 
     let target = url.unwrap_or_else(|| "https://registry.npmjs.org/-/ping".to_string());
 
+    let ua = crate::commands::app_user_agent();
     let client =
-        crate::commands::build_http_client(std::time::Duration::from_secs(10), Some("ClawPanel"))
+        crate::commands::build_http_client(std::time::Duration::from_secs(10), Some(&ua))
             .map_err(|e| format!("创建代理客户端失败: {e}"))?;
 
     let start = std::time::Instant::now();

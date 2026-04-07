@@ -1,10 +1,10 @@
 /**
  * 主题管理（日间/夜间模式 + 跟随系统）
  */
-const THEME_KEY = 'clawpanel-theme'
+const THEME_KEY = 'ytpanel-theme'
 
 function emitThemePreferenceChanged() {
-  window.dispatchEvent(new CustomEvent('deerpanel-theme-pref-changed'))
+  window.dispatchEvent(new CustomEvent('ytpanel-theme-pref-changed'))
 }
 
 function effectiveFromMedia() {
@@ -34,6 +34,16 @@ export function setThemePreference(pref) {
 }
 
 export function initTheme() {
+  try {
+    if (!localStorage.getItem(THEME_KEY)) {
+      const legacy = localStorage.getItem('deerpanel-theme')
+      if (legacy === 'light' || legacy === 'dark' || legacy === 'system') {
+        localStorage.setItem(THEME_KEY, legacy)
+      }
+    }
+  } catch {
+    /* ignore */
+  }
   const pref = localStorage.getItem(THEME_KEY)
   if (pref === 'light' || pref === 'dark') {
     document.documentElement.dataset.theme = pref

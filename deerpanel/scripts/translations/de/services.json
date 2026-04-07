@@ -1,6 +1,6 @@
 {
   "title": "Dienstverwaltung",
-  "desc": "DeerPanel-Dienste starten, stoppen und überwachen",
+  "desc": "YTPanel-Dienste starten, stoppen und überwachen",
   "gatewayTitle": "Gateway-Dienst",
   "guardianTitle": "Guardian-Dienst",
   "status": "Status",

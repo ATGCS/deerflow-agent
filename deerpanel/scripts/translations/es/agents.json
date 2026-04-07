@@ -1,6 +1,6 @@
 {
   "title": "Gestión de Agentes",
-  "desc": "Crear y gestionar DeerPanel Agents",
+  "desc": "Crear y gestionar YTPanel Agents",
   "addAgent": "+ Nuevo Agent",
   "noAgents": "Sin Agentes",
   "loadFailed": "Error al cargar",

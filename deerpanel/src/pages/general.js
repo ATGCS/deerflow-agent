@@ -4,7 +4,7 @@
 import { toast } from '../components/toast.js'
 import { getThemePreference, setThemePreference } from '../lib/theme.js'
 
-const THEME_PREF_EVENT = 'deerpanel-theme-pref-changed'
+const THEME_PREF_EVENT = 'ytpanel-theme-pref-changed'
 
 let _themeListener = null
 

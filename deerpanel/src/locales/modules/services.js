@@ -2,7 +2,7 @@ import { _ } from '../helper.js'
 
 export default {
   title: _('服务管理', 'Services', '服務管理'),
-  desc: _('管理 DeerPanel 服务、检查更新、配置备�?', 'Manage DeerPanel services, check updates, config backups', '管理 DeerPanel 服務、檢查更新、設定備�?, 'DeerPanel サービスの起動・停止・監�?, 'DeerPanel 서비�?시작·중지·모니터링', 'Khởi động, dừng và giám sát dịch v�?DeerPanel', 'Iniciar, detener y monitorear servicios DeerPanel', 'Iniciar, parar e monitorar serviços DeerPanel', 'Запуск, остановка и мониторинг сервисов DeerPanel', 'Démarrer, arrêter et surveiller les services DeerPanel', 'DeerPanel-Dienste starten, stoppen und überwachen'),
+  desc: _('管理 YTPanel 服务、检查更新、配置备�?', 'Manage YTPanel services, check updates, config backups', '管理 YTPanel 服務、檢查更新、設定備�?, 'YTPanel サービスの起動・停止・監�?, 'YTPanel 서비�?시작·중지·모니터링', 'Khởi động, dừng và giám sát dịch v�?YTPanel', 'Iniciar, detener y monitorear servicios YTPanel', 'Iniciar, parar e monitorar serviços YTPanel', 'Запуск, остановка и мониторинг сервисов YTPanel', 'Démarrer, arrêter et surveiller les services YTPanel', 'YTPanel-Dienste starten, stoppen und überwachen'),
   start: _('启动', 'Start', '啟動', '起動', '시작', 'Khởi động', 'Iniciar', 'Iniciar', 'Запустить', 'Démarrer', 'Starten'),
   stop: _('停止', 'Stop', '', '停止', '중지', 'Dừng', 'Detener', 'Parar', 'Остановить', 'Arrêter', 'Stoppen'),
   restart: _('重启', 'Restart', '重啟', '再起�?, '재시�?, 'Khởi động lại', 'Reiniciar', 'Reiniciar', 'Перезапустить', 'Redémarrer', 'Neustarten'),
@@ -11,8 +11,8 @@ export default {
   installing: _('安装�?..', 'Installing...', '安裝�?..'),
   uninstalling: _('卸载�?..', 'Uninstalling...', '卸載�?..'),
   refreshStatus: _('刷新状�?, 'Refresh', '重新整理狀�?),
-  cliNotInstalled: _('DeerPanel CLI 未安�?, 'DeerPanel CLI not installed', 'DeerPanel CLI 未安�?),
-  installCliHint: _('请先安装 DeerPanel CLI:', 'Please install DeerPanel CLI first:', '請先安裝 DeerPanel CLI:'),
+  cliNotInstalled: _('YTPanel CLI 未安�?, 'YTPanel CLI not installed', 'YTPanel CLI 未安�?),
+  installCliHint: _('请先安装 YTPanel CLI:', 'Please install YTPanel CLI first:', '請先安裝 YTPanel CLI:'),
   gwNotInstalled: _('Gateway 服务未安�?, 'Gateway service not installed', 'Gateway 服務未安�?),
   gwInstalled: _('Gateway 服务已安�?, 'Gateway service installed', 'Gateway 服務已安�?),
   gwUninstalled: _('Gateway 服务已卸�?, 'Gateway service uninstalled', 'Gateway 服務已卸�?),
@@ -75,11 +75,11 @@ export default {
   backupDeleted: _('备份已删�?, 'Backup deleted', '備份已刪�?),
   backupLoadFailed: _('加载备份列表失败', 'Failed to load backup list', '載入備份列表失敗'),
   upgradeTitle: _('升级 / 切换版本', 'Upgrade / Switch Version', '升級 / 切換版本'),
-  upgradeConfirm: _('确定要将 DeerPanel 切换到当前面板推荐的稳定{source}{version}吗？\n切换过程�?Gateway 会短暂中断。\n如果你想尝试最新版，请到「面板设置」手动切换版本并自测兼容性�?, 'Switch DeerPanel to the panel-recommended stable {source}{version}?\nGateway will be briefly interrupted.\nTo try the latest version, manually switch in Settings.', '確定要將 DeerPanel 切換到目前面板推薦的穩定{source}{version}吗？\n切換過程�?Gateway 會短暂中斷。\n如果你想尝試最新版，請到「面板設定」手動切換版本並自測相容性�?),
+  upgradeConfirm: _('确定要将 YTPanel 切换到当前面板推荐的稳定{source}{version}吗？\n切换过程�?Gateway 会短暂中断。\n如果你想尝试最新版，请到「面板设置」手动切换版本并自测兼容性�?, 'Switch YTPanel to the panel-recommended stable {source}{version}?\nGateway will be briefly interrupted.\nTo try the latest version, manually switch in Settings.', '確定要將 YTPanel 切換到目前面板推薦的穩定{source}{version}吗？\n切換過程�?Gateway 會短暂中斷。\n如果你想尝試最新版，請到「面板設定」手動切換版本並自測相容性�?),
   switchSourceConfirm: _('确定要切换到{target}{version}吗？\n这会安装对应�?npm 包，配置数据不受影响。\n如需尝试最新版，请到「面板设置」手动切换版本�?, 'Switch to {target}{version}?\nThis installs the corresponding npm package. Config data is not affected.\nTo try the latest, manually switch in Settings.', '確定要切換到{target}{version}吗？\n这會安裝对應�?npm 包，設定資料不受影響。\n如需尝試最新版，請到「面板設定」手動切換版本�?),
   taskStarted: _('后台任务已启动，请等待完�?..', 'Background task started, please wait...', '後台任務已啟動，請等待完�?..'),
   webModeNoLog: _('Web 模式：升级过程日志不可用，请等待完成...', 'Web mode: Upgrade logs unavailable, please wait...', 'Web 模式：升級過程日誌不可用，請等待完成...'),
   taskDone: _('操作完成', 'Operation complete'),
   upgradeDone: _('升级完成', 'Upgrade complete', '升級完成'),
-  upgradeScene: _('升级 DeerPanel', 'Upgrade DeerPanel', '升級 DeerPanel'),
+  upgradeScene: _('升级 YTPanel', 'Upgrade YTPanel', '升級 YTPanel'),
 }

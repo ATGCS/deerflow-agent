@@ -42,11 +42,20 @@ function isSupervisorLikeTool(name) {
   return n === 'supervisor' || n === 'task_tool' || n === 'task'
 }
 
-/** 工具已有可展示的 JSON 结果（流式返回完成） */
-function toolOutputLooksComplete(output) {
+/**
+ * 工具是否已有「可合并进侧栏」的完整 JSON。
+ * start_execution：若 success 为 true 但尚未带回 delegatedSubtasks，视为仍在执行中（便于先根据入参显示转圈）。
+ */
+function toolOutputLooksComplete(output, input) {
   const o = parseToolOutputObject(output)
   if (!o || typeof o !== 'object') return false
   if ('success' in o && o.success === false) return false
+  const ia = input && typeof input === 'object' && typeof input.action === 'string' ? input.action.trim() : ''
+  const oa = typeof o.action === 'string' ? o.action.trim() : ''
+  const act = ia || oa
+  if (act === 'start_execution' && o.success === true) {
+    if (!Array.isArray(o.delegatedSubtasks)) return false
+  }
   return true
 }
 
@@ -80,7 +89,7 @@ export function buildCollabSidebarFromTools(tools) {
     const output = parseToolOutputObject(t.output)
     const action = input && typeof input.action === 'string' ? input.action.trim() : ''
     const toolId = String(t.id || t.tool_call_id || `step-${supervisorSteps.length}`)
-    const done = toolOutputLooksComplete(t.output)
+    const done = toolOutputLooksComplete(t.output, input)
 
     supervisorSteps.push({
       id: toolId,
@@ -88,6 +97,34 @@ export function buildCollabSidebarFromTools(tools) {
       label: stepLabel(action),
       done,
     })
+
+    // start_execution：工具尚未返回 delegatedSubtasks 时，根据入参先把对应子任务标为执行中（转圈）
+    if (!done && input && typeof input === 'object') {
+      const earlyAction = typeof input.action === 'string' ? input.action.trim() : ''
+      if (earlyAction === 'start_execution') {
+        const tid = String(input.task_id || input.taskId || '').trim()
+        const rawIds = input.subtask_ids ?? input.subtaskIds
+        const ids = Array.isArray(rawIds) ? rawIds : []
+        for (const raw of ids) {
+          const sid = String(raw || '').trim()
+          if (!sid) continue
+          const prev = subtasksMap.get(sid) || {}
+          subtasksMap.set(sid, {
+            ...prev,
+            subtaskId: sid,
+            ...(tid ? { parentTaskId: tid } : {}),
+            status: 'in_progress',
+          })
+        }
+        if (tid) {
+          if (main && String(main.taskId || '').trim() === tid) {
+            main = { ...main, status: 'running' }
+          } else if (!main || !String(main.taskId || '').trim()) {
+            main = { ...(main || {}), taskId: tid, status: 'running' }
+          }
+        }
+      }
+    }
 
     if (!done || !output || typeof output !== 'object') continue
 
@@ -112,6 +149,12 @@ export function buildCollabSidebarFromTools(tools) {
       const parentTaskId = String(o.parentTaskId || o.task_id || (input && input.task_id) || '')
       if (sid) {
         const prev = subtasksMap.get(sid) || {}
+        const assignedFromOut =
+          typeof o.assignedTo === 'string'
+            ? o.assignedTo.trim()
+            : typeof o.assigned_to === 'string'
+              ? o.assigned_to.trim()
+              : ''
         subtasksMap.set(sid, {
           ...prev,
           subtaskId: sid,
@@ -120,6 +163,7 @@ export function buildCollabSidebarFromTools(tools) {
           ...(typeof o.description === 'string' ? { description: o.description } : {}),
           ...(typeof o.status === 'string' ? { status: o.status } : {}),
           ...(typeof o.progress === 'number' ? { progress: o.progress } : {}),
+          ...(assignedFromOut ? { assignedAgent: assignedFromOut } : {}),
         })
       }
     }
@@ -162,6 +206,29 @@ export function buildCollabSidebarFromTools(tools) {
             status: typeof o.status === 'string' ? o.status : 'running',
           }
         }
+      }
+
+      // start_execution 可能直接带回 delegatedSubtasks（每个子任务的执行结果）
+      const delegated = Array.isArray(o.delegatedSubtasks) ? o.delegatedSubtasks : []
+      for (const row of delegated) {
+        if (!row || typeof row !== 'object') continue
+        const r = row
+        const sid = String(r.subtaskId || r.subtask_id || '')
+        if (!sid) continue
+        const ok = r.ok === true
+        const prev = subtasksMap.get(sid) || { subtaskId: sid, parentTaskId: tid || undefined }
+        subtasksMap.set(sid, {
+          ...prev,
+          subtaskId: sid,
+          ...(tid ? { parentTaskId: tid } : {}),
+          status: ok ? 'completed' : 'failed',
+          progress: ok ? 100 : typeof prev.progress === 'number' ? prev.progress : 0,
+        })
+      }
+
+      // 若明确全部成功，主任务直接标记为完成
+      if (o.delegationAllSucceeded === true && main && main.taskId === tid) {
+        main = { ...main, status: 'completed', progress: 100 }
       }
     }
 

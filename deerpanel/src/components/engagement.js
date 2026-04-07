@@ -11,11 +11,11 @@
  */
 
 const KEYS = {
-  firstOpen: 'clawpanel_first_open',
-  openCount: 'clawpanel_open_count',
-  lastShown: 'clawpanel_engage_shown',
-  never: 'clawpanel_engage_never',
-  todayDismiss: 'clawpanel_engage_today',
+  firstOpen: 'ytpanel_first_open',
+  openCount: 'ytpanel_open_count',
+  lastShown: 'ytpanel_engage_shown',
+  never: 'ytpanel_engage_never',
+  todayDismiss: 'ytpanel_engage_today',
 }
 
 const DAY = 86400000
@@ -66,7 +66,7 @@ export function tryShowEngagement() {
   _showing = true
   localStorage.setItem(KEYS.lastShown, String(Date.now()))
 
-  const shareText = '推荐一个开源的 OpenClaw 管理面板 — DeerPanel，一键搭建、便捷管理模型和 Agent，还内置 AI 助手帮你排查问题，小白也能轻松上手'
+  const shareText = '推荐一个开源的 OpenClaw 管理面板 — YTPanel，一键搭建、便捷管理模型和 Agent，还内置 AI 助手帮你排查问题，小白也能轻松上手'
 
   const overlay = document.createElement('div')
   overlay.className = 'engage-overlay'
@@ -78,15 +78,15 @@ export function tryShowEngagement() {
         <div class="engage-icon">
           <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
         </div>
-        <div class="engage-title">感谢你使用 DeerPanel</div>
+        <div class="engage-title">感谢你使用 YTPanel</div>
       </div>
 
       <div class="engage-message">
-        DeerPanel 是一个<strong>完全开源、免费</strong>的项目，由晴辰云团队专职维护、持续更新。如果它帮到了你，对我们最大的鼓励就是：
+        YTPanel 是一个<strong>完全开源、免费</strong>的项目，由晴辰云团队专职维护、持续更新。如果它帮到了你，对我们最大的鼓励就是：
       </div>
 
       <div class="engage-actions-grid">
-        <a class="engage-action-card" href="https://github.com/qingchencloud/clawpanel" target="_blank" rel="noopener">
+        <a class="engage-action-card" href="https://github.com/qingchencloud/deerpanel" target="_blank" rel="noopener">
           <div class="engage-action-icon engage-action-star">
             <svg viewBox="0 0 24 24" width="22" height="22" fill="#f59e0b" stroke="#f59e0b" stroke-width="1"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
           </div>

@@ -339,29 +339,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "clawpanel"
-version = "1.0.0"
-dependencies = [
- "base64 0.22.1",
- "chrono",
- "dirs",
- "ed25519-dalek",
- "futures-util",
- "rand 0.8.5",
- "regex",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "sha2",
- "tauri",
- "tauri-build",
- "tauri-plugin-shell",
- "tokio",
- "urlencoding",
- "zip",
-]
-
-[[package]]
 name = "combine"
 version = "4.6.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5395,6 +5372,29 @@ dependencies = [
  "quote",
  "syn 2.0.117",
  "synstructure",
+]
+
+[[package]]
+name = "ytpanel"
+version = "1.0.0"
+dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "dirs",
+ "ed25519-dalek",
+ "futures-util",
+ "rand 0.8.5",
+ "regex",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-shell",
+ "tokio",
+ "urlencoding",
+ "zip",
 ]
 
 [[package]]

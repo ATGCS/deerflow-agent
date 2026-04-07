@@ -1,6 +1,6 @@
 {
   "title": "Protokolle",
-  "desc": "DeerPanel-Protokolle anzeigen",
+  "desc": "YTPanel-Protokolle anzeigen",
   "tabGateway": "Gateway",
   "tabGatewayErr": "Gateway-Fehler",
   "tabGuardian": "Guardian",
