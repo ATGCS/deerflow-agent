@@ -1,0 +1,112 @@
+{
+  "meta": {
+    "total": 2,
+    "exported_at": "2026-03-27 17:11:35",
+    "keywords": [
+      "获客系统"
+    ],
+    "platforms": [
+      "B站"
+    ],
+    "config": {
+      "min_likes": 100,
+      "days_range": 7
+    }
+  },
+  "contents": [
+    {
+      "platform": "B站",
+      "content_id": "",
+      "title": "零成本全网最强拓客软件，新手小白必备软件！自动获客系统 al获客系统骗局 ai自动获客系统 ai获客营销系统 获客系统 获客系统工具 获客系统有哪些 私域引流",
+      "content": "零成本全网最强拓客软件，新手小白必备软件！自动获客系统 al获客系统骗局 ai自动获客系统 ai获客营销系统 获客系统 获客系统工具 获客系统有哪些 私域引流",
+      "author": "数字人科技生活",
+      "author_id": "",
+      "likes": 4685,
+      "comments": 0,
+      "shares": 0,
+      "collects": 0,
+      "views": 0,
+      "publish_time": "",
+      "collected_at": "2026-03-27 17:11:27",
+      "content_type": "视频",
+      "content_url": "https://www.bilibili.com/video/BV1kEnBzjE1U/",
+      "cover_url": "",
+      "tags": []
+    },
+    {
+      "platform": "B站",
+      "content_id": "",
+      "title": "看我如何用Openclaw打造一个全自动的获客系统",
+      "content": "看我如何用Openclaw打造一个全自动的获客系统",
+      "author": "MEMO先生ALLAN",
+      "author_id": "",
+      "likes": 104,
+      "comments": 0,
+      "shares": 0,
+      "collects": 0,
+      "views": 0,
+      "publish_time": "",
+      "collected_at": "2026-03-27 17:11:27",
+      "content_type": "视频",
+      "content_url": "https://www.bilibili.com/video/BV1TdXWBmE9W/",
+      "cover_url": "",
+      "tags": []
+    }
+  ],
+  "analyses": [
+    {
+      "content_id": "",
+      "platform": "B站",
+      "summary": "需要AI分析生成摘要",
+      "key_points": [
+        "需要AI提取关键要点"
+      ],
+      "writing_style": "需要AI分析写作风格",
+      "presentation_style": "需要AI分析展现形式",
+      "engagement_score": 0.0,
+      "viral_factors": [
+        "需要AI分析爆款因素"
+      ]
+    },
+    {
+      "content_id": "",
+      "platform": "B站",
+      "summary": "需要AI分析生成摘要",
+      "key_points": [
+        "需要AI提取关键要点"
+      ],
+      "writing_style": "需要AI分析写作风格",
+      "presentation_style": "需要AI分析展现形式",
+      "engagement_score": 0.0,
+      "viral_factors": [
+        "需要AI分析爆款因素"
+      ]
+    }
+  ],
+  "optimal_copy": {
+    "optimal_copy": "需要AI基于热门内容分析生成最优文案",
+    "presentation_styles": [
+      "需要AI分析推荐展现形式"
+    ],
+    "keyword_suggestions": [
+      "需要AI分析关键词使用建议"
+    ],
+    "engagement_strategies": [
+      "需要AI分析互动引导策略"
+    ],
+    "reference_contents": [
+      {
+        "platform": "B站",
+        "title": "零成本全网最强拓客软件，新手小白必备软件！自动获客系统 al获客系统骗局 ai自动获客系统 ai获客营销系统 获客系统 获客系统工具 获客系统有哪些 私域引流",
+        "likes": 4685,
+        "style": "需要AI分析"
+      },
+      {
+        "platform": "B站",
+        "title": "看我如何用Openclaw打造一个全自动的获客系统",
+        "likes": 104,
+        "style": "需要AI分析"
+      }
+    ]
+  }
+}
