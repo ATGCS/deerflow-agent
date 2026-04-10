@@ -1,0 +1,92 @@
+{
+  "version": "1.0",
+  "created_at": "2026-04-02T04:33:14.553771",
+  "updated_at": "2026-04-02T04:33:14.553772",
+  "history": [
+    {
+      "emotion_state": {
+        "emotion_type": "joy",
+        "intensity": 5,
+        "confidence": 0.5,
+        "triggers": [
+          "开心"
+        ],
+        "context": "我今天太开心了！终于解决了这个bug！",
+        "timestamp": "2026-04-02T04:33:14.542753",
+        "valence": 1.0,
+        "secondary_emotions": []
+      },
+      "source_text": "我今天太开心了！终于解决了这个bug！",
+      "session_id": null,
+      "metadata": {}
+    },
+    {
+      "emotion_state": {
+        "emotion_type": "anger",
+        "intensity": 2,
+        "confidence": 0.3333333333333333,
+        "triggers": [
+          "真烦"
+        ],
+        "context": "这个功能怎么这么难用，真烦人！",
+        "timestamp": "2026-04-02T04:33:14.547275",
+        "valence": -0.8,
+        "secondary_emotions": [
+          "disgust",
+          "confusion"
+        ]
+      },
+      "source_text": "这个功能怎么这么难用，真烦人！",
+      "session_id": null,
+      "metadata": {}
+    },
+    {
+      "emotion_state": {
+        "emotion_type": "gratitude",
+        "intensity": 4,
+        "confidence": 1.0,
+        "triggers": [
+          "感谢",
+          "谢谢",
+          "非常感谢",
+          "谢谢你"
+        ],
+        "context": "谢谢你的帮助，非常感谢！",
+        "timestamp": "2026-04-02T04:33:14.551716",
+        "valence": 0.9,
+        "secondary_emotions": []
+      },
+      "source_text": "谢谢你的帮助，非常感谢！",
+      "session_id": null,
+      "metadata": {}
+    },
+    {
+      "emotion_state": {
+        "emotion_type": "fear",
+        "intensity": 1,
+        "confidence": 0.5,
+        "triggers": [
+          "担心"
+        ],
+        "context": "我有点担心这个项目的进度...",
+        "timestamp": "2026-04-02T04:33:14.553760",
+        "valence": -0.7,
+        "secondary_emotions": []
+      },
+      "source_text": "我有点担心这个项目的进度...",
+      "session_id": null,
+      "metadata": {}
+    }
+  ],
+  "statistics": {
+    "total_entries": 4,
+    "emotion_distribution": {
+      "joy": 1,
+      "anger": 1,
+      "gratitude": 1,
+      "fear": 1
+    },
+    "average_valence": 0.10000000000000003,
+    "dominant_emotion": "joy"
+  }
+}

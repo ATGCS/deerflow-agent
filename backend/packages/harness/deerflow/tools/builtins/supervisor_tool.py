@@ -1,4 +1,14 @@
-"""Supervisor tool for multi-agent task planning and coordination."""
+"""Supervisor tool for multi-agent task planning and coordination.
+
+Thin routing layer: ``@tool("supervisor")`` + action dispatch.
+All heavy logic is delegated to the :pymod:`supervisor` sub-package:
+- :pymod:`~supervisor.dependency` — DAG depends_on resolution
+- :pymod:`~supervisor.execution` — Delegation (task_tool), auto-followup wave
+- :pymod:`~supervisor.monitor`  — Background task monitor, recommendation engine
+- :pymod:`~supervisor.memory`  — Memory aggregation, SSE broadcast
+- :pymod:`~supervisor.utils`    — Runtime helpers, debug, clamping
+- :pymod:`~supervisor.display`  — Subtask row formatting, worker_profile rendering
+"""
 
 import asyncio
 import json
@@ -36,1054 +46,54 @@ from deerflow.config.paths import get_paths
 from deerflow.subagents import get_available_subagent_names
 from deerflow.subagents.builtins import BUILTIN_SUBAGENTS
 
+# ── Sub-module imports (extracted from monolithic layout) ──────────────
+from deerflow.tools.builtins.supervisor.dependency import (       # noqa: F401
+    _TERMINAL_SUBTASK,
+    _IN_FLIGHT_SUBTASK,
+    _subtask_dep_ids,
+    _build_subtask_name_index,
+    _resolve_dep_ref_to_id,
+    _auto_finalize_unrunnable_pending_subtasks,
+    _resolve_subtasks_for_start_execution,
+)
+from deerflow.tools.builtins.supervisor.execution import (         # noqa: F401
+    delegate_collab_subtasks_for_start_execution,
+    auto_delegate_collab_followup_wave,
+    _resolved_subagent_type_for_subtask,
+)
+from deerflow.tools.builtins.supervisor.monitor import (           # noqa: F401
+    _ensure_background_task_monitor,
+    _compute_monitor_recommendation,
+    _monitor_main_task_until_terminal,
+)
+from deerflow.tools.builtins.supervisor.memory import (            # noqa: F401
+    _persist_main_task_memory_snapshot,
+    _broadcast_task_event,
+    _record_supervisor_ui_step,
+)
+from deerflow.tools.builtins.supervisor.utils import (             # noqa: F401
+    _runtime_thread_id,
+    _dbg_enabled,
+    _repr_with_invisibles,
+    _clamp_progress,
+)
+from deerflow.tools.builtins.supervisor.display import (           # noqa: F401
+    _subtask_worker_profile_suffix,
+    _subtask_row_dict,
+    _build_monitor_subtask_rows,
+)
+
 logger = logging.getLogger(__name__)
 
-_TERMINAL_SUBTASK = frozenset({"completed", "failed", "cancelled"})
-# Subtasks already handed to task_tool / subagent — exclude from new start_execution waves.
-_IN_FLIGHT_SUBTASK = frozenset({"executing", "running", "in_progress"})
+# ── Module-level state (shared across action handler + monitors) ─────
 _MONITOR_TERMINAL_MAIN = frozenset({"completed", "failed", "cancelled"})
 _bg_task_monitors: dict[str, asyncio.Task[Any]] = {}
 _task_watch_state: dict[str, dict[str, Any]] = {}
 
 
-def _subtask_dep_ids(st: dict[str, Any]) -> list[str]:
-    """depends_on from worker_profile (other subtask ids that must complete first)."""
-    wp = st.get("worker_profile")
-    if not isinstance(wp, dict):
-        return []
-    raw = wp.get("depends_on") or []
-    if not isinstance(raw, list):
-        return []
-    out: list[str] = []
-    for x in raw:
-        d = str(x).strip()
-        if d:
-            out.append(d)
-    return out
-
-
-def _build_subtask_name_index(by_id: dict[str, dict[str, Any]]) -> dict[str, list[str]]:
-    """Name -> [subtask ids] index for resolving depends_on that use names."""
-    idx: dict[str, list[str]] = {}
-    for sid, st in by_id.items():
-        nm = str(st.get("name") or "").strip()
-        if not nm:
-            continue
-        idx.setdefault(nm, []).append(sid)
-    return idx
-
-
-def _resolve_dep_ref_to_id(
-    dep_ref: str,
-    *,
-    current_sid: str,
-    by_id: dict[str, dict[str, Any]],
-    name_index: dict[str, list[str]],
-) -> str | None:
-    """Resolve depends_on item to concrete subtask id.
-
-    Accept both:
-    - subtask id (preferred)
-    - subtask name (compat)
-    """
-    ref = str(dep_ref or "").strip()
-    if not ref:
-        return None
-    if ref == current_sid:
-        return None
-    if ref in by_id:
-        return ref
-    cands = name_index.get(ref) or []
-    if len(cands) == 1:
-        return cands[0]
-    return ref
-
-
-def _auto_finalize_unrunnable_pending_subtasks(storage: Any, main_task_id: str) -> dict[str, Any]:
-    """Mark impossible pending subtasks as cancelled so root task can converge.
-
-    Cases:
-    - upstream dependency already reached terminal non-completed state (failed/cancelled/timed_out)
-    """
-    row = find_main_task(storage, main_task_id)
-    if not row:
-        return {"changed": False, "skipped": []}
-    proj, task = row
-    subtasks: list[dict[str, Any]] = [x for x in (task.get("subtasks") or []) if isinstance(x, dict)]
-    if not subtasks:
-        return {"changed": False, "skipped": []}
-
-    by_id: dict[str, dict[str, Any]] = {}
-    for st in subtasks:
-        sid = str(st.get("id") or "").strip()
-        if sid:
-            by_id[sid] = st
-    if not by_id:
-        return {"changed": False, "skipped": []}
-    name_index = _build_subtask_name_index(by_id)
-    status_by_id: dict[str, str] = {
-        sid: str(st.get("status") or "pending").strip().lower() for sid, st in by_id.items()
-    }
-
-    changed = False
-    skipped: list[dict[str, Any]] = []
-    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    for sid, st in by_id.items():
-        s_status = status_by_id.get(sid, "pending")
-        if s_status in _TERMINAL_SUBTASK or s_status in _IN_FLIGHT_SUBTASK:
-            continue
-        deps = _subtask_dep_ids(st)
-        if not deps:
-            continue
-
-        blocked_by_upstream_terminal: list[str] = []
-        for dep_ref in deps:
-            dep_id = _resolve_dep_ref_to_id(
-                dep_ref,
-                current_sid=sid,
-                by_id=by_id,
-                name_index=name_index,
-            )
-            if not dep_id or dep_id not in by_id:
-                continue
-            d_status = status_by_id.get(dep_id, "pending")
-            if d_status in {"failed", "cancelled", "timed_out"}:
-                blocked_by_upstream_terminal.append(dep_id)
-
-        if not blocked_by_upstream_terminal:
-            continue
-
-        reason = f"auto_skipped: upstream_terminal_non_completed={blocked_by_upstream_terminal}"
-
-        st["status"] = "cancelled"
-        st["progress"] = int(st.get("progress") or 0)
-        st["error"] = reason[:500]
-        st["completed_at"] = st.get("completed_at") or now
-        changed = True
-        skipped.append({"subtaskId": sid, "reason": reason})
-
-    if not changed:
-        return {"changed": False, "skipped": []}
-
-    task["subtasks"] = subtasks
-    storage.save_project(proj)
-    try:
-        rollup_root_task_progress_from_subtasks(storage, main_task_id)
-    except Exception:
-        logger.debug("auto finalize pending subtasks: rollup failed task_id=%s", main_task_id, exc_info=True)
-    return {"changed": True, "skipped": skipped}
-
-
-def _resolve_subtasks_for_start_execution(
-    storage: Any,
-    main_task_id: str,
-    explicit: list[str] | None,
-) -> tuple[list[str], list[dict[str, Any]]]:
-    """Pick subtasks to delegate in this wave: assigned, non-terminal, all depends_on completed.
-
-    Multiple subtasks whose dependencies are all satisfied run **in parallel** in the same start_execution.
-    Subtasks still waiting on upstream work are returned in ``blocked`` for UI / lead planning.
-
-    Returns:
-        runnable: ordered ids to pass to delegate (explicit order if explicit; else subtasks list order).
-        blocked: diagnostic rows (e.g. dependencies_not_satisfied, unassigned, already_terminal).
-    """
-    row = find_main_task(storage, main_task_id)
-    if not row:
-        return [], []
-    _proj, task = row
-    subtasks: list[Any] = task.get("subtasks") or []
-    by_id: dict[str, dict[str, Any]] = {}
-    for st in subtasks:
-        sid = st.get("id")
-        if sid:
-            by_id[str(sid)] = st
-    name_index = _build_subtask_name_index(by_id)
-    status_by_id: dict[str, str] = {
-        sid: (st.get("status") or "pending").strip().lower() for sid, st in by_id.items()
-    }
-
-    def unmet_dependencies(sid: str, st: dict[str, Any]) -> list[str]:
-        bad: list[str] = []
-        for dep_ref in _subtask_dep_ids(st):
-            dep = _resolve_dep_ref_to_id(
-                dep_ref,
-                current_sid=sid,
-                by_id=by_id,
-                name_index=name_index,
-            )
-            if dep is None:
-                continue
-            if dep not in status_by_id:
-                bad.append(str(dep_ref))
-                continue
-            if status_by_id[dep] != "completed":
-                bad.append(dep)
-        return bad
-
-    def eligible(sid: str) -> bool:
-        st = by_id.get(sid)
-        if not st:
-            return False
-        status = status_by_id.get(sid, "pending")
-        if status in _TERMINAL_SUBTASK:
-            return False
-        if status in _IN_FLIGHT_SUBTASK:
-            return False
-        if not str(st.get("assigned_to") or "").strip():
-            return False
-        return len(unmet_dependencies(sid, st)) == 0
-
-    runnable: list[str] = []
-    blocked: list[dict[str, Any]] = []
-
-    if explicit:
-        seen: set[str] = set()
-        for raw in explicit:
-            sid = str(raw).strip()
-            if not sid or sid in seen:
-                continue
-            seen.add(sid)
-            st = by_id.get(sid)
-            if not st:
-                blocked.append({"subtaskId": sid, "reason": "not_found"})
-                continue
-            if eligible(sid):
-                runnable.append(sid)
-                continue
-            stt = status_by_id.get(sid, "pending")
-            if stt in _TERMINAL_SUBTASK:
-                blocked.append({"subtaskId": sid, "reason": "already_terminal", "status": stt})
-            elif not str(st.get("assigned_to") or "").strip():
-                blocked.append({"subtaskId": sid, "reason": "unassigned"})
-            else:
-                blocked.append(
-                    {
-                        "subtaskId": sid,
-                        "reason": "dependencies_not_satisfied",
-                        "unmetDependencies": unmet_dependencies(sid, st),
-                    }
-                )
-        return runnable, blocked
-
-    seen_run: set[str] = set()
-    for st in subtasks:
-        sid = st.get("id")
-        if not sid:
-            continue
-        sid = str(sid)
-        if not eligible(sid):
-            continue
-        if sid in seen_run:
-            continue
-        seen_run.add(sid)
-        runnable.append(sid)
-
-    for sid, st in by_id.items():
-        if sid in seen_run:
-            continue
-        status = status_by_id.get(sid, "pending")
-        if status in _TERMINAL_SUBTASK:
-            continue
-        if not str(st.get("assigned_to") or "").strip():
-            continue
-        blocked.append(
-            {
-                "subtaskId": sid,
-                "reason": "waiting_on_dependencies",
-                "unmetDependencies": unmet_dependencies(sid, st),
-            }
-        )
-    return runnable, blocked
-
-
-async def delegate_collab_subtasks_for_start_execution(
-    runtime: ToolRuntime[ContextT, dict] | None,
-    storage: Any,
-    main_task_id: str,
-    subtask_ids: list[str],
-    *,
-    wait_for_completion: bool = False,
-) -> list[dict[str, Any]]:
-    """Invoke ``task`` for each subtask (parallel). Used by ``start_execution`` so workers actually run.
-
-    When ``wait_for_completion`` is False (default), each subagent runs in the background and this
-    function returns as soon as all starts succeed; project rows are updated on completion by the
-    existing ``task_tool`` polling path.
-    """
-    if not subtask_ids:
-        return []
-    if runtime is None:
-        logger.warning("start_execution: skip subagent delegation (no tool runtime)")
-        return [
-            {
-                "subtaskId": sid,
-                "ok": False,
-                "error": "No runtime: cannot delegate to task tool",
-            }
-            for sid in subtask_ids
-        ]
-
-    from deerflow.tools.builtins.task_tool import task_tool as tt
-    coro = getattr(tt, "coroutine", None)
-    if coro is None:
-        logger.error("task_tool has no coroutine; cannot delegate from start_execution")
-        return [{"subtaskId": sid, "ok": False, "error": "task_tool unavailable"} for sid in subtask_ids]
-
-    dep_by_id: dict[str, dict[str, Any]] = {}
-    try:
-        dep_row = find_main_task(storage, main_task_id)
-        if dep_row:
-            _dep_proj, dep_task = dep_row
-            for _st in dep_task.get("subtasks") or []:
-                if isinstance(_st, dict):
-                    _sid = str(_st.get("id") or "").strip()
-                    if _sid:
-                        dep_by_id[_sid] = _st
-    except Exception:
-        dep_by_id = {}
-    dep_name_index = _build_subtask_name_index(dep_by_id)
-
-    def _build_dependency_context(sid: str, st: dict[str, Any]) -> str:
-        """Build upstream dependency handoff context for dependent subtasks."""
-        dep_refs = _subtask_dep_ids(st)
-        if not dep_refs:
-            return ""
-        mem_store = get_task_memory_storage()
-        chunks: list[str] = []
-        for dep_ref in dep_refs:
-            dep_id = _resolve_dep_ref_to_id(
-                dep_ref,
-                current_sid=sid,
-                by_id=dep_by_id,
-                name_index=dep_name_index,
-            )
-            if not dep_id:
-                continue
-            dep = find_subtask_by_ids(storage, main_task_id, dep_id)
-            if not dep:
-                continue
-            dep_status = str(dep.get("status") or "").strip().lower()
-            if dep_status != "completed":
-                continue
-            dep_name = str(dep.get("name") or dep_id).strip()
-            dep_result = str(dep.get("result") or "").strip()
-            dep_summary = ""
-            dep_step = ""
-            try:
-                mrow = load_task_memory_for_task_id(storage, mem_store, dep_id)
-                if mrow is not None:
-                    mem, _pid, _aid, _parent = mrow
-                    dep_summary = str(mem.get("output_summary") or "").strip()
-                    dep_step = str(mem.get("current_step") or "").strip()
-            except Exception:
-                logger.debug("build dependency context memory read failed dep=%s", dep_id, exc_info=True)
-            lines = [f"- 上游子任务 `{dep_name}`（id={dep_id}）已完成。"]
-            if dep_step:
-                lines.append(f"  - 完成步骤：{dep_step[:300]}")
-            if dep_summary:
-                lines.append(f"  - 摘要：{dep_summary[:1200]}")
-            if dep_result:
-                lines.append(f"  - 结果：{dep_result[:1200]}")
-            chunks.append("\n".join(lines))
-        if not chunks:
-            return ""
-        return (
-            "\n\n【上游依赖输出（供本子任务直接消费）】\n"
-            + "\n".join(chunks)
-            + "\n请基于以上上游输出继续执行，不要重复搜索上游已完成的内容。"
-        )
-
-    async def _one(sid: str) -> dict[str, Any]:
-        st = find_subtask_by_ids(storage, main_task_id, sid)
-        if not st:
-            return {"subtaskId": sid, "ok": False, "error": "subtask not found"}
-        name = (st.get("name") or "subtask").strip() or "subtask"
-        desc = (st.get("description") or "").strip()
-        prompt = desc if desc else (
-            f"完成子任务「{name}」。协作主任务 id: {main_task_id}；子任务 id: {sid}。"
-        )
-        dep_ctx = _build_dependency_context(sid, st)
-        if dep_ctx:
-            prompt = f"{prompt}{dep_ctx}"
-        subagent_type = _resolved_subagent_type_for_subtask(st)
-        tcid = f"supervisor-start-exec-{main_task_id}-{sid}-{uuid.uuid4().hex[:12]}"
-        try:
-            out = await coro(
-                runtime=runtime,
-                description=name[:120],
-                prompt=prompt,
-                subagent_type=subagent_type,
-                tool_call_id=tcid,
-                max_turns=None,
-                collab_task_id=main_task_id,
-                collab_subtask_id=sid,
-                detach=not wait_for_completion,
-            )
-            text = out if isinstance(out, str) else str(out)
-            if text.startswith("Task Detached."):
-                return {
-                    "subtaskId": sid,
-                    "ok": True,
-                    "detached": True,
-                    "result": text,
-                }
-            ok = text.startswith("Task Succeeded.")
-            err = None if ok else text[:4000]
-            return {"subtaskId": sid, "ok": ok, "result": text if ok else None, "error": err}
-        except Exception as e:
-            logger.exception("delegate subtask %s via task_tool failed", sid)
-            return {"subtaskId": sid, "ok": False, "error": str(e)}
-
-    return list(await asyncio.gather(*[_one(sid) for sid in subtask_ids]))
-
-
-async def auto_delegate_collab_followup_wave(
-    runtime: ToolRuntime[ContextT, dict] | None,
-    main_task_id: str,
-) -> None:
-    """When a subtask finishes, start any newly runnable dependents without another ``start_execution``.
-
-    This matches user expectation for ``depends_on`` chains: wave 2+ runs automatically once
-    upstream work is ``completed`` (failed upstream keeps dependents blocked).
-    """
-    if runtime is None:
-        return
-    tid = str(main_task_id or "").strip()
-    if not tid:
-        return
-    storage = get_project_storage()
-    to_run, _blocked = _resolve_subtasks_for_start_execution(storage, tid, None)
-    if not to_run:
-        return
-    row = find_main_task(storage, tid)
-    if not row:
-        return
-    _proj, main_task = row
-    if not bool(main_task.get("execution_authorized")):
-        logger.warning("auto_delegate_collab_followup_wave: task %s not execution_authorized; skip", tid)
-        return
-
-    from datetime import datetime as _dt
-
-    _now = _dt.utcnow().isoformat() + "Z"
-    to_set = set(to_run)
-    for st in main_task.get("subtasks") or []:
-        if st.get("id") in to_set:
-            st["started_at"] = st.get("started_at") or _now
-    storage.save_project(_proj)
-
-    try:
-        advance_collab_phase_to_executing_for_task(
-            get_paths(), tid, runtime_thread_id=_runtime_thread_id(runtime)
-        )
-    except Exception:
-        logger.exception("auto_delegate_collab_followup_wave: advance_collab_phase failed task_id=%s", tid)
-
-    try:
-        delegated = await delegate_collab_subtasks_for_start_execution(
-            runtime,
-            storage,
-            tid,
-            to_run,
-            wait_for_completion=False,
-        )
-    except Exception:
-        logger.exception("auto_delegate_collab_followup_wave: delegate failed task_id=%s", tid)
-        return
-
-    if delegated and any(bool(d.get("detached")) for d in delegated):
-        try:
-            _ensure_background_task_monitor(
-                storage,
-                tid,
-                runtime_thread_id=_runtime_thread_id(runtime),
-            )
-        except Exception:
-            logger.debug("auto_delegate_collab_followup_wave: background monitor failed", exc_info=True)
-
-    logger.info(
-        "auto_delegate_collab_followup_wave: task=%s started %d subtask(s): %s",
-        tid,
-        len(to_run),
-        to_run,
-    )
-
-
-def _ensure_background_task_monitor(
-    storage: Any,
-    main_task_id: str,
-    runtime_thread_id: str | None,
-    *,
-    poll_seconds: float = 2.0,
-) -> None:
-    """Server-side monitor for detached runs: keep writing progress/memory/collab convergence.
-
-    This guarantees long tasks are tracked by backend even if lead-agent run already ended.
-    """
-    key = str(main_task_id or "").strip()
-    if not key:
-        return
-    prev = _bg_task_monitors.get(key)
-    if prev is not None and not prev.done():
-        return
-
-    async def _runner() -> None:
-        paths = get_paths()
-        last_sig = ""
-        try:
-            while True:
-                try:
-                    _auto_finalize_unrunnable_pending_subtasks(storage, key)
-                except Exception:
-                    logger.debug("background monitor: auto finalize pending failed task_id=%s", key, exc_info=True)
-                row = find_main_task(storage, key)
-                if not row:
-                    return
-                project, task = row
-                main_status = str(task.get("status") or "pending").strip().lower()
-                main_progress = int(task.get("progress") or 0)
-                subtasks = [st for st in (task.get("subtasks") or []) if isinstance(st, dict)]
-                terminal_sub = bool(subtasks) and all(
-                    str(st.get("status") or "pending").strip().lower() in _TERMINAL_SUBTASK for st in subtasks
-                )
-                terminal_main = main_status in _MONITOR_TERMINAL_MAIN or terminal_sub
-
-                mem_step = ""
-                mem_summary = ""
-                try:
-                    mem_store = get_task_memory_storage()
-                    mem_row = load_task_memory_for_task_id(storage, mem_store, key)
-                    if mem_row is not None:
-                        mem, _pid, _aid, _parent = mem_row
-                        mem_step = str(mem.get("current_step") or "").strip()
-                        mem_summary = str(mem.get("output_summary") or "").strip()
-                except Exception:
-                    logger.debug("background monitor: read task memory failed", exc_info=True)
-
-                sig = json.dumps(
-                    {
-                        "s": main_status,
-                        "p": main_progress,
-                        "st": [(str(st.get("id") or ""), str(st.get("status") or "")) for st in subtasks],
-                        "m": mem_step,
-                    },
-                    ensure_ascii=False,
-                )
-                if sig != last_sig:
-                    last_sig = sig
-                    tid = (runtime_thread_id or task.get("thread_id") or "").strip()
-                    if tid:
-                        try:
-                            detail = f"任务监控：{main_status} · {main_progress}%"
-                            if mem_step:
-                                detail += f" · {mem_step[:120]}"
-                            append_sidebar_supervisor_step(
-                                paths,
-                                tid,
-                                {"id": f"monitor-{key}-{uuid.uuid4().hex[:10]}", "action": "monitor", "label": detail, "done": bool(terminal_main)},
-                                max_steps=120,
-                            )
-                        except Exception:
-                            logger.debug("background monitor: append supervisor step failed", exc_info=True)
-
-                    try:
-                        await _broadcast_task_event(
-                            project.get("id"),
-                            "task:progress",
-                            {
-                                "task_id": key,
-                                "status": main_status,
-                                "progress": main_progress,
-                                "current_step": mem_step,
-                                "output_summary": mem_summary[:500],
-                            },
-                        )
-                    except Exception:
-                        logger.debug("background monitor: broadcast progress failed", exc_info=True)
-
-                if terminal_main:
-                    tid = (runtime_thread_id or task.get("thread_id") or "").strip()
-                    if tid:
-                        try:
-                            current = load_thread_collab_state(paths, tid)
-                            merged = merge_thread_collab_state(current, {"collab_phase": CollabPhase.DONE.value})
-                            save_thread_collab_state(paths, tid, merged)
-                        except Exception:
-                            logger.debug("background monitor: set collab phase done failed", exc_info=True)
-                    return
-
-                await asyncio.sleep(max(0.5, float(poll_seconds)))
-        finally:
-            cur = _bg_task_monitors.get(key)
-            if cur is not None and cur.done():
-                _bg_task_monitors.pop(key, None)
-
-    _bg_task_monitors[key] = asyncio.create_task(_runner(), name=f"supervisor-monitor-{key}")
-
-
-def _resolved_subagent_type_for_subtask(st: dict) -> str:
-    """Prefer explicit assigned_to on the subtask row; else worker_profile.base_subagent; else default."""
-    a = (st.get("assigned_to") or "").strip()
-    if a:
-        return a
-    wp = st.get("worker_profile")
-    if isinstance(wp, dict):
-        b = str(wp.get("base_subagent") or "").strip()
-        if b:
-            return b
-    return "general-purpose"
-
-
-def _record_supervisor_ui_step(
-    runtime: ToolRuntime[ContextT, dict] | None,
-    tool_call_id: str,
-    action: str,
-    label: str,
-) -> None:
-    """Persist a compact supervisor step for DeerPanel task sidebar (best-effort)."""
-    tid = _runtime_thread_id(runtime)
-    if not tid:
-        return
-    try:
-        import uuid as _uuid
-
-        from deerflow.collab.thread_collab import append_sidebar_supervisor_step
-
-        sid = (tool_call_id or "").strip()
-        step_id = sid if sid else str(_uuid.uuid4())
-        append_sidebar_supervisor_step(
-            get_paths(),
-            tid,
-            {"id": step_id, "action": action, "label": label, "done": True},
-        )
-    except Exception:
-        logger.debug("append sidebar supervisor step failed", exc_info=True)
-
-
-def _runtime_thread_id(runtime: ToolRuntime[ContextT, dict] | None) -> str | None:
-    if runtime is None:
-        return None
-    ctx = getattr(runtime, "context", None)
-    if isinstance(ctx, dict):
-        tid = ctx.get("thread_id")
-        if tid:
-            return str(tid)
-    cfg = getattr(runtime, "config", None) or {}
-    conf = cfg.get("configurable") or {}
-    tid = conf.get("thread_id")
-    return str(tid) if tid else None
-
-
-def _dbg_enabled(runtime: ToolRuntime[ContextT, dict] | None) -> bool:
-    # Opt-in noisy logs via runtime context (preferred) or env var (fallback).
-    try:
-        ctx = getattr(runtime, "context", None)
-        if isinstance(ctx, dict) and "DEERFLOW_SUPERVISOR_DEBUG" in ctx:
-            v = ctx.get("DEERFLOW_SUPERVISOR_DEBUG")
-            if isinstance(v, bool):
-                return v
-            return str(v).strip().lower() in {"1", "true", "yes", "on"}
-    except Exception:
-        pass
-    return str(os.getenv("DEERFLOW_SUPERVISOR_DEBUG", "")).strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _repr_with_invisibles(v: object) -> str:
-    # Make whitespace/newlines visible in logs.
-    s = "" if v is None else str(v)
-    return (
-        s.replace("\r", "\\r")
-        .replace("\n", "\\n")
-        .replace("\t", "\\t")
-        .replace(" ", "·")
-    )
-
-
-def _clamp_progress(value: int | None) -> int:
-    if value is None:
-        return 0
-    return max(0, min(100, int(value)))
-
-
-def _subtask_worker_profile_suffix(st: dict) -> str:
-    """Compact worker_profile line for list_subtasks / get_status (template + constraints)."""
-    wp = st.get("worker_profile")
-    if not isinstance(wp, dict) or not wp:
-        return ""
-    parts: list[str] = []
-    b = wp.get("base_subagent")
-    if b:
-        parts.append(f"base={b}")
-    tools = wp.get("tools") or []
-    if tools:
-        t = ",".join(str(x) for x in tools[:12])
-        if len(tools) > 12:
-            t += ",..."
-        parts.append(f"tools={t}")
-    skills = wp.get("skills") or []
-    if skills:
-        s = ",".join(str(x) for x in skills[:12])
-        if len(skills) > 12:
-            s += ",..."
-        parts.append(f"skills={s}")
-    dep = wp.get("depends_on") or []
-    if dep:
-        parts.append(f"deps={','.join(str(x) for x in dep)}")
-    ins = (wp.get("instruction") or "").strip()
-    if ins:
-        parts.append(f"instr={ins[:80]}{'…' if len(ins) > 80 else ''}")
-    if not parts:
-        return ""
-    return " | profile: " + "; ".join(parts)
-
-
-def _subtask_row_dict(st: dict) -> dict[str, Any]:
-    """Structured subtask row for JSON tool results (get_status / list_subtasks)."""
-    status = st.get("status", "unknown")
-    icon = {"pending": "⚪", "executing": "🔴", "completed": "✅", "failed": "❌"}.get(status, "⚪")
-    wp = st.get("worker_profile")
-    summary = _subtask_worker_profile_suffix(st)
-    if summary.startswith(" | profile: "):
-        summary = summary[len(" | profile: ") :]
-    else:
-        summary = ""
-    return {
-        "id": st.get("id"),
-        "name": st.get("name", "unnamed"),
-        "status": status,
-        "statusIcon": icon,
-        "assignedTo": st.get("assigned_to") or "unassigned",
-        "progress": st.get("progress", 0),
-        "workerProfile": wp if isinstance(wp, dict) else None,
-        "workerProfileSummary": summary,
-    }
-
-
-def _build_monitor_subtask_rows(
-    storage: Any,
-    subtasks: list[dict[str, Any]],
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Build rich subtask rows for monitor_execution(_step) to support lead-agent reasoning."""
-    sub_rows: list[dict[str, Any]] = []
-    failed_subtasks: list[dict[str, Any]] = []
-    mem_store = get_task_memory_storage()
-
-    for st in subtasks:
-        sid = str(st.get("id") or "")
-        s_status = str(st.get("status") or "pending").strip().lower()
-        s_prog = st.get("progress", 0) or 0
-        s_err = st.get("error") or st.get("failed_at") or None
-
-        wp = st.get("worker_profile")
-        wp_dict = wp if isinstance(wp, dict) else None
-        observed = st.get("observed_tools") or []
-        if not isinstance(observed, list):
-            observed = []
-        observed_calls = st.get("observed_tool_calls") or []
-        if not isinstance(observed_calls, list):
-            observed_calls = []
-
-        item: dict[str, Any] = {
-            "subtaskId": sid,
-            "status": s_status,
-            "progress": s_prog,
-            "assignedTo": st.get("assigned_to") or "unassigned",
-            "workerProfile": wp_dict,
-            "workerProfileSummary": _subtask_worker_profile_suffix(st).replace(" | profile: ", ""),
-            "observedTools": [str(x) for x in observed if str(x).strip()],
-            "observedToolCalls": observed_calls[-40:],
-        }
-
-        # If observed tools are not yet available, fall back to worker_profile.tools (planned tools).
-        if not item["observedTools"] and isinstance(wp_dict, dict):
-            raw_tools = wp_dict.get("tools") or []
-            if isinstance(raw_tools, list):
-                item["observedTools"] = [str(x) for x in raw_tools if str(x).strip()]
-
-        # Attach subtask memory snapshot (best-effort).
-        try:
-            if sid:
-                mrow = load_task_memory_for_task_id(storage, mem_store, sid)
-                if mrow is not None:
-                    mem, _project_id, _agent_id, _parent_task_id = mrow
-                    facts = mem.get("facts") or []
-                    if not isinstance(facts, list):
-                        facts = []
-                    item["memory"] = {
-                        "status": mem.get("status", ""),
-                        "progress": mem.get("progress", 0),
-                        "current_step": mem.get("current_step", ""),
-                        "output_summary": mem.get("output_summary", ""),
-                        "factsCount": len(facts),
-                    }
-        except Exception:
-            logger.debug("monitor subtask memory snapshot failed sid=%s", sid, exc_info=True)
-
-        if s_err and s_status in {"failed"}:
-            item["error"] = s_err
-            failed_subtasks.append(item)
-
-        sub_rows.append(item)
-
-    return sub_rows, failed_subtasks
-
-
-def _compute_monitor_recommendation(
-    *,
-    task_id: str,
-    status: str,
-    progress: int,
-    sub_rows: list[dict[str, Any]],
-    memory_payload: dict[str, Any] | None,
-) -> dict[str, Any]:
-    """Return backend-side recommendation for lead-agent decision making.
-
-    Signals:
-    - continue_wait: still moving
-    - retry_or_reassign: there are failed subtasks
-    - check_stalled: no progress/current_step change for a period
-    """
-    now = time.time()
-    step = ""
-    if isinstance(memory_payload, dict):
-        step = str(memory_payload.get("current_step") or "").strip()
-
-    failed_ids = [
-        str(s.get("subtaskId") or "")
-        for s in sub_rows
-        if str(s.get("status") or "").strip().lower() == "failed"
-    ]
-    signature = json.dumps({"p": int(progress or 0), "step": step}, ensure_ascii=False)
-    ws = _task_watch_state.get(task_id) or {}
-    last_sig = str(ws.get("signature") or "")
-    last_change_ts = float(ws.get("last_change_ts") or now)
-    no_change_count = int(ws.get("no_change_count") or 0)
-    if signature != last_sig:
-        last_change_ts = now
-        no_change_count = 0
-    else:
-        no_change_count += 1
-    _task_watch_state[task_id] = {
-        "signature": signature,
-        "last_change_ts": last_change_ts,
-        "updated_ts": now,
-        "no_change_count": no_change_count,
-    }
-
-    stagnant_seconds = max(0, int(now - last_change_ts))
-    # Practical threshold: 90s without progress/current_step change means probably stalled.
-    stalled = stagnant_seconds >= 90 and status not in _MONITOR_TERMINAL_MAIN
-
-    if failed_ids:
-        return {
-            "action": "retry_or_reassign",
-            "reason": "Detected failed subtasks.",
-            "failedSubtaskIds": failed_ids,
-            "stalled": stalled,
-            "stagnantSeconds": stagnant_seconds,
-            "noChangeCount": no_change_count,
-        }
-    if stalled:
-        return {
-            "action": "check_stalled",
-            "reason": "No progress/current_step update for a while.",
-            "failedSubtaskIds": [],
-            "stalled": True,
-            "stagnantSeconds": stagnant_seconds,
-            "noChangeCount": no_change_count,
-        }
-    return {
-        "action": "continue_wait",
-        "reason": "Task is progressing or waiting normally.",
-        "failedSubtaskIds": [],
-        "stalled": False,
-        "stagnantSeconds": stagnant_seconds,
-        "noChangeCount": no_change_count,
-    }
-
-
-async def _monitor_main_task_until_terminal(
-    storage: Any,
-    task_id: str,
-    *,
-    poll_seconds: float,
-    timeout_seconds: int | None,
-    timeline_step_seconds: int = 5,
-    slice_seconds: int | None = None,
-) -> dict[str, Any]:
-    """Backend-side monitor loop used by start_execution auto-follow mode."""
-    start_ts = asyncio.get_event_loop().time()
-    last_timeline_emit_ts = start_ts
-    timeline: list[dict[str, Any]] = []
-
-    while True:
-        try:
-            _auto_finalize_unrunnable_pending_subtasks(storage, task_id)
-        except Exception:
-            logger.debug("auto-follow monitor: auto finalize pending failed task_id=%s", task_id, exc_info=True)
-        row = find_main_task(storage, task_id)
-        if not row:
-            return {
-                "success": False,
-                "error": f"Task '{task_id}' not found while monitoring",
-                "timeline": timeline,
-            }
-        _proj, task = row
-        t_status = str(task.get("status") or "pending").strip().lower()
-        t_progress = int(task.get("progress") or 0)
-        subtasks = [st for st in (task.get("subtasks") or []) if isinstance(st, dict)]
-        sub_rows, failed_subtasks = _build_monitor_subtask_rows(storage, subtasks)
-
-        memory_payload: dict[str, Any] | None = None
-        try:
-            mem_store = get_task_memory_storage()
-            mem_row = load_task_memory_for_task_id(storage, mem_store, task_id)
-            if mem_row is not None:
-                mem, _pid, _aid, _parent = mem_row
-                facts = mem.get("facts") or []
-                if not isinstance(facts, list):
-                    facts = []
-                memory_payload = {
-                    "status": mem.get("status", ""),
-                    "progress": mem.get("progress", 0),
-                    "current_step": mem.get("current_step", ""),
-                    "output_summary": mem.get("output_summary", ""),
-                    "factsCount": len(facts),
-                    "facts": facts[:5],
-                }
-        except Exception:
-            logger.debug("auto-follow monitor: memory snapshot failed", exc_info=True)
-
-        rec = _compute_monitor_recommendation(
-            task_id=task_id,
-            status=t_status,
-            progress=t_progress,
-            sub_rows=sub_rows,
-            memory_payload=memory_payload,
-        )
-
-        now = asyncio.get_event_loop().time()
-        if now - last_timeline_emit_ts >= float(max(1, timeline_step_seconds)):
-            last_timeline_emit_ts = now
-            snap = {
-                "status": t_status,
-                "progress": t_progress,
-                "failedSubtasks": failed_subtasks[:5],
-                "memory": memory_payload,
-                "recommendation": rec,
-                "elapsedSeconds": int(now - start_ts),
-            }
-            timeline.append(snap)
-            if len(timeline) > 30:
-                timeline = timeline[-30:]
-
-        all_sub_terminal = bool(subtasks) and all(
-            str(st.get("status") or "pending").strip().lower() in _TERMINAL_SUBTASK for st in subtasks
-        )
-        if t_status in _MONITOR_TERMINAL_MAIN or all_sub_terminal:
-            return {
-                "success": True,
-                "terminal": True,
-                "status": t_status,
-                "progress": t_progress,
-                "subtasks": sub_rows,
-                "failedSubtasks": failed_subtasks,
-                "memory": memory_payload,
-                "recommendation": rec,
-                "timeline": timeline,
-            }
-
-        if slice_seconds is not None and (now - start_ts) >= float(max(1, int(slice_seconds))):
-            return {
-                "success": True,
-                "terminal": False,
-                "status": t_status,
-                "progress": t_progress,
-                "subtasks": sub_rows,
-                "failedSubtasks": failed_subtasks,
-                "memory": memory_payload,
-                "recommendation": rec,
-                "timeline": timeline,
-                "elapsedSeconds": int(now - start_ts),
-            }
-
-        if timeout_seconds is not None and (now - start_ts) > float(timeout_seconds):
-            return {
-                "success": False,
-                "terminal": False,
-                "status": t_status,
-                "progress": t_progress,
-                "error": f"auto-follow monitor timeout after {timeout_seconds}s",
-                "subtasks": sub_rows,
-                "failedSubtasks": failed_subtasks,
-                "memory": memory_payload,
-                "recommendation": rec,
-                "timeline": timeline,
-            }
-
-        await asyncio.sleep(max(0.5, float(poll_seconds)))
-
-
-async def _broadcast_task_event(project_id: str, event_type: str, data: dict) -> None:
-    """Best-effort SSE broadcast from supervisor paths."""
-    try:
-        from deerflow.collab.sse_notify import broadcast_project_event
-
-        await broadcast_project_event(project_id, event_type, data)
-    except Exception:
-        logger.debug("Failed to broadcast task event", exc_info=True)
-
-
-def _persist_main_task_memory_snapshot(project: dict, task: dict) -> int:
-    """Aggregate subtask memories into the main-task memory file."""
-    mem_store = get_task_memory_storage()
-    project_id = project.get("id")
-    task_id = task.get("id")
-    if not project_id or not task_id:
-        return 0
-
-    main_agent_id = task.get("assigned_to") or ""
-    main_mem = mem_store.load_task_memory(project_id, main_agent_id, task_id)
-    main_mem["task_id"] = task_id
-    main_mem["project_id"] = project_id
-    main_mem["agent_id"] = main_agent_id
-    main_mem["status"] = task.get("status") or "pending"
-    main_mem["progress"] = _clamp_progress(task.get("progress"))
-    main_mem["current_step"] = (
-        "All subtasks completed" if (task.get("status") == "completed") else "Task in progress"
-    )
-
-    aggregated_facts = []
-    output_parts = []
-    seen_fact_ids = set()
-    for st in task.get("subtasks", []):
-        st_id = st.get("id")
-        if not st_id:
-            continue
-        st_agent_id = (st.get("assigned_to") or task.get("assigned_to") or "") or ""
-        st_mem = mem_store.load_task_memory(project_id, st_agent_id, st_id)
-        out = (st_mem.get("output_summary") or "").strip()
-        if out:
-            output_parts.append(f"[{st_id}] {out}")
-        for fact in st_mem.get("facts", []) or []:
-            fid = fact.get("id") or f"{st_id}:{fact.get('content', '')[:64]}"
-            if fid in seen_fact_ids:
-                continue
-            seen_fact_ids.add(fid)
-            aggregated_facts.append({**fact, "task_id": st_id})
-
-    if output_parts:
-        main_mem["output_summary"] = "\n".join(output_parts)[:8000]
-    main_mem["facts"] = aggregated_facts
-    if task.get("status") == "completed":
-        from datetime import datetime
-
-        now = datetime.utcnow().isoformat() + "Z"
-        main_mem["completed_at"] = now
-
-    mem_store.save_task_memory(main_mem)
-    return len(aggregated_facts)
+# ════════════════════════════════════════════════════════════════════
+#  Thin routing layer — @tool decorator + action dispatch
+# ════════════════════════════════════════════════════════════════════
 
 
 @tool("supervisor", parse_docstring=True)
@@ -1136,7 +146,7 @@ async def supervisor_tool(
         task_id: Main task id (required for create_subtask, get_status, get_task_memory, list_subtasks, set_task_planned).
         subtask_id: ID of an existing subtask (required for complete_subtask; optional for update_progress when updating main task).
         assigned_agent: Agent ID for create_subtask (optional); must be a configured subagent name。
-            When used with `action=\"create_subtask\"`, the new subtask will be created already assigned (create+assign).
+            When used with `action="create_subtask"`, the new subtask will be created already assigned (create+assign).
         subtasks: For create_subtasks: list of subtask objects (batch create+assign).
             Each item may include fields such as name (required), description, assigned_agent, worker_profile_json (JSON string).
         subtask_ids: For start_execution: optional; if set, only these ids are *considered*
@@ -1203,6 +213,7 @@ async def supervisor_tool(
             list(available_agents),
         )
 
+    # ── Action: create_task ───────────────────────────────────────────
     if action == "create_task":
         if not task_name:
             return json.dumps({
@@ -1256,6 +267,7 @@ async def supervisor_tool(
             "error": "Failed to create task"
         }, ensure_ascii=False)
 
+    # ── Action: create_subtasks (batch) ───────────────────────────────
     elif action == "create_subtasks":
         if not task_id:
             return json.dumps(
@@ -1507,6 +519,7 @@ async def supervisor_tool(
             ensure_ascii=False,
         )
 
+    # ── Action: create_subtask (single) ──────────────────────────────
     elif action == "create_subtask":
         if not task_id or not subtask_name:
             return json.dumps({
@@ -1679,6 +692,7 @@ async def supervisor_tool(
                 "error": f"Task '{task_id}' not found"
             }, ensure_ascii=False)
 
+    # ── Action: update_progress ─────────────────────────────────────
     elif action == "update_progress":
         if not task_id:
             return json.dumps({
@@ -1822,6 +836,7 @@ async def supervisor_tool(
             "error": f"Task '{task_id}' not found"
         }, ensure_ascii=False)
 
+    # ── Action: complete_subtask ─────────────────────────────────────
     elif action == "complete_subtask":
         if not task_id or not subtask_id:
             return json.dumps({
@@ -1897,6 +912,7 @@ async def supervisor_tool(
             "error": f"Task '{task_id}' not found"
         }, ensure_ascii=False)
 
+    # ── Action: start_execution ──────────────────────────────────────
     elif action == "start_execution":
         if not task_id:
             return json.dumps({
@@ -1971,10 +987,11 @@ async def supervisor_tool(
                     to_run,
                     wait_for_completion=wait_for_completion,
                 )
-            except Exception:
+            except Exception as exc:
                 logger.exception("start_execution: delegate_collab_subtasks_for_start_execution failed task_id=%s", task_id)
+                _err_msg = f"delegation failed: {type(exc).__name__}: {exc}"
                 delegated = [
-                    {"subtaskId": sid, "ok": False, "error": "delegation failed"}
+                    {"subtaskId": sid, "ok": False, "error": _err_msg}
                     for sid in to_run
                 ]
 
@@ -2109,6 +1126,7 @@ async def supervisor_tool(
             result["follow"] = follow_payload
         return json.dumps(result, ensure_ascii=False)
 
+    # ── Action: set_task_planned ─────────────────────────────────────
     elif action == "set_task_planned":
         if not task_id:
             return json.dumps({
@@ -2162,6 +1180,7 @@ async def supervisor_tool(
             "error": f"Task '{task_id}' not found"
         }, ensure_ascii=False)
 
+    # ── Action: get_status ───────────────────────────────────────────
     elif action == "get_status":
         if not task_id:
             return json.dumps({
@@ -2200,6 +1219,7 @@ async def supervisor_tool(
             "error": f"Task '{task_id}' not found"
         }, ensure_ascii=False)
 
+    # ── Action: get_task_memory ──────────────────────────────────────
     elif action == "get_task_memory":
         if not task_id:
             return json.dumps({
@@ -2238,6 +1258,7 @@ async def supervisor_tool(
         }
         return json.dumps(result, ensure_ascii=False, default=str)
 
+    # ── Action: monitor_execution (blocking until terminal) ──────────
     elif action == "monitor_execution":
         """Block until a collaborative task reaches a terminal state and return status+memory snapshot."""
         if not task_id:
@@ -2333,6 +1354,7 @@ async def supervisor_tool(
 
             await asyncio.sleep(poll_seconds)
 
+    # ── Action: monitor_execution_step (incremental snapshot) ────────
     elif action == "monitor_execution_step":
         """Poll for at most `monitor_step_seconds` and return an incremental snapshot.
 
@@ -2485,7 +1507,7 @@ async def supervisor_tool(
                 }, ensure_ascii=False, default=str)
 
             # Non-terminal + unchanged: still return immediately with a full snapshot.
-            # 目标：每次 monitor_execution_step 都有结构化结果，避免前端显示“无结果”。
+            # 目标：每次 monitor_execution_step 都有结构化结果，避免前端显示"无结果"。
             rec = _compute_monitor_recommendation(
                 task_id=task_id,
                 status=t_status,
@@ -2508,6 +1530,7 @@ async def supervisor_tool(
                 "elapsedSeconds": int(elapsed),
             }, ensure_ascii=False, default=str)
 
+    # ── Action: list_subtasks ────────────────────────────────────────
     elif action == "list_subtasks":
         if not task_id:
             return json.dumps({
@@ -2540,6 +1563,7 @@ async def supervisor_tool(
             "error": f"Task '{task_id}' not found"
         }, ensure_ascii=False)
 
+    # ── Action: create_agent ────────────────────────────────────────
     elif action == "create_agent":
         """Create a new agent configuration.
         
@@ -2656,6 +1680,7 @@ async def supervisor_tool(
             logger.error(f"Failed to create agent '{agent_name}': {e}", exc_info=True)
             return f"Error: Failed to create agent '{agent_name}': {e}"
 
+    # ── Action: update_agent ────────────────────────────────────────
     elif action == "update_agent":
         """Update an existing agent configuration.
         
@@ -2766,6 +1791,7 @@ async def supervisor_tool(
             logger.error(f"Failed to update agent '{agent_name}': {e}", exc_info=True)
             return f"Error: Failed to update agent '{agent_name}': {e}"
 
+    # ── Action: list_agents ─────────────────────────────────────────
     elif action == "list_agents":
         """List available subagent templates and configured custom/ACP agents.
 
@@ -2843,6 +1869,7 @@ async def supervisor_tool(
             logger.error(f"Failed to list agents: {e}", exc_info=True)
             return f"Error: Failed to list agents: {e}"
 
+    # ── Fallback: unknown action ────────────────────────────────────
     return json.dumps({
         "success": False,
         "action": action,

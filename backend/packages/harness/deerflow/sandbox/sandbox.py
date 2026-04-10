@@ -67,6 +67,20 @@ class Sandbox(ABC):
 
         Args:
             path: The absolute path of the file to update.
-            content: The binary content to write to the file.
+            content: The binary content to write.
+        """
+        pass
+
+    @abstractmethod
+    def delete_file(self, path: str) -> None:
+        """Delete a file from the sandbox.
+
+        Args:
+            path: The absolute path of the file to delete.
+
+        Raises:
+            FileNotFoundError: If the file does not exist.
+            IsADirectoryError: If the path is a directory (not a file).
+            PermissionError: If deletion is not permitted.
         """
         pass

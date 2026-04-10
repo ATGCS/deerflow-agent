@@ -6,6 +6,8 @@ from langchain_core.runnables import RunnableConfig
 
 from deerflow.agents.lead_agent.prompt import apply_prompt_template
 from deerflow.agents.middlewares.clarification_middleware import ClarificationMiddleware
+from deerflow.agents.middlewares.conversation_summary_tag_middleware import ConversationSummaryTagMiddleware
+from deerflow.agents.middlewares.ui_messages_snapshot_middleware import UiMessagesSnapshotMiddleware
 from deerflow.agents.middlewares.collab_phase_middleware import CollabPhaseMiddleware
 from deerflow.agents.middlewares.loop_detection_middleware import LoopDetectionMiddleware
 from deerflow.agents.middlewares.memory_middleware import MemoryMiddleware
@@ -200,6 +202,9 @@ Being proactive with task management demonstrates thoroughness and ensures all r
 # UploadsMiddleware should be after ThreadDataMiddleware to access thread_id
 # DanglingToolCallMiddleware patches missing ToolMessages before model sees the history
 # SummarizationMiddleware should be early to reduce context before other processing
+# UiMessagesSnapshotMiddleware maintains append-only UI transcript and must run
+# before SummarizationMiddleware (Summarization runs in before_model and replaces messages).
+# ConversationSummaryTagMiddleware must follow SummarizationMiddleware so summary HumanMessages get a stable name
 # TodoListMiddleware should be before ClarificationMiddleware to allow todo management
 # TitleMiddleware generates title after first exchange
 # MemoryMiddleware queues conversation for memory update (after TitleMiddleware)
@@ -223,7 +228,9 @@ def _build_middlewares(config: RunnableConfig, model_name: str | None, agent_nam
     # Add summarization middleware if enabled
     summarization_middleware = _create_summarization_middleware()
     if summarization_middleware is not None:
+        middlewares.append(UiMessagesSnapshotMiddleware())
         middlewares.append(summarization_middleware)
+        middlewares.append(ConversationSummaryTagMiddleware())
 
     # Add TodoList middleware if plan mode is enabled
     is_plan_mode = config.get("configurable", {}).get("is_plan_mode", False)
@@ -292,6 +299,7 @@ def make_lead_agent(config: RunnableConfig):
     agent_name = cfg.get("agent_name")
     include_search = cfg.get("include_search", True)
     use_virtual_paths = cfg.get("use_virtual_paths", False)
+    tools_mode = cfg.get("tools_mode", None)  # "host_direct" | "sandbox" | None
     local_workspace_root = cfg.get("local_workspace_root")
 
     agent_config = load_agent_config(agent_name) if not is_bootstrap else None
@@ -341,7 +349,7 @@ def make_lead_agent(config: RunnableConfig):
 
     if is_bootstrap:
         # Special bootstrap agent with minimal prompt for initial custom agent creation flow
-        tools = get_available_tools(model_name=model_name, subagent_enabled=subagent_enabled, include_search=include_search)
+        tools = get_available_tools(model_name=model_name, subagent_enabled=subagent_enabled, include_search=include_search, tools_mode=tools_mode)
         return create_agent(
             model=create_chat_model(name=model_name, thinking_enabled=thinking_enabled),
             tools=tools,
@@ -371,6 +379,7 @@ def make_lead_agent(config: RunnableConfig):
         groups=agent_config.tool_groups if agent_config else None,
         subagent_enabled=subagent_enabled,
         include_search=include_search,
+        tools_mode=tools_mode,
     )
 
     # Apply tool whitelist filter: if config specifies tools, only keep those

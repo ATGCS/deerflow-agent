@@ -117,6 +117,26 @@ function debugSubtaskFlowEnabled(): boolean {
   }
 }
 
+function debugAssistantDedupEnabled(): boolean {
+  try {
+    if (localStorage.getItem('DEERFLOW_DEBUG_ASSISTANT_DEDUP') === '1') return true
+    // 便于排障：开发环境默认开启（显式设为 '0' 可关闭）
+    if (import.meta.env.DEV) return localStorage.getItem('DEERFLOW_DEBUG_ASSISTANT_DEDUP') !== '0'
+    return false
+  } catch {
+    return !!import.meta.env.DEV
+  }
+}
+
+function enableAutoTaskResumeAfterFinal(): boolean {
+  try {
+    // 默认关闭，避免旧任务流与新提问串台；需要时可在控制台显式打开为 '1'
+    return localStorage.getItem('DEERFLOW_ENABLE_AUTO_TASK_RESUME_AFTER_FINAL') === '1'
+  } catch {
+    return false
+  }
+}
+
 function parseParentAndSubtaskIdFromComposite(taskId: string): { parentTaskId: string; subtaskId: string } | null {
   const raw = String(taskId || '').trim()
   if (!raw) return null
@@ -554,6 +574,8 @@ export default function ChatApp() {
   const [streamTick, bumpStream] = useReducer((x: number) => x + 1, 0)
   const rafRef = useRef<number | null>(null)
   const seenRunIdsRef = useRef(new Set<string>())
+  const activeChatRunIdRef = useRef<string | null>(null)
+  const pendingBindChatRunRef = useRef(false)
   const sessionRef = useRef(selectedSessionKey)
   const lastErrorRef = useRef({ msg: '', ts: 0 })
   const unsubRef = useRef<(() => void) | null>(null)
@@ -1797,6 +1819,25 @@ export default function ChatApp() {
       const runId = payload.runId
       const S = streamRef.current
 
+      // 追加提问后：先等待本轮首个正文(delta/final)来绑定 runId。
+      // 绑定前忽略 tool/subtask，避免旧会话残留任务流“顶上来”。
+      if (pendingBindChatRunRef.current) {
+        if (state === 'tool' || state === 'subtask') return
+        if ((state === 'delta' || state === 'final') && runId) {
+          activeChatRunIdRef.current = String(runId)
+          pendingBindChatRunRef.current = false
+        }
+      }
+      // 已绑定本轮 run 后，严格丢弃其他 run 事件，避免串台。
+      if (activeChatRunIdRef.current && runId && String(runId) !== activeChatRunIdRef.current) {
+        return
+      }
+
+      // 同一时刻只消费一个 run 的流式事件，避免旧 run 残留把新一轮对话“顶掉/串台”。
+      if (S.runId && runId && S.runId !== runId) {
+        return
+      }
+
       if (runId && state === 'final' && seenRunIdsRef.current.has(runId)) return
       if (
         runId &&
@@ -2037,24 +2078,75 @@ export default function ChatApp() {
         const subagentSnap =
           S.subagentTasks && Object.keys(S.subagentTasks).length > 0 ? { ...S.subagentTasks } : undefined
         setRows((r) => {
-          const newRows = [
-            ...r,
-            {
-              role: 'assistant' as const,
-              text: textOut,
-              segments: segmentsOut,
-              tools: [...S.tools],
-              images: [...S.images],
-              videos: [...S.videos],
-              audios: [...S.audios],
-              files: [...S.files],
-              timestamp: Date.now(),
-              durationStr: durStr || undefined,
-              tokenStr: tokenStr || undefined,
-              ...(subagentSnap ? { subagentTasks: subagentSnap } : {}),
-            },
-          ]
-          return newRows
+          const nextRow: DisplayRow = {
+            role: 'assistant' as const,
+            text: textOut,
+            segments: segmentsOut,
+            tools: [...S.tools],
+            images: [...S.images],
+            videos: [...S.videos],
+            audios: [...S.audios],
+            files: [...S.files],
+            timestamp: Date.now(),
+            durationStr: durStr || undefined,
+            tokenStr: tokenStr || undefined,
+            ...(subagentSnap ? { subagentTasks: subagentSnap } : {}),
+          }
+          const last = r[r.length - 1]
+          if (last?.role === 'assistant') {
+            const prevText = String(last.text || '').trim()
+            const nextText = String(nextRow.text || '').trim()
+            const prevComparable = String(prevText || flattenStreamDisplayText(last.segments || [], '') || '').trim()
+            const nextComparable = String(nextText || flattenStreamDisplayText(nextRow.segments || [], '') || '').trim()
+            if (debugAssistantDedupEnabled()) {
+              // eslint-disable-next-line no-console
+              console.debug('[assistant-dedup] final-check', {
+                runId,
+                prevLen: prevComparable.length,
+                nextLen: nextComparable.length,
+                prevHead: prevComparable.slice(0, 120),
+                nextHead: nextComparable.slice(0, 120),
+                prevSegKinds: Array.isArray(last.segments) ? last.segments.map((s) => s.kind) : [],
+                nextSegKinds: Array.isArray(nextRow.segments) ? nextRow.segments.map((s) => s.kind) : [],
+                prevTools: Array.isArray(last.tools) ? last.tools.length : 0,
+                nextTools: Array.isArray(nextRow.tools) ? nextRow.tools.length : 0,
+              })
+            }
+            // 同一轮流式中 assistant 常发送“前缀递增”的阶段性文本；此处覆盖而非追加，避免重复刷屏。
+            if (
+              (nextComparable && prevComparable && nextComparable.startsWith(prevComparable)) ||
+              (nextComparable &&
+                prevComparable &&
+                nextComparable.replace(/\s+/g, ' ').includes(prevComparable.replace(/\s+/g, ' ')))
+            ) {
+              if (debugAssistantDedupEnabled()) {
+                // eslint-disable-next-line no-console
+                console.debug('[assistant-dedup] replace-last', { runId, reason: 'next_contains_prev' })
+              }
+              const merged: DisplayRow = {
+                ...last,
+                ...nextRow,
+                // 合并工具（同 id 覆盖）
+                tools: (() => {
+                  const map = new Map<string, any>()
+                  for (const t of [...(last.tools || []), ...(nextRow.tools || [])]) {
+                    if (!t || typeof t !== 'object') continue
+                    const tObj = t as Record<string, unknown>
+                    const k = String(tObj.id || tObj.tool_call_id || '')
+                    if (!k) continue
+                    map.set(k, { ...(map.get(k) || {}), ...tObj })
+                  }
+                  return Array.from(map.values())
+                })(),
+              }
+              return [...r.slice(0, -1), merged]
+            }
+            if (debugAssistantDedupEnabled()) {
+              // eslint-disable-next-line no-console
+              console.debug('[assistant-dedup] append-new', { runId, reason: 'not_contains' })
+            }
+          }
+          return [...r, nextRow]
         })
 
         // final：清空流式缓冲；保留 thread_state 下发的标题/todos/协作任务，仅清除进行中活动区
@@ -2119,6 +2211,9 @@ export default function ChatApp() {
         // 关键：同一会话内主对话先结束、子任务仍在跑时，立即接力 task-stream，
         // 避免用户看到“主智能体回复后就停了”。
         {
+          if (!enableAutoTaskResumeAfterFinal()) {
+            return
+          }
           const sk = sessionRef.current
           const tid = wsClient.getSessionThreadId(sk)
           if (tid && !resumeInFlightRef.current) {
@@ -2300,6 +2395,20 @@ export default function ChatApp() {
 
   async function handleSend(message: string, attachments?: ChatAttachment[]) {
     if (!selectedSessionKey) return
+    const sessionKey = selectedSessionKey
+    const { api } = await import('../lib/tauri-api.js')
+    // 发送新一轮前先中止当前会话的残留流，防止旧 run 继续回灌内容。
+    try {
+      await api.chatAbort(sessionKey)
+    } catch {
+      /* ignore */
+    }
+    streamRef.current = emptyStream()
+    seenRunIdsRef.current = new Set()
+    activeChatRunIdRef.current = null
+    pendingBindChatRunRef.current = true
+    scheduleBump()
+
     // 更新活跃时间，防止状态被过期
     lastActivityRef.current[selectedSessionKey] = Date.now()
     // 新一轮用户输入后，允许该会话再次触发一次“断点续流”（用于中途断线/异常终止的兜底）
@@ -2320,7 +2429,6 @@ export default function ChatApp() {
     }
     setRows((r) => [...r, userRow])
     try {
-      const { api } = await import('../lib/tauri-api.js')
       const send = api.chatSend as (
         sessionKey: string,
         message: string,

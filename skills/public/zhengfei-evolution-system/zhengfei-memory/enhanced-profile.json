@@ -1,0 +1,31 @@
+{
+  "version": "4.0",
+  "system": "正飞记忆核心系统 V4.0",
+  "static": {
+    "identity": [
+      {
+        "text": "我叫张三，是正飞信息技术的开发者，我喜欢用TypeScript开发",
+        "memory_id": "MEM-AAABD6C6",
+        "confidence": 0.93,
+        "importance": 4,
+        "created_at": "2026-04-02T03:15:16.918399"
+      },
+      {
+        "text": "我叫正飞，我喜欢用Python开发，偏好简洁的代码风格",
+        "memory_id": "MEM-31D757F9",
+        "confidence": 0.93,
+        "importance": 4,
+        "created_at": "2026-04-02T04:09:52.136361"
+      }
+    ],
+    "preferences": [],
+    "skills": [],
+    "relationships": []
+  },
+  "dynamic": {
+    "recent_activities": [],
+    "current_goals": [],
+    "active_projects": []
+  },
+  "updated_at": "2026-04-02T04:09:52.183732"
+}

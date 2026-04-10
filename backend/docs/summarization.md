@@ -47,7 +47,7 @@ summarization:
 
 #### `enabled`
 - **Type**: Boolean
-- **Default**: `false`
+- **Default**: `true`
 - **Description**: Enable or disable automatic summarization
 
 #### `model_name`
@@ -57,8 +57,8 @@ summarization:
 
 #### `trigger`
 - **Type**: Single `ContextSize` or list of `ContextSize` objects
-- **Required**: At least one trigger must be specified when enabled
-- **Description**: Thresholds that trigger summarization. Uses OR logic - summarization runs when ANY threshold is met.
+- **Default**: `tokens` / `4000` (approximate token count on the conversation)
+- **Description**: Thresholds that trigger summarization. Uses OR logic - summarization runs when ANY threshold is met. Set to `null` to clear triggers (with `enabled: true`, summarization would never run).
 
 **ContextSize Types:**
 

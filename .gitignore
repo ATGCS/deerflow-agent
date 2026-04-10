@@ -54,3 +54,10 @@ web/
 # Deployment artifacts
 backend/Dockerfile.langgraph
 config.yaml.bak
+
+# Temp directory
+temp/
+
+# Node modules
+node_modules/
+*/node_modules/

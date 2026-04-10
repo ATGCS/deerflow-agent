@@ -1,0 +1,11 @@
+# 正飞进化系统依赖
+
+fastapi>=0.100.0
+uvicorn>=0.22.0
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+python-multipart>=0.0.6
+
+# 可选：如果需要更高级的功能
+# websockets>=11.0
+# httpx>=0.24.0

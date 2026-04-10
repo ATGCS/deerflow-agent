@@ -797,11 +797,19 @@ function deriveActivityFromMessages(messages) {
   return base
 }
 
+/** 摘要后 ``messages`` 仅含模型上下文；``ui_messages`` 为摘要前完整副本（供界面） */
+function pickDisplayMessages(values) {
+  if (!values || typeof values !== 'object') return []
+  const ui = Array.isArray(values.ui_messages) ? values.ui_messages : []
+  if (ui.length) return ui
+  return Array.isArray(values.messages) ? values.messages : []
+}
+
 /** 与 Web 版 values 事件对齐：扁平或 { values: {...} } */
 function normalizeStreamValues(data) {
   if (!data || typeof data !== 'object') return { messages: [], todos: [], title: null }
   const raw = data.values && typeof data.values === 'object' ? data.values : data
-  const messages = Array.isArray(raw.messages) ? raw.messages : []
+  const messages = pickDisplayMessages(raw)
   const todos = Array.isArray(raw.todos) ? raw.todos : []
   const title = typeof raw.title === 'string' && raw.title.trim() ? raw.title.trim() : null
   return { messages, todos, title }
@@ -1785,6 +1793,10 @@ export class WsClient {
     }
   }
 
+  /**
+   * 聊天历史：GET LangGraph `threads/{thread_id}/state`，优先 `values.ui_messages`（完整展示），否则 `values.messages`。
+   * 与列表用的 `POST /api/langgraph/threads/search` 不同：search 只同步 thread 元数据 ↔ 本地 session 映射，不拉完整消息。
+   */
   async chatHistory(sessionKey, limit = 200) {
     const key = sessionKey || MAIN_SESSION_KEY
     const map = loadSessionMap()
@@ -1793,7 +1805,7 @@ export class WsClient {
     try {
       const state = await fetchJson(`/api/langgraph/threads/${encodeURIComponent(threadId)}/state`)
       const values = state?.values && typeof state.values === 'object' ? state.values : null
-      const messages = Array.isArray(values?.messages) ? values.messages : []
+      const messages = pickDisplayMessages(values)
       const result = messages.slice(-Math.max(1, limit))
       // 仅拉历史不要用「当前时间」刷 updatedAt，否则下次列表排序会把刚点过的会话顶来顶去
       map[key].messageCount = messages.length
@@ -1823,7 +1835,7 @@ export class WsClient {
     } else {
       const state = await fetchJson(`/api/langgraph/threads/${encodeURIComponent(threadId)}/state`)
       const values = state?.values && typeof state.values === 'object' ? state.values : null
-      const all = Array.isArray(values?.messages) ? values.messages : []
+      const all = pickDisplayMessages(values)
       recent = all
         .filter(m => isHumanMessage(m) || isAssistantMessage(m))
         .map(m => {
@@ -2040,7 +2052,7 @@ export class WsClient {
     for (const { tid, updated, thread: t } of best.values()) {
       const sk = sessionKeyFromSearchThread(t)
       const values = t.values && typeof t.values === 'object' ? t.values : {}
-      const msgs = Array.isArray(values.messages) ? values.messages : []
+      const msgs = pickDisplayMessages(values)
       const prev = map[sk] || {}
       map[sk] = {
         threadId: tid,

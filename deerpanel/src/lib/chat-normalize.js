@@ -299,12 +299,67 @@ export function extractContent(msg) {
   return { text: stripThinkingTags(text), images: [], videos: [], audios: [], files: [], tools }
 }
 
+/** LangGraph checkpoint 里部分中间件会用 HumanMessage 注入提醒（Anthropic 限制下不能插 System），刷新后若仍当 user 会占满「用户气泡」。 */
+function peekRawTextForRoleHint(msg) {
+  const c = msg?.content
+  if (typeof c === 'string') return c.trimStart()
+  /* 少数序列化形态：content 为单对象且带 text（非标准数组块） */
+  if (c && typeof c === 'object' && !Array.isArray(c) && typeof c.text === 'string') return c.text.trimStart()
+  if (Array.isArray(c)) {
+    const texts = []
+    for (const block of c) {
+      if (typeof block === 'string') {
+        texts.push(block)
+        continue
+      }
+      if (!block || typeof block !== 'object') continue
+      if (typeof block.text === 'string') {
+        texts.push(block.text)
+        continue
+      }
+      if (typeof block.content === 'string') {
+        texts.push(block.content)
+      }
+    }
+    return texts.join('\n').trimStart()
+  }
+  return ''
+}
+
+const INJECTED_HUMAN_MESSAGE_NAMES = new Set([
+  'todo_reminder',
+  'collab_phase_hint',
+  'conversation_summary',
+])
+
+/** LangChain SummarizationMiddleware 注入的 HumanMessage（无 name 的旧 checkpoint 仍靠前缀识别） */
+function isHandoffSummaryHumanContent(head) {
+  const s = typeof head === 'string' ? head.trimStart().toLowerCase() : ''
+  return (
+    s.startsWith('here is a summary of the conversation to date') ||
+    s.startsWith("here's a summary of the conversation to date")
+  )
+}
+
+function isInjectedHumanUiMessage(msg) {
+  if (!msg || typeof msg !== 'object') return false
+  const n = msg.name != null ? String(msg.name).trim() : ''
+  if (n && INJECTED_HUMAN_MESSAGE_NAMES.has(n)) return true
+  const head = peekRawTextForRoleHint(msg)
+  if (head.startsWith('[LOOP DETECTED]') || head.startsWith('[FORCED STOP]')) return true
+  if (isHandoffSummaryHumanContent(head)) return true
+  return false
+}
+
 export function normalizeHistoryRole(msg) {
   if (!msg || typeof msg !== 'object') return 'assistant'
   if (msg.role === 'tool' || msg.role === 'toolResult') return 'assistant'
-  if (msg.role === 'user' || msg.role === 'assistant') return msg.role
+  if (msg.role === 'user') return isInjectedHumanUiMessage(msg) ? 'system' : 'user'
+  if (msg.role === 'assistant') return 'assistant'
+  if (isInjectedHumanUiMessage(msg)) return 'system'
   const t = msg.type
-  if (t === 'human' || t === 'user') return 'user'
+  const tLower = typeof t === 'string' ? t.toLowerCase() : ''
+  if (tLower === 'human' || tLower === 'humanmessage' || t === 'user') return 'user'
   if (t === 'ai' || t === 'AIMessage' || t === 'AIMessageChunk' || t === 'assistant') return 'assistant'
   if (t === 'tool' || t === 'tool_message') return 'assistant'
   if (t === 'system') return 'assistant'
@@ -317,6 +372,7 @@ function toolEntryId(t) {
 
 function buildInitialSegments(c, tools) {
   const segs = []
+  if (c?.text) segs.push({ kind: 'text', text: c.text })
   const ids = (tools || []).map((t) => toolEntryId(t)).filter(Boolean)
   if (ids.length) segs.push({ kind: 'tools', ids })
   return segs.length ? segs : undefined
@@ -335,6 +391,7 @@ export function flattenStreamDisplayText(segments, tailText) {
 export function dedupeHistory(messages) {
   const deduped = []
   const seenMessageIds = new Set()
+  const normalizeAssistantText = (s) => String(s || '').replace(/\s+/g, ' ').trim()
   for (const msg of messages) {
     const msgId = msg && typeof msg === 'object' ? (msg.id || msg.message_id || msg.messageId) : null
     if (msgId) {
@@ -343,9 +400,13 @@ export function dedupeHistory(messages) {
       seenMessageIds.add(key)
     }
     const role = normalizeHistoryRole(msg)
+    /* 中间件注入的 human 会归一为 system；MessageRow 仍会渲染 msg-system，对用户等于「还是看到一大段」——直接不出现在列表里 */
+    if (role === 'system') continue
     const c = extractContent(msg)
     if (!c.text && !c.images.length && !c.videos.length && !c.audios.length && !c.files.length && !c.tools.length)
       continue
+    /* 角色判定漏网时：已抽出正文仍明显是 LangChain 摘要，不展示 */
+    if (role === 'user' && isHandoffSummaryHumanContent(String(c.text || '').trimStart())) continue
     const tools = (c.tools || []).map((t) => {
       const id = t.id || t.tool_call_id
       const time = t.time || resolveToolTime(id, msg.timestamp)
@@ -368,19 +429,49 @@ export function dedupeHistory(messages) {
         if (c.text) {
           const prevText = String(last.text || '')
           const nextText = String(c.text || '')
+          const prevNorm = normalizeAssistantText(prevText)
+          const nextNorm = normalizeAssistantText(nextText)
+          let textChanged = false
           // Web 工程做法：assistant 的累计快照应“覆盖更新”，而不是不断 append 造成重复。
           // - next 包含 prev：用 next 覆盖
           // - prev 包含 next：忽略更短旧快照
           // - 其他情况：才按段落追加（保留语义差异）
           if (!prevText) {
             last.text = nextText
+            textChanged = Boolean(nextNorm)
           } else if (nextText && nextText.startsWith(prevText)) {
             last.text = nextText
+            textChanged = Boolean(nextNorm)
             // 覆盖型更新不再重复写入 segments，避免历史回放出现“同一段话两遍”
           } else if (prevText && prevText.startsWith(nextText)) {
             // ignore
+          } else if (nextNorm && prevNorm && nextNorm.includes(prevNorm)) {
+            // 处理“文案有轻微空白/换行差异，但本质是 next 覆盖 prev”的情况。
+            last.text = nextText
+            textChanged = true
+          } else if (nextNorm && prevNorm && prevNorm.includes(nextNorm)) {
+            // ignore
           } else {
             last.text = [prevText, nextText].filter(Boolean).join('\n')
+            textChanged = Boolean(nextNorm)
+          }
+          if (textChanged) {
+            if (!last.segments) last.segments = []
+            const prevSeg = last.segments[last.segments.length - 1]
+            if (prevSeg && prevSeg.kind === 'text') {
+              const prevSegNorm = normalizeAssistantText(prevSeg.text)
+              if (nextNorm && prevSegNorm && nextNorm.startsWith(prevSegNorm)) {
+                prevSeg.text = nextText
+              } else if (nextNorm && prevSegNorm && prevSegNorm.startsWith(nextNorm)) {
+                // ignore
+              } else if (nextNorm && prevSegNorm && nextNorm === prevSegNorm) {
+                // ignore
+              } else {
+                last.segments.push({ kind: 'text', text: nextText })
+              }
+            } else {
+              last.segments.push({ kind: 'text', text: nextText })
+            }
           }
         }
         for (const t of tools) {

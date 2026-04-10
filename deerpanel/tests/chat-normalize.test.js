@@ -17,11 +17,56 @@ describe('normalizeHistoryRole', () => {
   it('maps human to user', () => {
     expect(normalizeHistoryRole({ type: 'human' })).toBe('user')
   })
+  it('maps HumanMessage-style type to user', () => {
+    expect(normalizeHistoryRole({ type: 'HumanMessage' })).toBe('user')
+  })
   it('maps ai to assistant', () => {
     expect(normalizeHistoryRole({ type: 'ai' })).toBe('assistant')
   })
   it('respects explicit role', () => {
     expect(normalizeHistoryRole({ role: 'user' })).toBe('user')
+  })
+  it('maps middleware todo HumanMessage to system (not user bubble)', () => {
+    expect(
+      normalizeHistoryRole({
+        type: 'human',
+        name: 'todo_reminder',
+        content: '<system_reminder>\nYour todo list...\n</system_reminder>',
+      }),
+    ).toBe('system')
+  })
+  it('maps loop-detection injected HumanMessage to system', () => {
+    expect(
+      normalizeHistoryRole({
+        type: 'human',
+        content: '[LOOP DETECTED] Stop calling tools...',
+      }),
+    ).toBe('system')
+  })
+  it('maps conversation_summary HumanMessage to system (backend-tagged)', () => {
+    expect(
+      normalizeHistoryRole({
+        type: 'human',
+        name: 'conversation_summary',
+        content: 'Here is a summary of the conversation to date:\n\nfoo',
+      }),
+    ).toBe('system')
+  })
+  it('maps LangChain summary HumanMessage without name to system (legacy checkpoint)', () => {
+    expect(
+      normalizeHistoryRole({
+        type: 'human',
+        content: "Here's a summary of the conversation to date:\n\nbar",
+      }),
+    ).toBe('system')
+  })
+  it('maps summary blocks with output_text-like shape to system', () => {
+    expect(
+      normalizeHistoryRole({
+        type: 'human',
+        content: [{ type: 'output_text', text: 'Here is a summary of the conversation to date:\n\nbaz' }],
+      }),
+    ).toBe('system')
   })
 })
 
@@ -50,10 +95,21 @@ describe('extractContent + dedupeHistory', () => {
     ]
     const d = dedupeHistory(raw)
     expect(d.length).toBe(1)
-    // segments 仅用于标注工具块，避免刷新历史时把“段落快照”渲染两遍
-    expect(d[0].segments?.map((s) => s.kind)).toEqual(['tools'])
+    // 历史回放需保持“文本在前、工具在后”，并允许后续文本继续追加为新段
+    expect(d[0].segments?.map((s) => s.kind)).toEqual(['text', 'tools', 'text'])
     expect(d[0].text).toContain('先说明')
     expect(d[0].text).toContain('再总结')
+  })
+  it('keeps alternating text/tool order on history replay', () => {
+    const raw = [
+      { role: 'assistant', content: '第一段', tool_calls: [{ id: 't1', name: 'supervisor', args: { a: 1 } }] },
+      { role: 'tool', tool_call_id: 't1', name: 'supervisor', content: '{"ok":true}' },
+      { role: 'assistant', content: '第二段', tool_calls: [{ id: 't2', name: 'supervisor', args: { a: 2 } }] },
+      { role: 'tool', tool_call_id: 't2', name: 'supervisor', content: '{"ok":true}' },
+    ]
+    const d = dedupeHistory(raw)
+    expect(d.length).toBe(1)
+    expect(d[0].segments?.map((s) => s.kind)).toEqual(['text', 'tools', 'text', 'tools'])
   })
   it('extracts text from string content', () => {
     const c = extractContent({ role: 'user', content: 'hello' })
@@ -70,6 +126,20 @@ describe('extractContent + dedupeHistory', () => {
     expect(d[0].text).toContain('a')
     expect(d[0].text).toContain('b')
   })
+  it('prefers newer assistant text when it semantically contains previous text', () => {
+    const raw = [
+      { role: 'assistant', content: '好的！我将为您创建今日AI新闻搜索任务，并分配2个子任务。创建新闻搜索与文件写入任务' },
+      {
+        role: 'assistant',
+        content:
+          '好的！我将为您创建今日AI新闻搜索任务，并分配2个子任务。创建新闻搜索与文件写入任务 任务已创建（ID: 65c93e22）。现在我来创建2个子任务：',
+      },
+    ]
+    const d = dedupeHistory(raw)
+    expect(d.length).toBe(1)
+    expect(d[0].text).toContain('任务已创建（ID: 65c93e22）')
+    expect(d[0].text).not.toContain('写入任务\n好的！我将为您创建')
+  })
 })
 
 describe('messagesToDisplayRows', () => {
@@ -80,6 +150,37 @@ describe('messagesToDisplayRows', () => {
     expect(rows.length).toBeGreaterThan(0)
     expect(rows[0].role).toBe('assistant')
     expect(rows[0].text).toContain('sys')
+  })
+  it('keeps real user text separate from injected todo reminder after reload', () => {
+    const rows = messagesToDisplayRows([
+      { type: 'human', content: '查一下今日新闻' },
+      {
+        type: 'human',
+        name: 'todo_reminder',
+        content: '<system_reminder>\nlong reminder\n</system_reminder>',
+      },
+      { type: 'ai', content: '好的' },
+    ])
+    expect(rows.map((r) => r.role)).toContain('user')
+    expect(rows.map((r) => r.role)).not.toContain('system')
+    const userRow = rows.find((r) => r.role === 'user')
+    expect(userRow?.text).toContain('查一下今日新闻')
+    expect(rows.some((r) => String(r.text || '').includes('system_reminder'))).toBe(false)
+  })
+  it('drops LangChain conversation summary from display rows (state API shape)', () => {
+    const rows = messagesToDisplayRows([
+      {
+        type: 'human',
+        content:
+          'Here is a summary of the conversation to date:\n\n**任务状态摘要** 主任务：x',
+      },
+      { type: 'human', content: '用户真实问题' },
+      { type: 'ai', content: '回复' },
+    ])
+    expect(rows.some((r) => String(r.text || '').includes('summary of the conversation to date'))).toBe(
+      false,
+    )
+    expect(rows.find((r) => r.role === 'user')?.text).toContain('用户真实问题')
   })
 })
 

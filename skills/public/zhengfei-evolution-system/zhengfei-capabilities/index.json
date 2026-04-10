@@ -1,0 +1,21 @@
+{
+  "system": "正飞技能进化系统 V3.0",
+  "version": "3.0",
+  "created_at": "2026-04-02 04:09:47",
+  "capabilities": [
+    {
+      "id": "CAP-001-example",
+      "name": "示例能力卡片",
+      "status": "@draft",
+      "created_at": "2026-04-02 04:09:47"
+    },
+    {
+      "id": "CAP-900-zhengfei-python-standard",
+      "name": "正飞Python代码规范",
+      "status": "@verified",
+      "created_at": "2026-04-02 04:09:47"
+    }
+  ],
+  "last_maintenance": "2026-04-07 03:00:00",
+  "last_maintenance_count": 6
+}

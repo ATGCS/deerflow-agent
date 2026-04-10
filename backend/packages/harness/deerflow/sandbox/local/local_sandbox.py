@@ -270,3 +270,12 @@ class LocalSandbox(Sandbox):
         except OSError as e:
             # Re-raise with the original path for clearer error messages, hiding internal resolved paths
             raise type(e)(e.errno, e.strerror, path) from None
+
+    def delete_file(self, path: str) -> None:
+        resolved_path = self._resolve_path(path)
+        p = Path(resolved_path)
+        if not p.exists():
+            raise FileNotFoundError(f"File not found: {path}")
+        if p.is_dir():
+            raise IsADirectoryError(f"Path is a directory, not a file: {path}. Use bash with rm -rf for directories.")
+        p.unlink()

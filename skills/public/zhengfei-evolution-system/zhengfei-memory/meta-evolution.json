@@ -1,0 +1,109 @@
+{
+  "version": "1.0",
+  "created_at": "2026-04-02T05:27:10.355577",
+  "updated_at": "2026-04-02T05:27:10.355577",
+  "parameters": {
+    "confidence_decay_rate": 0.01,
+    "min_confidence_threshold": 0.1,
+    "similarity_threshold": 0.3,
+    "importance_boost_factor": 1.2,
+    "access_count_weight": 0.05,
+    "max_memories": 500,
+    "cleanup_interval_days": 7
+  },
+  "category_patterns": {
+    "identity": [
+      "我叫",
+      "我是",
+      "我的名字",
+      "我来自",
+      "我住在"
+    ],
+    "preference": [
+      "我喜欢",
+      "我偏好",
+      "我习惯",
+      "我不喜欢",
+      "我讨厌"
+    ],
+    "behavior": [
+      "我总是",
+      "我经常",
+      "我通常",
+      "我一般"
+    ],
+    "knowledge": [
+      "我知道",
+      "我了解",
+      "我学过",
+      "我会"
+    ],
+    "relationship": [
+      "我的",
+      "我有",
+      "我养了",
+      "我的朋友"
+    ],
+    "goal": [
+      "我的目标",
+      "我想",
+      "我希望",
+      "我计划"
+    ],
+    "skill": [
+      "我会",
+      "我擅长",
+      "我精通",
+      "我熟练"
+    ],
+    "project": [
+      "项目",
+      "工程",
+      "开发",
+      "正在做"
+    ],
+    "temporal": [
+      "今天",
+      "昨天",
+      "明天",
+      "本周",
+      "这个月"
+    ]
+  },
+  "importance_keywords": {
+    "critical": [
+      "必须",
+      "一定要",
+      "绝对",
+      "关键",
+      "核心"
+    ],
+    "high": [
+      "很重要",
+      "比较重要",
+      "优先",
+      "首选"
+    ],
+    "low": [
+      "可能",
+      "也许",
+      "大概",
+      "偶尔"
+    ],
+    "trivial": [
+      "顺便",
+      "随便",
+      "随意",
+      "不太重要"
+    ]
+  },
+  "evolution_history": [],
+  "parameter_adjustments": [],
+  "category_evolutions": [],
+  "statistics": {
+    "total_adjustments": 0,
+    "total_evolutions": 0,
+    "accuracy_improvements": 0,
+    "last_evolution": null
+  }
+}

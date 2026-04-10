@@ -41,16 +41,20 @@ export function MessageVirtualList({
     if (lastRow?.role === 'user') {
       const s = streamRef?.current
       const hasSubagents = s && Object.keys(s.subagentTasks || {}).length > 0
+      const hasTextSegment = !!(s?.segments || []).some((seg) => seg?.kind === 'text' && String(seg?.text || '').trim())
+      const hasRenderableStream =
+        !!(
+          s &&
+          (s.text ||
+            hasTextSegment ||
+            (s.images && s.images.length) ||
+            (s.videos && s.videos.length) ||
+            (s.audios && s.audios.length) ||
+            (s.files && s.files.length) ||
+            hasSubagents)
+        )
       if (
-        s &&
-        (s.text ||
-          (s.segments && s.segments.length) ||
-          (s.tools && s.tools.length) ||
-          (s.images && s.images.length) ||
-          (s.videos && s.videos.length) ||
-          (s.audios && s.audios.length) ||
-          (s.files && s.files.length) ||
-          hasSubagents)
+        hasRenderableStream
       ) {
         const st =
           s.subagentTasks && Object.keys(s.subagentTasks).length ? { ...s.subagentTasks } : undefined

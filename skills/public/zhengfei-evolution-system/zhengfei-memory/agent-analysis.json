@@ -1,0 +1,83 @@
+{
+  "stats": {
+    "total": 4,
+    "byCategory": {
+      "identity": 2,
+      "context": 2
+    },
+    "byImportance": {
+      "4": 4
+    },
+    "lowConfidence": 0,
+    "expired": 0,
+    "duplicate": 0
+  },
+  "patterns": [],
+  "suggestions": [
+    {
+      "id": "sug-ai-1775547779560-0",
+      "type": "ai_insight",
+      "title": "AI建议",
+      "description": "优先向用户确认姓名与开发语言偏好的冲突信息，更新修正核心身份记忆",
+      "priority": 4,
+      "createdAt": "2026-04-07T07:42:59.560Z",
+      "read": false
+    },
+    {
+      "id": "sug-ai-1775547779560-1",
+      "type": "ai_insight",
+      "title": "AI建议",
+      "description": "针对用户的开发需求，可以主动提供TypeScript、Python相关的开发支持匹配用户偏好",
+      "priority": 4,
+      "createdAt": "2026-04-07T07:42:59.560Z",
+      "read": false
+    },
+    {
+      "id": "sug-ai-1775547779560-2",
+      "type": "ai_insight",
+      "title": "AI建议",
+      "description": "可以开放更多记忆管理功能，方便用户自主更新维护个人信息，解决信息冲突问题",
+      "priority": 4,
+      "createdAt": "2026-04-07T07:42:59.560Z",
+      "read": false
+    },
+    {
+      "id": "sug-1775547779560-insight",
+      "type": "ai_insight",
+      "title": "用户洞察",
+      "description": "用户是互联网开发领域从业者，目前在正飞信息技术相关团队参与开发工作；用户关注编码风格，对代码简洁性有明确偏好，会使用至少TypeScript、Python两种开发语言",
+      "priority": 3,
+      "createdAt": "2026-04-07T07:42:59.560Z",
+      "read": false
+    }
+  ],
+  "aiAnalysis": {
+    "memoryQuality": {
+      "score": 65,
+      "issues": [
+        "存在身份信息冲突：先后出现姓名「张三」和「正飞」，开发语言偏好「TypeScript」和「Python」两组矛盾表述，身份核心信息不准确",
+        "记忆仅覆盖基础身份和单次测试行为，缺乏更多维度信息，完整性不足"
+      ],
+      "recommendations": [
+        "发起对核心冲突信息的确认，明确用户真实姓名和开发偏好",
+        "引导用户补充更多个人背景、开发场景等信息完善记忆"
+      ]
+    },
+    "userInsights": [
+      "用户是互联网开发领域从业者，目前在正飞信息技术相关团队参与开发工作",
+      "用户关注编码风格，对代码简洁性有明确偏好，会使用至少TypeScript、Python两种开发语言"
+    ],
+    "behaviorPatterns": [
+      "用户倾向于通过实际测试任务验证系统功能可用性",
+      "用户短期内多次进行系统功能测试，关注记忆系统的核心能力表现",
+      "用户两次测试都获得成功结果，对测试操作流程熟悉"
+    ],
+    "suggestions": [
+      "优先向用户确认姓名与开发语言偏好的冲突信息，更新修正核心身份记忆",
+      "针对用户的开发需求，可以主动提供TypeScript、Python相关的开发支持匹配用户偏好",
+      "可以开放更多记忆管理功能，方便用户自主更新维护个人信息，解决信息冲突问题",
+      "后续可以邀请用户完成更多场景的功能测试，帮助完善系统能力"
+    ]
+  },
+  "analyzedAt": "2026-04-07T07:42:59.560Z"
+}

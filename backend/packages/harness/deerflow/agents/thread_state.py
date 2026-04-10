@@ -1,4 +1,4 @@
-from typing import Annotated, NotRequired, TypedDict
+from typing import Annotated, Any, NotRequired, TypedDict
 
 from langchain.agents import AgentState
 
@@ -46,9 +46,16 @@ def merge_viewed_images(existing: dict[str, ViewedImageData] | None, new: dict[s
 
 
 class ThreadState(AgentState):
+    """AgentState plus DeerFlow thread fields.
+
+    ``ui_messages`` holds a pre-summarization copy of the conversation for UI display
+    when ``SummarizationMiddleware`` is enabled; ``messages`` is what the model sees.
+    """
+
     sandbox: NotRequired[SandboxState | None]
     thread_data: NotRequired[ThreadDataState | None]
     title: NotRequired[str | None]
+    ui_messages: NotRequired[list[Any] | None]
     artifacts: Annotated[list[str], merge_artifacts]
     todos: NotRequired[list | None]
     uploaded_files: NotRequired[list[dict] | None]

@@ -365,11 +365,9 @@ async def task_tool(
 
                     async def _auto_followup() -> None:
                         try:
-                            from deerflow.tools.builtins.supervisor_tool import (
-                                auto_delegate_collab_followup_wave,
-                            )
+                            from deerflow.tools.builtins.collab_bridge import emit_followup_wave_needed
 
-                            await auto_delegate_collab_followup_wave(runtime, resolved_collab)
+                            await emit_followup_wave_needed(runtime, resolved_collab)
                         except Exception:
                             logger.exception(
                                 "collab auto follow-up delegation failed main=%s sub=%s",
@@ -795,3 +793,16 @@ async def task_tool(
         return "Task Detached. Background execution started for collab subtask."
 
     return await _poll_subagent_to_completion()
+
+
+# ── Register task_tool delegate on collab_bridge at import time ─────────
+# This allows supervisor/execution.py to delegate subtasks via this tool
+# without directly importing task_tool (breaks circular dependency).
+try:
+    from deerflow.tools.builtins.collab_bridge import register_task_tool_delegate
+
+    _coro_ref = getattr(task_tool, "coroutine", None)
+    if _coro_ref is not None:
+        register_task_tool_delegate(_coro_ref)
+except Exception:
+    logger.debug("collab_bridge: failed to register task_tool delegate", exc_info=True)

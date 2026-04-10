@@ -22,7 +22,7 @@ class SummarizationConfig(BaseModel):
     """Configuration for automatic conversation summarization."""
 
     enabled: bool = Field(
-        default=False,
+        default=True,
         description="Whether to enable automatic conversation summarization",
     )
     model_name: str | None = Field(
@@ -30,8 +30,9 @@ class SummarizationConfig(BaseModel):
         description="Model name to use for summarization (None = use a lightweight model)",
     )
     trigger: ContextSize | list[ContextSize] | None = Field(
-        default=None,
+        default_factory=lambda: ContextSize(type="tokens", value=4000),
         description="One or more thresholds that trigger summarization. When any threshold is met, summarization runs. "
+        "Default: 4000 tokens (approximate). Set to null in YAML to disable triggers (summarization will never run). "
         "Examples: {'type': 'messages', 'value': 50} triggers at 50 messages, "
         "{'type': 'tokens', 'value': 4000} triggers at 4000 tokens, "
         "{'type': 'fraction', 'value': 0.8} triggers at 80% of model's max input tokens",
