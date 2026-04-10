@@ -412,6 +412,9 @@ class ChannelManager:
         if assistant_id != DEFAULT_ASSISTANT_ID:
             run_context.setdefault("agent_name", _normalize_custom_agent_name(assistant_id))
             assistant_id = DEFAULT_ASSISTANT_ID
+        else:
+            # Default lead_agent — still pass agent_name so config (tools/skills) is loaded
+            run_context.setdefault("agent_name", "main")
 
         return assistant_id, run_config, run_context
 

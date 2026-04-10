@@ -43,6 +43,8 @@ export interface TokenTotals {
 /** LangGraph custom 通道中 task_tool 的 task_* 事件在前端的聚合态（按 task_id，支持并行多子任务） */
 export interface SubagentStreamTask {
   taskId: string
+  /** 与协作子任务卡片关联（来自 subtask 流事件的 collab_subtask_id） */
+  collabSubtaskId?: string
   /** 后端 task_started / task_running 中的 subagent_type（如 general-purpose、bash） */
   subagentType?: string
   description?: string
@@ -95,6 +97,8 @@ export interface ChatAttachment {
 export interface ThreadTodo {
   content?: unknown
   status?: string
+  /** 关联协作子任务（用于 hover 精准找子智能体输出） */
+  collabSubtaskId?: string
 }
 
 export interface ThreadClarification {
@@ -120,6 +124,10 @@ export interface CollabSubtaskSnapshot {
   status?: string
   progress?: number
   assignedAgent?: string
+  /** 后端监控落库：子任务记忆摘要（可用于 tooltip） */
+  outputSummary?: string
+  /** 后端监控落库：子任务最近工具调用（含输入输出） */
+  observedToolCalls?: unknown[]
 }
 
 /** 流式 supervisor 每一步（有输出则 done，用于动态时间线） */
@@ -137,6 +145,8 @@ export interface ThreadPanelState {
   activityDetail: string
   reasoningPreview: string | null
   clarification: ThreadClarification | null
+  /** 子智能体 · 并行输出（仅用于 TODO hover 预览，不在主消息区渲染） */
+  subagentTasks?: Record<string, SubagentStreamTask>
   /** 与当前会话关联的 DeerFlow 主任务（用于侧栏展示，不依赖 plan todos） */
   collabTask: CollabTaskSnapshot | null
   /** supervisor 创建的子任务卡片（流式累积） */

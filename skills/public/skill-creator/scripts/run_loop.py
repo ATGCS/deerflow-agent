@@ -15,6 +15,8 @@ import time
 import webbrowser
 from pathlib import Path
 
+import anthropic
+
 from scripts.generate_report import generate_html
 from scripts.improve_description import improve_description
 from scripts.run_eval import find_project_root, run_eval
@@ -73,6 +75,7 @@ def run_loop(
         train_set = eval_set
         test_set = []
 
+    client = anthropic.Anthropic()
     history = []
     exit_reason = "unknown"
 
@@ -197,6 +200,7 @@ def run_loop(
             for h in history
         ]
         new_description = improve_description(
+            client=client,
             skill_name=name,
             skill_content=content,
             current_description=current_description,

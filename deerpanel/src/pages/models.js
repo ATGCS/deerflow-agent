@@ -24,27 +24,33 @@ function escAttr(s) {
     .replace(/>/g, '&gt;')
 }
 
-/** 左侧厂商列表用：品牌色小图标（简化图形，非官方商标素材） */
+/** 左侧厂商列表用：品牌图标（使用 @lobehub/icons-static-svg 官方品牌 SVG） */
 function vendorBrandIcon(key) {
+  // 厂商 key -> lobehub icons 文件名映射
+  const iconMap = {
+    openai: 'openai',
+    anthropic: 'anthropic',
+    deepseek: 'deepseek',
+    google: 'google',
+    nvidia: 'nvidia',
+    ollama: 'ollama',
+    zhipu: 'zhipu',
+    minimax: 'minimax',
+    volcengine: 'volcengine',
+    aliyun: 'alibabacloud',
+    siliconflow: 'siliconcloud',
+  }
+  const name = iconMap[key]
+  if (name) {
+    return `<img src="/icons/${name}.svg" alt="" width="22" height="22" aria-hidden="true" style="width:22px;height:22px;object-fit:contain"/>`
+  }
+  // 无官方图标的 fallback：生数云等
   const svg = (body) =>
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">${body}</svg>`
-  const disk = (fill) => svg(`<circle cx="12" cy="12" r="10" fill="${fill}"/>`)
-  const rounded = (fill) => svg(`<rect x="3" y="3" width="18" height="18" rx="5" fill="${fill}"/>`)
-  const icons = {
-    shengsuanyun: disk('#ea580c'),
-    siliconflow: rounded('#6366f1'),
-    volcengine: disk('#f97316'),
-    aliyun: rounded('#ff6a00'),
-    zhipu: disk('#2563eb'),
-    minimax: rounded('#0891b2'),
-    openai: disk('#10a37f'),
-    anthropic: rounded('#c4a484'),
-    deepseek: disk('#4d6bfe'),
-    google: rounded('#4285f4'),
-    nvidia: rounded('#76b900'),
-    ollama: svg('<rect x="4" y="4" width="16" height="16" rx="4" fill="#334155"/><circle cx="9" cy="10" r="2" fill="#94a3b8"/><circle cx="15" cy="10" r="2" fill="#94a3b8"/><path stroke="#94a3b8" stroke-width="1.5" fill="none" d="M9 14h6"/>'),
+  const fallbacks = {
+    shengsuanyun: svg(`<path d="M6 16a4 4 0 01-.8-7.9A5.5 5.5 0 0118 8h-2a3.5 3.5 0 100 7H6z" fill="#ea580c"/>`),
   }
-  return icons[key] || rounded('#64748b')
+  return fallbacks[key] || svg(`<rect x="3" y="3" width="18" height="18" rx="5" fill="#64748b"/><text x="12" y="17" text-anchor="middle" font-size="12" font-weight="bold" fill="#fff">?</text>`)
 }
 
 function normalizeHost(url) {
@@ -194,48 +200,36 @@ export async function render(options = {}) {
   const settingsModal = !!options.settingsModal
   const page = document.createElement('div')
   page.className = settingsModal
-    ? 'models-twopane-page settings-modal-pane settings-modal-pane--models'
-    : 'page models-twopane-page'
+    ? 'models-split-layout settings-modal-pane settings-modal-pane--models'
+    : 'page models-split-layout'
 
-  const fullPageTitle = settingsModal
-    ? ''
-    : `
-      <div class="models-twopane-pagehead">
-        <div class="page-header" style="margin-bottom:var(--space-md)">
-          <h1 class="page-title">模型配置</h1>
-          <p class="page-desc">添加 AI 模型服务商，配置可用模型</p>
-        </div>
-      </div>`
+  const fullPageTitle = settingsModal ? '' : ''
 
   const toolbarPad = settingsModal ? 'padding:var(--space-md) var(--space-lg)' : ''
   const hintMb = settingsModal ? 'var(--space-sm)' : 'var(--space-md)'
 
   page.innerHTML = `
-    <div class="models-twopane-body">
-      <aside class="models-provider-rail" id="models-provider-rail" aria-label="模型厂商">
-        <div class="stat-card loading-placeholder" style="height:80px;margin:12px"></div>
+    <div class="models-split-layout">
+      <aside class="models-sidebar" id="models-provider-rail" aria-label="模型厂商">
+        <div class="models-sidebar-loading" style="height:80px;display:flex;align-items:center;justify-content:center;color:var(--text-tertiary);font-size:12px">...</div>
       </aside>
-      <div class="models-twopane-main">
-        ${fullPageTitle}
-        <div class="models-twopane-toolbar" id="models-twopane-toolbar" style="${toolbarPad}"${settingsModal ? ' data-settings-modal-models-toolbar' : ''}>
-          <div class="config-actions models-toolbar-actions">
-            <button type="button" class="btn btn-primary btn-sm" id="btn-add-provider">+ 自定义服务商</button>
-            <button type="button" class="btn btn-secondary btn-sm" id="btn-undo" disabled>↩ 撤销</button>
-          </div>
-          <div id="models-toolbar-hint-long" class="form-hint" style="margin-bottom:${hintMb}">
-            在左侧选择厂商；已配置后可在下方管理模型。修改后自动保存。
-          </div>
-          <div id="default-model-bar"></div>
-          <div id="models-toolbar-search-wrap">
-            <input class="form-input" id="model-search" placeholder="搜索当前厂商下的模型（按 ID 或名称）" style="max-width:420px">
+      <main class="models-main">
+        ${settingsModal ? '' : fullPageTitle}
+        <div class="models-title-bar" id="models-title-bar">
+          <span id="models-title-text">\u6a21\u578b\u914d\u7f6e</span>
+          <div class="models-title-actions">
+            <button type="button" class="btn btn-sm btn-outline" id="btn-add-provider">+ \u670d\u5546</button>
+            <button type="button" class="btn btn-sm btn-secondary" id="btn-undo" disabled>\u64a4\u9500</button>
           </div>
         </div>
-        <div class="models-provider-detail">
-          <div id="models-detail-inner">
-            <div class="stat-card loading-placeholder" style="height:160px"></div>
-          </div>
+        <div id="default-model-bar" class="models-primary-row"></div>
+        <div id="models-search-wrap" class="models-search-row" hidden>
+          <input class="form-input" id="model-search" placeholder="\u641c\u7d22\u6a21\u578b...">
         </div>
-      </div>
+        <div class="models-body" id="models-detail-inner">
+          <div class="models-loading-placeholder" style="height:160px;display:flex;align-items:center;justify-content:center;color:var(--text-tertiary)">...</div>
+        </div>
+      </main>
     </div>
   `
 
@@ -317,7 +311,7 @@ function apiKeySummaryHtml(apiKey) {
   return `<span class="models-apikey-saved">已配置</span><span class="models-apikey-meta"> · ${s.length} 字符，点击「编辑连接信息」可查看或修改</span>`
 }
 
-// 渲染当前主模型状态栏
+// 渲染当前主模型状态栏（紧凑单行）
 function renderDefaultBar(page, state) {
   const bar = page.querySelector('#default-model-bar')
   const primary = getCurrentPrimary(state.config)
@@ -325,19 +319,10 @@ function renderDefaultBar(page, state) {
   const fallbacks = allModels.filter(m => m.full !== primary).map(m => m.full)
 
   bar.innerHTML = `
-    <div class="config-section" style="margin-bottom:var(--space-lg)">
-      <div class="config-section-title">当前生效配置</div>
-      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-        <div>
-          <span style="font-size:var(--font-size-sm);color:var(--text-tertiary)">主模型：</span>
-          <span style="font-family:var(--font-mono);font-size:var(--font-size-sm);color:${primary ? 'var(--success)' : 'var(--error)'}">${primary || '未配置'}</span>
-        </div>
-        <div>
-          <span style="font-size:var(--font-size-sm);color:var(--text-tertiary)">备选模型：</span>
-          <span style="font-size:var(--font-size-sm);color:var(--text-secondary)">${fallbacks.length ? fallbacks.join(', ') : '无'}</span>
-        </div>
-      </div>
-      <div class="form-hint" style="margin-top:6px">主模型不可用时，系统会自动切换到备选模型</div>
+    <div class="models-primary-inner">
+      <span class="models-primary-label">\u4e3b\u6a21\u578b</span>
+      <code class="models-primary-id">${primary || '\u672a\u914d\u7f6e'}</code>
+      ${fallbacks.length ? `<span class="models-primary-meta">\u5907\u9009 ${fallbacks.length} \u4e2a</span>` : ''}
     </div>
   `
 }
@@ -492,7 +477,7 @@ function renderProviders(page, state) {
 
   reconcileModelPageSelection(state, providers)
 
-  const parts = ['<div class="models-vendor-rail-title">模型厂商</div>']
+  const parts = []
   for (const pr of VENDOR_PRESETS) {
     const pk = findProviderKeyForPreset(providers, pr)
     const active = state.selectedVendorPreset === pr.key
@@ -502,7 +487,7 @@ function renderProviders(page, state) {
       <span class="models-vendor-icon" aria-hidden="true">${vendorBrandIcon(pr.key)}</span>
       <span class="models-vendor-meta">
         <span class="models-vendor-label">${escHtml(pr.label)}</span>
-        <span class="models-vendor-sub">${configured ? `${n} 个模型` : '未配置'}</span>
+        <span class="models-vendor-sub">${configured ? `${n} \u4e2a\u6a21\u578b` : '\u672a\u914d\u7f6e'}</span>
       </span>
     </button>`)
   }
@@ -551,7 +536,7 @@ function renderProviders(page, state) {
   updateModelsToolbarMode(page, state)
 }
 
-/** 按右侧内容切换顶部工具栏：内联配置时隐藏搜索、长说明、主模型摘要与「自定义服务商」 */
+/** 按右侧内容切换：内联配置时隐藏搜索和主模型摘要 */
 function updateModelsToolbarMode(page, state) {
   const providers = state.config?.models?.providers || {}
   let mode = 'idle'
@@ -566,20 +551,26 @@ function updateModelsToolbarMode(page, state) {
     mode = 'idle'
   }
 
-  const searchWrap = page.querySelector('#models-toolbar-search-wrap')
-  const hintLong = page.querySelector('#models-toolbar-hint-long')
-  const defaultBar = page.querySelector('#default-model-bar')
+  const searchWrap = page.querySelector('#models-search-wrap')
+  const primaryBar = page.querySelector('#default-model-bar')
+  const titleText = page.querySelector('#models-title-text')
   const addBtn = page.querySelector('#btn-add-provider')
-  const inline = mode === 'inline-setup'
-  const showSearch = mode === 'detail'
 
-  if (searchWrap) searchWrap.hidden = !showSearch
-  if (hintLong) hintLong.hidden = inline
-  if (defaultBar) defaultBar.hidden = inline
-  if (addBtn) addBtn.hidden = inline
+  if (searchWrap) searchWrap.hidden = mode !== 'detail'
+  if (primaryBar) primaryBar.hidden = mode === 'inline-setup'
+  if (addBtn) addBtn.hidden = mode === 'inline-setup'
 
-  const tb = page.querySelector('#models-twopane-toolbar')
-  if (tb) tb.classList.toggle('models-twopane-toolbar--compact', inline)
+  // 更新标题栏文字
+  if (titleText) {
+    if (mode === 'inline-setup') {
+      const pr = VENDOR_PRESETS.find((p) => p.key === state.selectedVendorPreset)
+      titleText.textContent = pr ? pr.label + ' \u914d\u7f6e' : '\u6a21\u578b\u914d\u7f6e'
+    } else if (mode === 'detail') {
+      titleText.textContent = displayTitleForProvider(state.selectedProviderKey, providers)
+    } else {
+      titleText.textContent = '\u6a21\u578b\u914d\u7f6e'
+    }
+  }
 }
 
 // 渲染模型卡片（支持搜索高亮和批量选择 checkbox）
@@ -610,24 +601,23 @@ function renderModelCards(providerKey, models, primary, search) {
     const testTime = m.lastTestAt ? formatTestTime(m.lastTestAt) : ''
     if (testTime) meta.push(testTime)
     return `
-      <div class="model-card" data-model-id="${id}" data-full="${full}"
-           style="background:${bgColor};border:1px solid ${borderColor};padding:10px 14px;border-radius:var(--radius-md);margin-bottom:8px;display:flex;align-items:center;gap:10px">
-        <span class="drag-handle" style="color:var(--text-tertiary);cursor:grab;user-select:none;font-size:16px;padding:4px;touch-action:none">⋮⋮</span>
-        <input type="checkbox" class="model-checkbox" data-model-id="${id}" style="flex-shrink:0;cursor:pointer">
-        <div style="flex:1;min-width:0">
-          <div style="display:flex;align-items:center;gap:8px">
-            <span style="font-family:var(--font-mono);font-size:var(--font-size-sm)">${id}</span>
-            ${isPrimary ? '<span style="font-size:var(--font-size-xs);background:var(--success);color:var(--text-inverse);padding:1px 6px;border-radius:var(--radius-sm)">主模型</span>' : ''}
-            ${m.reasoning ? '<span style="font-size:var(--font-size-xs);background:var(--accent-muted);color:var(--accent);padding:1px 6px;border-radius:var(--radius-sm)">推理</span>' : ''}
+      <div class="model-card${isPrimary ? ' model-card--primary' : ''}" data-model-id="${id}" data-full="${full}">
+        <span class="drag-handle" title="\u62d6\u62fd\u6392\u5e8f">⋮⋮</span>
+        <input type="checkbox" class="model-checkbox" data-model-id="${id}">
+        <div class="model-info">
+          <div class="model-info-top">
+            <code class="model-id-text">${id}</code>
+            ${isPrimary ? '<span class="tag tag--primary">\u4e3b\u6a21\u578b</span>' : ''}
+            ${m.reasoning ? '<span class="tag tag--reasoning">\u63a8\u7406</span>' : ''}
             ${latencyTag}
           </div>
-          <div style="font-size:var(--font-size-xs);color:var(--text-tertiary);margin-top:2px">${meta.join(' · ') || ''}</div>
+          ${meta.length ? `<div class="model-meta">${meta.join(' · ')}</div>` : ''}
         </div>
-        <div style="display:flex;gap:6px;flex-shrink:0">
-          <button class="btn btn-sm btn-secondary" data-action="test-model">测试</button>
-          ${!isPrimary ? '<button class="btn btn-sm btn-secondary" data-action="set-primary">设为主模型</button>' : ''}
-          <button class="btn btn-sm btn-secondary" data-action="edit-model">编辑</button>
-          <button class="btn btn-sm btn-danger" data-action="delete-model">删除</button>
+        <div class="model-actions">
+          <button class="btn btn-xs btn-secondary" data-action="test-model">\uD83D\uDCE1</button>
+          ${!isPrimary ? '<button class="btn btn-xs btn-outline" data-action="set-primary">\u4e3b\u6a21</button>' : ''}
+          <button class="btn btn-xs btn-ghost" data-action="edit-model">\u270E</button>
+          <button class="btn btn-xs btn-danger" data-action="delete-model">\u2715</button>
         </div>
       </div>
     `

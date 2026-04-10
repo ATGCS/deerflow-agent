@@ -1,1 +1,0 @@
-{"detail":"Invalid JSON in request body"}

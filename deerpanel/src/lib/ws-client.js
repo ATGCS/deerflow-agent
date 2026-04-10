@@ -13,6 +13,11 @@ export function uuid() {
 
 const SESSION_MAP_KEY = 'deerflow-chat-session-map-v1'
 const MAIN_SESSION_KEY = 'agent:main:main'
+const VIRTUAL_PATH_MODE_KEY = 'deerpanel_use_virtual_paths'
+const LEGACY_LOCAL_WORKSPACE_ROOT_KEY = 'deerpanel_local_workspace_root'
+const LEGACY_LOCAL_WORKSPACE_HISTORY_KEY = 'deerpanel_local_workspace_history'
+const WORKSPACE_HISTORY_BY_SESSION_KEY = 'deerpanel_workspace_history_by_session_v1'
+let _legacyWorkspaceMigrated = false
 
 function nowTs() {
   return Date.now()
@@ -316,12 +321,69 @@ function saveSessionMap(map) {
   localStorage.setItem(SESSION_MAP_KEY, JSON.stringify(map || {}))
 }
 
-const DEFAULT_SESSION_CONTEXT = {
-  thinking_enabled: true,
-  is_plan_mode: false,
-  subagent_enabled: false,
-  include_search: false,  // 禁用搜索工具，避免外部 API 超时导致请求卡住
-  reasoning_effort: undefined,
+function getUseVirtualPaths() {
+  const raw = localStorage.getItem(VIRTUAL_PATH_MODE_KEY)
+  if (raw == null) return false
+  return raw !== 'false'
+}
+
+function loadWorkspaceHistoryMap() {
+  return safeParseJSON(localStorage.getItem(WORKSPACE_HISTORY_BY_SESSION_KEY) || '{}', {})
+}
+
+function saveWorkspaceHistoryMap(obj) {
+  try {
+    localStorage.setItem(WORKSPACE_HISTORY_BY_SESSION_KEY, JSON.stringify(obj || {}))
+  } catch {
+    /* ignore */
+  }
+}
+
+/** 将旧版全局工作空间迁移到主会话（仅一次） */
+function migrateLegacyGlobalWorkspaceOnce() {
+  if (_legacyWorkspaceMigrated) return
+  _legacyWorkspaceMigrated = true
+  if (typeof localStorage === 'undefined') return
+  try {
+    const legacy = (localStorage.getItem(LEGACY_LOCAL_WORKSPACE_ROOT_KEY) || '').trim()
+    const legacyHistRaw = localStorage.getItem(LEGACY_LOCAL_WORKSPACE_HISTORY_KEY)
+    const map = loadSessionMap()
+    const mainKey = MAIN_SESSION_KEY
+    if (legacy && map[mainKey]) {
+      const ctx = map[mainKey].context && typeof map[mainKey].context === 'object' ? map[mainKey].context : {}
+      if (!(ctx.local_workspace_root || '').toString().trim()) {
+        map[mainKey].context = { ...ctx, local_workspace_root: legacy }
+        saveSessionMap(map)
+      }
+    }
+    if (legacyHistRaw && map[mainKey]) {
+      try {
+        const arr = JSON.parse(legacyHistRaw)
+        const whMap = loadWorkspaceHistoryMap()
+        if (Array.isArray(arr) && arr.length && (!whMap[mainKey] || !whMap[mainKey].length)) {
+          whMap[mainKey] = arr.map((x) => String(x || '').trim()).filter(Boolean).slice(0, 30)
+          saveWorkspaceHistoryMap(whMap)
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    if (legacy) localStorage.removeItem(LEGACY_LOCAL_WORKSPACE_ROOT_KEY)
+    if (legacyHistRaw) localStorage.removeItem(LEGACY_LOCAL_WORKSPACE_HISTORY_KEY)
+  } catch {
+    /* ignore */
+  }
+}
+
+function buildDefaultSessionContext() {
+  return {
+    thinking_enabled: true,
+    is_plan_mode: false,
+    subagent_enabled: false,
+    include_search: true,
+    use_virtual_paths: getUseVirtualPaths(),
+    reasoning_effort: undefined,
+  }
 }
 
 function threadTs(u) {
@@ -486,7 +548,12 @@ async function fetchJson(url, options = {}) {
   const data = text ? safeParseJSON(text, null) : null
   if (!resp.ok) {
     const msg = data?.detail || data?.error || data?.message || `HTTP ${resp.status}`
-    throw new Error(msg)
+    const err = new Error(msg)
+    // Attach useful diagnostics for callers (e.g. clear stale threadId on 404).
+    err.status = resp.status
+    err.url = url
+    err.body = data
+    throw err
   }
   return data
 }
@@ -604,6 +671,38 @@ function collectToolCallsForTurnAfterLastUser(messages) {
   }
   if (!order.length) return null
   return order.map((k) => byId.get(k))
+}
+
+/** OpenAI/LC 流式 tool_call：args 或 function.arguments（可能为未闭合 JSON 字符串） */
+function normalizeStreamToolCallArgs(tc) {
+  if (!tc || typeof tc !== 'object') return {}
+  const direct = tc.args
+  if (direct != null && typeof direct === 'object' && !Array.isArray(direct)) return direct
+  const fn = tc.function
+  if (fn && typeof fn.arguments === 'string' && fn.arguments.trim()) {
+    try {
+      const p = JSON.parse(fn.arguments)
+      return p && typeof p === 'object' && !Array.isArray(p) ? p : {}
+    } catch {
+      return {}
+    }
+  }
+  if (fn && fn.arguments != null && typeof fn.arguments === 'object' && !Array.isArray(fn.arguments)) {
+    return fn.arguments
+  }
+  return {}
+}
+
+/**
+ * messages-tuple 流式首帧常见仅有 id+name，args 尚为 {}；此时不要向前端发 tool 事件，避免「supervisor + 空参」闪烁与误导。
+ * supervisor 至少应有非空 args（含 action）后再展示。
+ */
+function streamToolCallReadyForUi(tc) {
+  if (!tc || typeof tc !== 'object') return false
+  const name = (tc.name || (tc.function && tc.function.name) || '').trim()
+  const args = normalizeStreamToolCallArgs(tc)
+  if (name === 'supervisor' && Object.keys(args).length === 0) return false
+  return true
 }
 
 function isHumanMessage(m) {
@@ -839,30 +938,7 @@ export class WsClient {
     }
   }
 
-  /** 刷新页后按 LangGraph thread_id 恢复任务侧栏（主任务 + 子任务，与会话绑定） */
-  async getTaskProgressSnapshot(threadId) {
-    if (!threadId) return null
-    const legacy = await buildTaskProgressSnapshotFromLegacyApis(threadId)
-    if (legacy && legacy.main_task && String(legacy.main_task.taskId || '').trim()) {
-      return legacy
-    }
-    const enc = encodeURIComponent(threadId)
-    const fallbacks = [
-      `/api/collab/threads/${enc}/task-progress`,
-      `/api/threads/${enc}/task-progress`,
-    ]
-    for (const p of fallbacks) {
-      try {
-        const resp = await deerflowFetch(p)
-        const text = await resp.text().catch(() => '')
-        const data = text ? safeParseJSON(text, null) : null
-        if (resp.ok && data) return data
-      } catch {
-        /* try next */
-      }
-    }
-    return legacy
-  }
+  // NOTE: 已移除 getTaskProgressSnapshot（task-progress 快照恢复/拉取功能下线）
 
   async putThreadCollabState(threadId, body) {
     if (!threadId || !body || typeof body !== 'object') return
@@ -888,7 +964,7 @@ export class WsClient {
       createdAt: nowTs(),
       updatedAt: nowTs(),
       messageCount: 0,
-      context: { ...DEFAULT_SESSION_CONTEXT },
+      context: { ...buildDefaultSessionContext() },
     }
     saveSessionMap(map)
     return threadId
@@ -1046,11 +1122,15 @@ export class WsClient {
 
     const map = loadSessionMap()
     const sessionContext = map[key]?.context || {}
+    // Extract agent name from sessionKey (format: "agent:{agentName}:{id}")
+    const parsedAgent = (key && key.startsWith('agent:')) ? key.split(':')[1] : 'main'
     const defaultContext = {
       thinking_enabled: true,
       is_plan_mode: false,
       subagent_enabled: false,
+      use_virtual_paths: getUseVirtualPaths(),
       reasoning_effort: undefined,
+      agent_name: parsedAgent,   // Pass agent name so backend loads correct config
     }
 
     let serverCollab = null
@@ -1065,6 +1145,9 @@ export class WsClient {
       ...sessionContext,
       thread_id: threadId,
     }
+    // Always honor the latest global path-mode toggle, overriding stale per-session cache.
+    runContext.use_virtual_paths = getUseVirtualPaths()
+    // local_workspace_root 仅来自该会话 context（按会话绑定），不在此处用全局覆盖
 
     const clientTaskId = (sessionContext.collab_task_id ?? '').toString().trim()
 
@@ -1171,10 +1254,11 @@ export class WsClient {
               if (next !== finalText) finalText = next
             }
             const textChanged = finalText !== prevFinal
-            const calls =
+            const callsRaw =
               lastMsg && !isHumanMessage(lastMsg)
                 ? collectToolCallsForTurnAfterLastUser(messages)
                 : null
+            const calls = Array.isArray(callsRaw) ? callsRaw.filter(streamToolCallReadyForUi) : null
             const hasToolCalls = Array.isArray(calls) && calls.length > 0
             const sig = hasToolCalls ? JSON.stringify(calls) : ''
             const toolCallsChanged = sig !== lastValuesToolCallsSig
@@ -1206,6 +1290,7 @@ export class WsClient {
               const calls = aiPart.tool_calls || aiPart.toolCalls
               if (!Array.isArray(calls) || !calls.length) return
               for (const tc of calls) {
+                if (!streamToolCallReadyForUi(tc)) continue
                 const id = tc.id || tc.tool_call_id
                 if (!id && !tc.name && !(tc.function && tc.function.name)) continue
                 const idKey = id != null && id !== '' ? String(id) : `anon:${tc.name || ''}`
@@ -1381,6 +1466,325 @@ export class WsClient {
     }
   }
 
+  /**
+   * Resume-like SSE stream for an in-progress run.
+   * It attaches to /api/langgraph/threads/{threadId}/runs/{runId}/resume-stream.
+   *
+   * This does not restart the model; it streams `event: values` frames derived
+   * from the current thread state until the run becomes terminal.
+   */
+  async chatResume(sessionKey, threadId, runId) {
+    const key = sessionKey || MAIN_SESSION_KEY
+    if (!threadId || !runId) return { ok: false }
+
+    const controller = new AbortController()
+    // Use runId as the internal run identifier so chatAbort can cancel it.
+    this._abortByRunId.set(String(runId), controller)
+    this._latestRunBySession.set(key, String(runId))
+
+    const started = nowTs()
+    let finalText = ''
+    let streamTextFromMessages = false // resume endpoint emits values only
+    let lastValuesToolCallsSig = ''
+
+    const takeCompleteSseFrames = (raw) => {
+      const normalized = raw.replace(/\r\n/g, '\n')
+      const parts = normalized.split('\n\n')
+      const rest = parts.pop() ?? ''
+      return { frames: parts, rest }
+    }
+
+    try {
+      const resp = await deerflowFetchStream(
+        `/api/langgraph/threads/${encodeURIComponent(threadId)}/runs/${encodeURIComponent(runId)}/resume-stream`,
+        {
+          method: 'GET',
+          signal: controller.signal,
+        },
+      )
+      if (!resp.ok) {
+        const text = await resp.text().catch(() => '')
+        throw new Error(text || `HTTP ${resp.status}`)
+      }
+      if (!resp.body) throw new Error('响应流为空')
+
+      const reader = resp.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      const dispatchSseFrame = (frameText) => {
+        const lines = frameText.split('\n')
+        let dataRaw = ''
+        let eventName = ''
+        for (const line of lines) {
+          const l = line.replace(/\r$/, '')
+          if (l.startsWith('event:')) eventName = l.slice(6).trim()
+          if (l.startsWith('data:')) dataRaw += l.slice(5).trim()
+        }
+        if (!dataRaw) return
+        const data = safeParseJSON(dataRaw, null)
+        if (!data) return
+
+        if (eventName === 'values') {
+          if (!data || typeof data !== 'object') return
+          const { messages } = normalizeStreamValues(data)
+          const lastMsg = messages.length ? messages[messages.length - 1] : null
+          // If last message is a user, use the latest assistant.
+          let lastAi = null
+          if (lastMsg && !isHumanMessage(lastMsg)) {
+            lastAi = findLastAssistantMessage(messages)
+          }
+
+          const text = lastAi ? extractAssistantText(lastAi) : ''
+          const prevFinal = finalText
+
+          if (text && !streamTextFromMessages) {
+            const next = accumulateStreamAssistantText(finalText, text)
+            if (next !== finalText) finalText = next
+          }
+
+          const textChanged = finalText !== prevFinal
+
+          const callsRaw =
+            lastMsg && !isHumanMessage(lastMsg) ? collectToolCallsForTurnAfterLastUser(messages) : null
+          const calls = Array.isArray(callsRaw) ? callsRaw.filter(streamToolCallReadyForUi) : null
+          const hasToolCalls = Array.isArray(calls) && calls.length > 0
+          const sig = hasToolCalls ? JSON.stringify(calls) : ''
+          const toolCallsChanged = sig !== lastValuesToolCallsSig
+          if (toolCallsChanged) lastValuesToolCallsSig = sig
+
+          if ((textChanged && !streamTextFromMessages) || toolCallsChanged) {
+            this._emitEvent('chat', {
+              sessionKey: key,
+              runId: String(runId),
+              state: toolCallsChanged ? 'tool' : 'delta',
+              ...(toolCallsChanged
+                ? { data: { tool_calls: calls || [] } }
+                : {
+                    message: {
+                      role: 'assistant',
+                      content: [{ type: 'text', text: finalText }],
+                      ...(hasToolCalls ? { tool_calls: calls } : {}),
+                    },
+                  }),
+            })
+          }
+          emitThreadStateFull(this, key, String(runId), data)
+        }
+      }
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const { frames, rest } = takeCompleteSseFrames(buffer)
+        buffer = rest
+        for (const frame of frames) {
+          if (!frame.trim()) continue
+          dispatchSseFrame(frame)
+        }
+      }
+
+      if (buffer.trim()) {
+        dispatchSseFrame(buffer.replace(/\r\n/g, '\n'))
+      }
+
+      this._emitEvent('chat', {
+        sessionKey: key,
+        runId: String(runId),
+        state: 'final',
+        durationMs: nowTs() - started,
+        message: { role: 'assistant', content: [{ type: 'text', text: finalText }] },
+      })
+
+      const map = loadSessionMap()
+      if (map[key]) {
+        map[key].updatedAt = nowTs()
+        map[key].messageCount = (map[key].messageCount || 0) + 2
+        saveSessionMap(map)
+      }
+
+      return { ok: true, runId: String(runId) }
+    } catch (err) {
+      if (controller.signal.aborted) {
+        this._emitEvent('chat', { sessionKey: key, runId: String(runId), state: 'aborted' })
+        return { ok: true, aborted: true, runId: String(runId) }
+      }
+      this._emitEvent('chat', {
+        sessionKey: key,
+        runId: String(runId),
+        state: 'error',
+        errorMessage: err?.message || '请求失败',
+      })
+      throw err
+    } finally {
+      this._abortByRunId.delete(String(runId))
+    }
+  }
+
+  /**
+   * Resume long-running collab task progress independent of chat run.
+   * It attaches to /api/collab/threads/{threadId}/task-stream and emits `thread_state`
+   * snapshots so UI can keep showing progress even when the main assistant run ended.
+   */
+  async taskResume(sessionKey, threadId) {
+    const key = sessionKey || MAIN_SESSION_KEY
+    if (!threadId) return { ok: false }
+
+    const runId = `task-stream:${String(threadId)}`
+    const controller = new AbortController()
+    this._abortByRunId.set(String(runId), controller)
+    this._latestRunBySession.set(key, String(runId))
+
+    const started = nowTs()
+    let finalEmitted = false
+    let forceTerminal = false
+
+    const takeCompleteSseFrames = (raw) => {
+      const normalized = raw.replace(/\r\n/g, '\n')
+      const parts = normalized.split('\n\n')
+      const rest = parts.pop() ?? ''
+      return { frames: parts, rest }
+    }
+
+    const dispatchSseFrame = (frameText) => {
+      const lines = frameText.split('\n')
+      let dataRaw = ''
+      let eventName = ''
+      for (const line of lines) {
+        const l = line.replace(/\r$/, '')
+        if (l.startsWith('event:')) eventName = l.slice(6).trim()
+        if (l.startsWith('data:')) dataRaw += l.slice(5).trim()
+      }
+      if (!dataRaw) return
+      const data = safeParseJSON(dataRaw, null)
+      if (!data) return
+
+      if (eventName === 'task_progress') {
+        const snap = data?.snapshot || null
+        const mem = data?.memory || null
+        const terminalFromServer = !!data?.terminal
+        const main = snap?.main_task || null
+        const mainStatus = String(main?.status || '').trim()
+        const mainStatusLc = mainStatus.toLowerCase()
+        const prog = main?.progress != null ? Number(main.progress) : null
+        const step = mem?.current_step ? String(mem.current_step) : ''
+        // Task-stream details are internal monitor signals; do not show debug details in top banner.
+        const detail = ''
+        const taskName = String(main?.name || '').trim()
+        const mainTaskId = String(main?.taskId || '').trim()
+        const memStatus = String(mem?.status || '').trim()
+        const summary = String(mem?.output_summary || '').trim()
+        const runningText = [
+          taskName ? `主任务：${taskName}` : '主任务执行中',
+          mainStatus ? `状态：${mainStatus}` : '',
+          prog != null && !Number.isNaN(prog) ? `进度：${prog}%` : '',
+          step ? `当前步骤：${step}` : '',
+          memStatus ? `记忆状态：${memStatus}` : '',
+          mainTaskId ? `任务ID：${mainTaskId}` : '',
+        ]
+          .filter(Boolean)
+          .join('\n')
+
+        const subs = Array.isArray(snap?.subtasks) ? snap.subtasks : []
+        const subTerminal =
+          subs.length > 0 &&
+          subs.every((st) => {
+            const s = String(st?.status || '').trim().toLowerCase()
+            return s === 'completed' || s === 'failed' || s === 'cancelled' || s === 'timed_out'
+          })
+        const terminalLocal =
+          mainStatusLc === 'completed' ||
+          mainStatusLc === 'failed' ||
+          mainStatusLc === 'cancelled' ||
+          subTerminal
+        const terminal = terminalFromServer || terminalLocal
+
+        this._emitEvent('thread_state', {
+          sessionKey: key,
+          runId,
+          partial: false,
+          title: null,
+          todos: [],
+          activityKind: terminal ? 'idle' : 'tools',
+          activityDetail: detail || (terminal ? '' : '任务执行中'),
+          toolNames: [],
+          reasoningPreview: null,
+          clarification: null,
+          // Extra fields for consumers that want full snapshot (safe: extra keys ignored)
+          collabPhase: data?.collab_phase,
+          boundTaskId: snap?.bound_task_id ?? snap?.main_task?.taskId ?? null,
+          boundProjectId: snap?.bound_project_id ?? snap?.main_task?.projectId ?? null,
+        })
+
+        // 非终态阶段不再向主对话注入调试型 delta 文案，避免“主任务：...状态...”刷屏。
+        // 进度展示由 thread_state / 任务侧栏承载；终态仍会发 final。
+
+        if (terminal && !finalEmitted) {
+          finalEmitted = true
+          forceTerminal = true
+          const statusText = mainStatus ? `状态：${mainStatus}` : '状态：completed'
+          const progressText = prog != null && !Number.isNaN(prog) ? `进度：${prog}%` : ''
+          const summaryText = summary ? `结果摘要：${summary}` : ''
+          const taskText = mainTaskId ? `任务ID：${mainTaskId}` : ''
+          const finalText = [statusText, progressText, taskText, summaryText].filter(Boolean).join('\n')
+          this._emitEvent('chat', {
+            sessionKey: key,
+            runId: String(runId),
+            state: 'final',
+            durationMs: nowTs() - started,
+            message: { role: 'assistant', content: [{ type: 'text', text: finalText || '任务已结束。' }] },
+          })
+        }
+      }
+    }
+
+    try {
+      const resp = await deerflowFetchStream(
+        `/api/collab/threads/${encodeURIComponent(threadId)}/task-stream`,
+        { method: 'GET', signal: controller.signal },
+      )
+      if (!resp.ok) {
+        const text = await resp.text().catch(() => '')
+        throw new Error(text || `HTTP ${resp.status}`)
+      }
+      if (!resp.body) throw new Error('响应流为空')
+
+      const reader = resp.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const { frames, rest } = takeCompleteSseFrames(buffer)
+        buffer = rest
+        for (const frame of frames) {
+          if (!frame.trim()) continue
+          dispatchSseFrame(frame)
+          if (forceTerminal) break
+        }
+        if (forceTerminal) break
+      }
+
+      if (buffer.trim()) {
+        dispatchSseFrame(buffer.replace(/\r\n/g, '\n'))
+      }
+
+      return { ok: true, runId }
+    } catch (err) {
+      if (controller.signal.aborted) {
+        return { ok: true, aborted: true, runId }
+      }
+      throw err
+    } finally {
+      this._abortByRunId.delete(String(runId))
+      // do not emit chat events here; this stream is task-only
+      void started
+    }
+  }
+
   async chatHistory(sessionKey, limit = 200) {
     const key = sessionKey || MAIN_SESSION_KEY
     const map = loadSessionMap()
@@ -1498,6 +1902,7 @@ export class WsClient {
     const map = loadSessionMap()
     const threadId = map[key]?.threadId
     delete map[key]
+    this._clearWorkspaceHistoryForSession(key)
     saveSessionMap(map)
     if (threadId) {
       await deerflowFetch(`/api/langgraph/threads/${encodeURIComponent(threadId)}`, { method: 'DELETE' }).catch(() => {})
@@ -1526,7 +1931,7 @@ export class WsClient {
       createdAt: map[sessionKey]?.createdAt || nowTs(),
       updatedAt: nowTs(),
       messageCount: 0,
-      context: oldContext || { ...DEFAULT_SESSION_CONTEXT },
+      context: oldContext || { ...buildDefaultSessionContext() },
     }
     saveSessionMap(map)
     return { ok: true, threadId }
@@ -1534,9 +1939,10 @@ export class WsClient {
 
   updateSessionContext(sessionKey, context) {
     const key = sessionKey || MAIN_SESSION_KEY
+    migrateLegacyGlobalWorkspaceOnce()
     const map = loadSessionMap()
     if (!map[key]) {
-      map[key] = { context: { ...DEFAULT_SESSION_CONTEXT } }
+      map[key] = { context: { ...buildDefaultSessionContext() } }
     }
     const merged = { ...(map[key].context || {}), ...context }
     for (const k of Object.keys(context)) {
@@ -1547,9 +1953,38 @@ export class WsClient {
   }
 
   getSessionContext(sessionKey) {
+    migrateLegacyGlobalWorkspaceOnce()
     const key = sessionKey || MAIN_SESSION_KEY
     const map = loadSessionMap()
-    return map[key]?.context || { ...DEFAULT_SESSION_CONTEXT }
+    return map[key]?.context || { ...buildDefaultSessionContext() }
+  }
+
+  /** 某会话的工作空间历史目录列表（与 sessionKey 绑定） */
+  getWorkspaceHistory(sessionKey) {
+    migrateLegacyGlobalWorkspaceOnce()
+    const key = sessionKey || MAIN_SESSION_KEY
+    const m = loadWorkspaceHistoryMap()
+    const arr = m[key]
+    if (!Array.isArray(arr)) return []
+    return arr.map((x) => String(x || '').trim()).filter(Boolean)
+  }
+
+  /** 写入某会话的工作空间历史（去重、截断由调用方处理） */
+  setWorkspaceHistory(sessionKey, list) {
+    migrateLegacyGlobalWorkspaceOnce()
+    const key = sessionKey || MAIN_SESSION_KEY
+    const m = loadWorkspaceHistoryMap()
+    m[key] = Array.isArray(list) ? list.map((x) => String(x || '').trim()).filter(Boolean).slice(0, 30) : []
+    saveWorkspaceHistoryMap(m)
+  }
+
+  _clearWorkspaceHistoryForSession(sessionKey) {
+    const key = sessionKey || MAIN_SESSION_KEY
+    const m = loadWorkspaceHistoryMap()
+    if (m[key]) {
+      delete m[key]
+      saveWorkspaceHistoryMap(m)
+    }
   }
 
   /**
@@ -1613,8 +2048,8 @@ export class WsClient {
         updatedAt: Math.max(prev.updatedAt || 0, updated || 0),
         messageCount: msgs.length || prev.messageCount || 0,
         context: prev.context && typeof prev.context === 'object'
-          ? { ...DEFAULT_SESSION_CONTEXT, ...prev.context }
-          : { ...DEFAULT_SESSION_CONTEXT },
+          ? { ...buildDefaultSessionContext(), ...prev.context }
+          : { ...buildDefaultSessionContext() },
       }
     }
     saveSessionMap(map)

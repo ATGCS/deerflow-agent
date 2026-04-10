@@ -2,37 +2,24 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { devApiPlugin } from './scripts/dev-api.js'
 import fs from 'fs'
-import path from 'path'
-import { homedir } from 'os'
-
-// 读取 package.json 版本号，构建时注入前缀
+// Read package.json version for build injection
 const pkg = JSON.parse(fs.readFileSync(new URL('./package.json', import.meta.url), 'utf8'))
 
-// 读取 Gateway 端口（启动时读取一次）
-// 注意：Gateway 默认端口是 18789，不是 18790
-let gatewayPort = 18789
-try {
-  const home = homedir()
-  const cfgCandidates = [
-    path.join(home, '.openclaw', 'ytpanel.json'),
-    path.join(home, '.openclaw', 'clawpanel.json'),
-    path.join(home, '.ytpanel', 'ytpanel.json'),
-    path.join(home, '.deerpanel', 'deerpanel.json'),
-  ]
-  for (const cfgPath of cfgCandidates) {
-    if (!fs.existsSync(cfgPath)) continue
-    const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'))
-    const port = cfg?.gateway?.port
-    if (port && typeof port === 'number' && port > 0 && port < 65536) {
-      gatewayPort = port
-      break
+// Auto-follow redirects in proxy to avoid CORS from backend 301/302
+function configureProxyFollowRedirects(proxy) {
+  proxy.on('proxyRes', (proxyRes, req, res) => {
+    if ([301, 302, 303, 307, 308].includes(proxyRes.statusCode)) {
+      const location = proxyRes.headers.location
+      if (location && location.startsWith('http')) {
+        try {
+          const urlObj = new URL(location)
+          // Rewrite absolute URL to relative path so browser stays on proxy
+          proxyRes.headers.location = urlObj.pathname + urlObj.search
+        } catch { /* ignore */ }
+      }
     }
-  }
-} catch (e) {
-  console.warn('[vite] 读取 Gateway 端口配置失败，使用默认端口 18789:', e.message)
+  })
 }
-
-console.log(`[vite] Gateway WebSocket 代理目标: ws://127.0.0.1:${gatewayPort}`)
 
 export default defineConfig({
   plugins: [react(), devApiPlugin()],
@@ -54,9 +41,8 @@ export default defineConfig({
     strictPort: false,
     proxy: {
       '/api/langgraph': {
-        target: 'http://localhost:2024',
+        target: process.env.DEERFLOW_GATEWAY_URL || 'http://localhost:8012',
         changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api\/langgraph/, ''),
         timeout: 600000,
         proxyTimeout: 600000,
       },
@@ -65,28 +51,7 @@ export default defineConfig({
         changeOrigin: true,
         timeout: 600000,
         proxyTimeout: 600000,
-      },
-      '/ws': {
-        target: `ws://127.0.0.1:${gatewayPort}`,
-        ws: true,
-        changeOrigin: true,
-        timeout: 30000,
-        configure: (proxy, options) => {
-          proxy.on('proxyReqWs', (proxyReq, req, socket) => {
-            socket.setTimeout(30000)
-            socket.on('timeout', () => {
-              console.warn('[vite/ws] WebSocket 超时，关闭连接')
-              socket.destroy()
-            })
-          })
-          proxy.on('error', (err, req, socket) => {
-            console.warn(`[vite/ws] 代理错误: ${err.code} ${err.message}`)
-            // WebSocket 升级后 socket 是 net.Socket，无 headersSent
-            if (socket && !socket.destroyed) {
-              socket.destroy()
-            }
-          })
-        },
+        configure: configureProxyFollowRedirects,
       },
     },
     warmup: {

@@ -44,8 +44,8 @@ def parse_skill_file(skill_file: Path, category: str, relative_path: Path | None
                 metadata[key.strip()] = value.strip()
 
         # Extract required fields
-        name = metadata.get("name")
-        description = metadata.get("description")
+        name = (metadata.get("name") or "").strip().strip('"').strip("'")
+        description = (metadata.get("description") or "").strip().strip('"').strip("'")
 
         if not name or not description:
             return None

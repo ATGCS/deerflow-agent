@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from deerflow.collab.storage import find_main_task, get_project_storage
+from deerflow.collab.storage import (
+    find_main_task,
+    get_project_storage,
+    get_task_memory_storage,
+    load_task_memory_for_task_id,
+)
 from deerflow.collab.thread_collab import load_thread_collab_state
 from deerflow.config.paths import Paths
 
@@ -41,6 +46,7 @@ def build_task_progress_snapshot(paths: Paths, thread_id: str) -> dict[str, Any]
     (plus live streaming events on connected clients).
     """
     storage = get_project_storage()
+    mem_store = get_task_memory_storage()
     collab = load_thread_collab_state(paths, thread_id)
     phase_val = collab.collab_phase.value if hasattr(collab.collab_phase, "value") else str(collab.collab_phase)
     supervisor_steps: list[dict[str, Any]] = [
@@ -55,15 +61,37 @@ def build_task_progress_snapshot(paths: Paths, thread_id: str) -> dict[str, Any]
             sid = st.get("id")
             if not sid:
                 continue
+            sid_s = str(sid)
+            memory_payload: dict[str, Any] | None = None
+            try:
+                row = load_task_memory_for_task_id(storage, mem_store, sid_s)
+                if row is not None:
+                    mem, _project_id, _agent_id, _parent = row
+                    if isinstance(mem, dict):
+                        memory_payload = {
+                            "status": mem.get("status", ""),
+                            "progress": _as_int_progress(mem.get("progress")),
+                            "current_step": mem.get("current_step", ""),
+                            "output_summary": mem.get("output_summary", ""),
+                        }
+            except Exception:
+                memory_payload = None
+
+            otc = st.get("observed_tool_calls")
+            if not isinstance(otc, list):
+                otc = []
             subs.append(
                 {
-                    "subtaskId": str(sid),
+                    "subtaskId": sid_s,
                     "parentTaskId": str(task.get("id") or ""),
                     "name": st.get("name"),
                     "description": st.get("description"),
                     "status": st.get("status"),
                     "progress": _as_int_progress(st.get("progress")),
                     "assignedAgent": st.get("assigned_to"),
+                    # For tooltip: backend-observed tool calls (with input/output) + memory summary
+                    "observed_tool_calls": [x for x in otc if isinstance(x, dict)],
+                    **({"memory": memory_payload} if memory_payload is not None else {}),
                 }
             )
         mid = task.get("id")

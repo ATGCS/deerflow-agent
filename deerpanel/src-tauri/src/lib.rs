@@ -17,6 +17,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_dialog::init())
         .register_uri_scheme_protocol("tauri", move |ctx, request| {
             let uri_path = request.uri().path();
             let path = if uri_path == "/" || uri_path.is_empty() {
@@ -186,6 +187,8 @@ pub fn run() {
             skills::skills_clawhub_search,
             skills::skills_clawhub_install,
             skills::skills_uninstall,
+            // MCP 市场
+            skills::mcp_market_search,
             // 前端热更新
             update::check_frontend_update,
             update::download_frontend_update,

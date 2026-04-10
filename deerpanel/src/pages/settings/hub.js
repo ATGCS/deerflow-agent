@@ -50,6 +50,11 @@ function settingsHubHtml() {
 
 function updateSubHead(rootEl, tab) {
   const meta = TAB_META[tab] || TAB_META.general
+  const headEl = rootEl.querySelector('#settings-subview-head')
+  // IM channels tab has its own split-layout header, hide this one
+  if (headEl) {
+    headEl.style.display = (tab === 'im') ? 'none' : ''
+  }
   const tEl = rootEl.querySelector('#settings-subview-title')
   const dEl = rootEl.querySelector('#settings-subview-desc')
   if (tEl) tEl.textContent = meta.title

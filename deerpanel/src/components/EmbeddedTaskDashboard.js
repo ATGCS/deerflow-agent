@@ -33,6 +33,7 @@ export class EmbeddedTaskDashboard {
     this.refreshTimer = null
     this.projectId = null
     this.isVisible = false
+    this._loading = false
     
     this.render()
   }
@@ -43,6 +44,8 @@ export class EmbeddedTaskDashboard {
    * @async
    */
   async loadTasks() {
+    if (this._loading) return
+    this._loading = true
     try {
       const allTasks = await tasksAPI.listTasks()
       // 筛选执行中的任务（planning 和 executing 状态）
@@ -63,6 +66,8 @@ export class EmbeddedTaskDashboard {
       console.error('[EmbeddedTaskDashboard] Failed to load tasks:', error)
       // 显示错误状态
       this.showError('加载任务失败')
+    } finally {
+      this._loading = false
     }
   }
 

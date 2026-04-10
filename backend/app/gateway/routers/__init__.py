@@ -1,4 +1,20 @@
-from . import agents, artifacts, channels, collab, events, mcp, models, projects, skills, suggestions, task_memory, tasks, threads, uploads
+from . import (
+    agents,
+    artifacts,
+    channels,
+    collab,
+    events,
+    mcp,
+    models,
+    projects,
+    skills,
+    suggestions,
+    task_memory,
+    tasks,
+    threads,
+    uploads,
+    workspaces,
+)
 
 __all__ = [
     "agents",
@@ -15,4 +31,5 @@ __all__ = [
     "tasks",
     "threads",
     "uploads",
+    "workspaces",
 ]

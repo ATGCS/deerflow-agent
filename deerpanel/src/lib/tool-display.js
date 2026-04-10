@@ -6,6 +6,7 @@
 export const SUPERVISOR_ACTION_ZH = {
   create_task: '创建任务',
   create_subtask: '创建子任务',
+  create_subtasks: '批量创建子任务',
   assign_subtask: '分配子任务',
   update_progress: '更新进度',
   complete_subtask: '完成子任务',
@@ -13,6 +14,8 @@ export const SUPERVISOR_ACTION_ZH = {
   set_task_planned: '标记计划就绪',
   get_status: '查询状态',
   get_task_memory: '读取任务记忆',
+  monitor_execution_step: '监控执行进度',
+  monitor_execution: '监控执行',
   list_subtasks: '列出子任务',
   create_agent: '创建 Agent',
   update_agent: '更新 Agent',

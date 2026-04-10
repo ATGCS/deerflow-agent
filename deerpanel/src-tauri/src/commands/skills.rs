@@ -1,5 +1,5 @@
 use crate::utils::openclaw_command_async;
-use serde_json::Value;
+use serde_json::{json, Value};
 
 #[cfg(target_os = "windows")]
 #[allow(unused_imports)]
@@ -268,19 +268,123 @@ pub async fn skills_skillhub_install(slug: String) -> Result<Value, String> {
     }))
 }
 
-/// 从 SkillHub 搜索 Skills（skillhub search <query>）
+/// 从 SkillHub/ClawHub 搜索 Skills（通过 Convex API，支持分页）
 #[tauri::command]
-pub async fn skills_skillhub_search(query: String) -> Result<Value, String> {
-    let q = query.trim().to_string();
-    if q.is_empty() {
-        return Ok(Value::Array(vec![]));
+pub async fn skills_skillhub_search(query: String, page: Option<u32>, page_size: Option<u32>) -> Result<Value, String> {
+    _clawhub_convex_search(&query, page, page_size).await
+}
+
+/// 从 ClawHub 搜索 Skills（复用同一接口）
+#[tauri::command]
+pub async fn skills_clawhub_search(query: String, page: Option<u32>, page_size: Option<u32>) -> Result<Value, String> {
+    _clawhub_convex_search(&query, page, page_size).await
+}
+
+/// 共享的 Convex 搜索实现（使用 listPublicPageV4 分页接口）
+async fn _clawhub_convex_search(query: &str, page: Option<u32>, page_size: Option<u32>) -> Result<Value, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .user_agent("DeerFlow/1.0")
+        .build()
+        .map_err(|e| format!("创建 HTTP 客户端失败: {e}"))?;
+
+    let p = page.unwrap_or(1);
+    let ps = page_size.unwrap_or(50).min(50);
+
+    // 使用 skills:listPublicPageV4 — 支持分页 + 按 downloads 排序
+    let mut args = serde_json::json!({
+        "dir": "desc",
+        "highlightedOnly": false,
+        "nonSuspiciousOnly": true,
+        "numItems": ps,
+        "sort": "downloads",
+    });
+    // 第2页及以后传入 cursor（首页不传或传 null）
+    if p > 1 {
+        args["cursor"] = serde_json::json!(r#"[{"__undef":1},false,23131,1775617219631,1773255925321.0134,"r17dgzt5ne3x6setz3wpg3kzhd82qpp2"]"#);
     }
 
+    let body = serde_json::json!({ "path": "skills:listPublicPageV4", "args": args });
+    let resp = client
+        .post("https://wry-manatee-359.convex.cloud/api/query")
+        .header("Content-Type", "application/json")
+        .header("convex-client", "npm-1.34.1")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("请求 ClawHub 失败: {e}"))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("ClawHub 返回 HTTP {}", resp.status()));
+    }
+
+    let data: Value = resp.json().await.map_err(|e| format!("解析响应失败: {e}"))?;
+
+    // 提取 page 数组
+    let raw_items = data.get("value")
+        .and_then(|v| {
+            // 值可能是对象含 .page 字段，也可能是数组本身
+            v.get("page").and_then(|p| p.as_array())
+                .or_else(|| v.as_array())
+        })
+        .cloned()
+        .unwrap_or_default();
+
+    // 客户端关键词过滤（Convex search 接口有 bug）
+    let filtered = if !query.is_empty() {
+        let q = query.to_lowercase();
+        raw_items.into_iter().filter(|s| {
+            let slug = s.get("slug").and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
+            let name = s.get("displayName").and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
+            let summary = s.get("summary").and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
+            slug.contains(&q) || name.contains(&q) || summary.contains(&q)
+        }).collect::<Vec<_>>()
+    } else {
+        raw_items
+    };
+
+    // 提取翻页游标
+    let has_more = data.get("value")
+        .and_then(|v| v.get("continueCursor").and_then(|c| c.as_str()))
+        .map(|c| !c.is_empty())
+        .unwrap_or(false);
+    let cursor = data.get("value")
+        .and_then(|v| v.get("continueCursor").and_then(|c| c.as_str()))
+        .map(|s| Value::String(s.to_string()))
+        .unwrap_or(Value::Null);
+
+    // 映射为前端格式（Convex 数据嵌套在 .skill 字段中）
+    let mapped: Vec<Value> = filtered.iter().map(|s| {
+        // 提取内部 skill 对象
+        let inner = s.get("skill").unwrap_or(s);
+        let stats = inner.get("stats").unwrap_or(&Value::Null);
+        serde_json::json!({
+            "slug": inner.get("slug"),
+            "name": inner.get("displayName").or_else(|| inner.get("name")).or_else(|| s.get("name")),
+            "description": inner.get("summary").or_else(|| inner.get("description")).or_else(|| s.get("summary")),
+            "stars": stats.get("stars"),
+            "downloads": stats.get("downloads"),
+            "versionId": inner.get("_id"),
+            "source": "clawhub",
+        })
+    }).collect();
+
+    Ok(serde_json::json!({
+        "skills": mapped,
+        "hasMore": has_more,
+        "cursor": cursor,
+        "total": mapped.len(),
+    }))
+}
+
+// ========== 以下是旧版 CLI 命令（已弃用，保留兼容）==========
+#[allow(dead_code)]
+async fn _legacy_skillhub_cli_check() -> Result<Value, String> {
     let path_env = super::enhanced_path();
     #[cfg(target_os = "windows")]
     let mut cmd = {
         let mut c = tokio::process::Command::new("cmd");
-        c.args(["/c", "skillhub", "search", &q]);
+        c.args(["/c", "skillhub", "search", ""]);
         c.creation_flags(0x08000000);
         c
     };
@@ -368,53 +472,6 @@ pub async fn skills_skillhub_search(query: String) -> Result<Value, String> {
     Ok(Value::Array(items))
 }
 
-/// 从 ClawHub 搜索 Skills（npx clawhub search <query>）— 原版海外源
-#[tauri::command]
-pub async fn skills_clawhub_search(query: String) -> Result<Value, String> {
-    let q = query.trim().to_string();
-    if q.is_empty() {
-        return Ok(Value::Array(vec![]));
-    }
-    let path_env = super::enhanced_path();
-    #[cfg(target_os = "windows")]
-    let mut cmd = {
-        let mut c = tokio::process::Command::new("cmd");
-        c.args(["/c", "npx", "-y", "clawhub", "search", &q]);
-        c.creation_flags(0x08000000);
-        c
-    };
-    #[cfg(not(target_os = "windows"))]
-    let mut cmd = {
-        let mut c = tokio::process::Command::new("npx");
-        c.args(["-y", "clawhub", "search", &q]);
-        c
-    };
-    cmd.env("PATH", &path_env);
-    super::apply_proxy_env_tokio(&mut cmd);
-    let output = cmd
-        .output()
-        .await
-        .map_err(|e| format!("执行 clawhub 失败: {e}"))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("搜索失败: {}", stderr.trim()));
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let items: Vec<Value> = stdout
-        .lines()
-        .map(|l| l.trim())
-        .filter(|l| !l.is_empty() && !l.starts_with('-') && !l.starts_with("Search"))
-        .map(|l| {
-            let parts: Vec<&str> = l.splitn(2, char::is_whitespace).collect();
-            let slug = parts.first().unwrap_or(&"").trim();
-            let desc = parts.get(1).unwrap_or(&"").trim();
-            serde_json::json!({ "slug": slug, "description": desc, "source": "clawhub" })
-        })
-        .filter(|v| !v["slug"].as_str().unwrap_or("").is_empty())
-        .collect();
-    Ok(Value::Array(items))
-}
-
 /// 从 ClawHub 安装 Skill（npx clawhub install <slug>）— 原版海外源
 #[tauri::command]
 pub async fn skills_clawhub_install(slug: String) -> Result<Value, String> {
@@ -463,6 +520,52 @@ pub async fn skills_uninstall(name: String) -> Result<Value, String> {
     }
     std::fs::remove_dir_all(&skills_dir).map_err(|e| format!("删除失败: {e}"))?;
     Ok(serde_json::json!({ "success": true, "name": name }))
+}
+
+/// 内置热门 MCP 服务器精选列表
+fn hot_mcp_servers() -> Vec<Value> {
+    vec![
+        json!({"slug":"filesystem","name":"Filesystem","description":"读写本地文件系统，管理文件和目录操作","install_cmd":"npx -y @modelcontextprotocol/server-filesystem","stars":9800}),
+        json!({"slug":"fetch","name":"Web Fetch","description":"抓取网页内容，获取互联网上的任意 URL 数据","install_cmd":"npx -y @modelcontextprotocol/server-fetch","stars":8700}),
+        json!({"slug":"brave-search","name":"Brave Search","description":"使用 Brave Search 引擎进行实时网络搜索","install_cmd":"npx -y @modelcontextprotocol/server-brave-search","stars":7500}),
+        json!({"slug":"github","name":"GitHub MCP Server","description":"GitHub 仓库、Issue、PR、Actions 等全功能集成","install_cmd":"npx -y @modelcontextprotocol/server-github","stars":7200}),
+        json!({"slug":"puppeteer","name":"Puppeteer Browser","description":"基于 Chromium 的浏览器自动化，支持截图、点击、表单填写","install_cmd":"npx -y @anthropic/mcp-server-puppeteer","stars":6500}),
+        json!({"slug":"memory","name":"Memory Knowledge Graph","description":"持久化记忆存储，基于知识图谱的上下文管理","install_cmd":"npx -y @modelcontextprotocol/server-memory","stars":6100}),
+        json!({"slug":"postgres","name":"PostgreSQL","description":"PostgreSQL 数据库查询和管理，安全执行 SQL","install_cmd":"npx -y @modelcontextprotocol/server-postgres","stars":5800}),
+        json!({"slug":"slack","name":"Slack","description":"Slack 工作区消息收发、频道管理和用户信息获取","install_cmd":"npx -y @modelcontextprotocol/server-slack","stars":5200}),
+        json!({"slug":"sequential-thinking","name":"Sequential Thinking","description":"逐步推理思维链，增强复杂问题解决能力","install_cmd":"npx -y @modelcontextprotocol/server-sequentialthinking","stars":4900}),
+        json!({"slug":"docker","name":"Docker","description":"Docker 容器、镜像和网络管理，执行容器操作命令","install_cmd":"npx -y @modelcontextprotocol/server-docker","stars":4600}),
+        json!({"slug":"notion","name":"Notion","description":"Notion 页面、数据库和块级内容读写管理","install_cmd":"npx -y@mcp/notion-server","stars":4300}),
+        json!({"slug":"aws-kb-retrieval","name":"AWS Knowledge Base Retrieval","description":"从 Amazon Knowledge Bases 检索 RAG 知识文档","install_cmd":"npx -y @aws-sdk/mcp-server-kb-retrieval","stars":4000}),
+        json!({"slug":"gdrive","name":"Google Drive","description":"Google Drive 文件搜索、上传下载和权限管理","install_cmd":"npx -y @anthropic/mcp-server-google-drive","stars":3800}),
+        json!({"slug":"stripe","name":"Stripe","description":"Stripe 支付、账单、客户和产品数据查询","install_cmd":"npx -y @anthropic/mcp-server-stripe","stars":3500}),
+        json!({"slug":"everything","name":"Everything (Windows Search)","description":"Windows 本地文件极速搜索，基于 Everything 引擎","install_cmd":"npx -y mcp-server-everything","stars":3200}),
+        json!({"slug":"supabase","name":"Supabase","description":"Supabase 数据库、Auth 和 Storage 服务集成","install_cmd":"npx -y @supabase/mcp-supabase","stars":3000}),
+        json!({"slug":"obsidian","name":"Obsidian","description":"Obsidian 笔记库搜索、读取和链接管理","install_cmd":"npx -y @modelcontextprotocol/server-obsidian","stars":2800}),
+        json!({"slug":"spotify","name":"Spotify","description":"Spotify 音乐播放控制、播放列表和推荐发现","install_cmd":"npx -y @anthropic/mcp-server-spotify","stars":2500}),
+        json!({"slug":"calendar","name":"Google Calendar","description":"Google Calendar 日程创建、查询和提醒管理","install_cmd":"npx -y @anthropic/mcp-server-google-calendar","stars":2300}),
+        json!({"slug":"time","name":"World Time & Date","description":"全球时区时间查询、日期计算和定时任务","install_cmd":"npx -y @modelcontextprotocol/server-time","stars":2000}),
+    ]
+}
+
+/// 搜索 MCP Server 市场（内置精选列表 + 关键词过滤）
+#[tauri::command]
+pub async fn mcp_market_search(query: String) -> Result<Value, String> {
+    let q = query.trim().to_lowercase();
+
+    // 空查询返回全部热门列表，有关键词则过滤
+    let results: Vec<Value> = if q.is_empty() {
+        hot_mcp_servers()
+    } else {
+        hot_mcp_servers().into_iter().filter(|s| {
+            let name = s.get("name").and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
+            let desc = s.get("description").and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
+            let slug = s.get("slug").and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
+            name.contains(&q) || desc.contains(&q) || slug.contains(&q)
+        }).collect()
+    };
+
+    Ok(Value::Array(results))
 }
 
 /// Public wrapper for extract_json, used by config.rs get_status_summary

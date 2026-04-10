@@ -2,11 +2,11 @@ import os
 import posixpath
 import re
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from langchain.tools import ToolRuntime, tool
 from langgraph.typing import ContextT
 
-from deerflow.agents.thread_state import ThreadDataState, ThreadState
 from deerflow.config.paths import VIRTUAL_PATH_PREFIX
 from deerflow.sandbox.exceptions import (
     SandboxError,
@@ -16,6 +16,12 @@ from deerflow.sandbox.exceptions import (
 from deerflow.sandbox.sandbox import Sandbox
 from deerflow.sandbox.sandbox_provider import get_sandbox_provider
 from deerflow.sandbox.security import LOCAL_HOST_BASH_DISABLED_MESSAGE, is_host_bash_allowed
+
+if TYPE_CHECKING:
+    from deerflow.agents.thread_state import ThreadDataState, ThreadState
+else:
+    ThreadDataState = Any
+    ThreadState = Any
 
 _ABSOLUTE_PATH_PATTERN = re.compile(r"(?<![:\w])/(?:[^\s\"'`;&|<>()]+)")
 _LOCAL_BASH_SYSTEM_PATH_PREFIXES = (
@@ -31,6 +37,7 @@ _LOCAL_BASH_SYSTEM_PATH_PREFIXES = (
 # outside /mnt/user-data when using the local sandbox. Self-hosted only; not a
 # security boundary — see CONFIGURATION.md.
 _DEERFLOW_ALLOW_LOCAL_HOST_READS_ENV = "DEERFLOW_ALLOW_LOCAL_HOST_READS"
+_DEERFLOW_ALLOW_NETWORK_IN_BASH_ENV = "DEERFLOW_ALLOW_NETWORK_IN_BASH"
 
 
 def _local_host_reads_enabled() -> bool:
@@ -298,7 +305,7 @@ def _sanitize_error(error: Exception, runtime: "ToolRuntime[ContextT, ThreadStat
     the host directory layout.
     """
     msg = f"{type(error).__name__}: {error}"
-    if runtime is not None and is_local_sandbox(runtime):
+    if runtime is not None and is_local_sandbox(runtime) and _use_virtual_paths(runtime):
         thread_data = get_thread_data(runtime)
         msg = mask_local_paths_in_output(msg, thread_data)
     return msg
@@ -642,6 +649,92 @@ def replace_virtual_paths_in_command(command: str, thread_data: ThreadDataState 
     return result
 
 
+def _replace_virtual_paths_in_output(output: str, thread_data: ThreadDataState | None) -> str:
+    """Convert virtual paths back to host paths in local-host mode output."""
+    if not output:
+        return output
+    return replace_virtual_paths_in_command(output, thread_data)
+
+
+def _looks_like_shell_web_search(command: str) -> bool:
+    """Detect shell commands that try to perform network search directly.
+
+    We prefer the dedicated `web_search` tool for search/news lookup to keep
+    behavior consistent and avoid ad-hoc scraping scripts.
+    """
+    cmd = (command or "").lower()
+    patterns = [
+        "/mnt/skills/public/web-search/scripts/search.sh",
+        "$skills_root/web-search/scripts/search.sh",
+        "from tools import web_search",
+        "tools import web_search",
+        "web_search(",
+        "curl -s \"https://www.bing.com/news/search",
+        "curl -s 'https://www.bing.com/news/search",
+        "curl \"https://www.bing.com/news/search",
+        "bing.com/search",
+        "bing.com/news/search",
+        "google.com/search",
+        "baidu.com/s?",
+        "duckduckgo.com",
+        "from playwright.sync_api",
+    ]
+    return any(p in cmd for p in patterns)
+
+
+def _bash_network_access_allowed() -> bool:
+    """Whether bash is allowed to access network directly."""
+    return os.environ.get(_DEERFLOW_ALLOW_NETWORK_IN_BASH_ENV, "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+
+
+def _looks_like_network_command(command: str) -> bool:
+    """Detect likely network access in shell command.
+
+    Root-cause policy: web/network retrieval should use dedicated tools
+    (`web_search` / `web_fetch`), not ad-hoc shell networking.
+    """
+    cmd = (command or "").lower()
+    patterns = [
+        "http://",
+        "https://",
+        "curl ",
+        "wget ",
+        "invoke-webrequest",
+        "invoke-restmethod",
+        "requests.",
+        "import requests",
+        "import httpx",
+        "from playwright",
+        "playwright.sync_api",
+        "socket.",
+        "aiohttp",
+    ]
+    return any(p in cmd for p in patterns)
+
+
+def _looks_like_linux_shell_only(command: str) -> bool:
+    """Detect Linux-specific shell usage that breaks on Windows PowerShell."""
+    cmd = (command or "").lower()
+    patterns = [
+        "/mnt/",
+        " grep ",
+        "| grep",
+        " head ",
+        "| head",
+        " sed ",
+        "| sed",
+        " awk ",
+        "| awk",
+        " source ",
+        " && ",
+    ]
+    return any(p in cmd for p in patterns)
+
+
 def get_thread_data(runtime: ToolRuntime[ContextT, ThreadState] | None) -> ThreadDataState | None:
     """Extract thread_data from runtime state."""
     if runtime is None:
@@ -649,6 +742,20 @@ def get_thread_data(runtime: ToolRuntime[ContextT, ThreadState] | None) -> Threa
     if runtime.state is None:
         return None
     return runtime.state.get("thread_data")
+
+
+def _use_virtual_paths(runtime: ToolRuntime[ContextT, ThreadState] | None) -> bool:
+    """Whether current run prefers virtual /mnt paths.
+
+    Default False (prefer local host paths).
+    """
+    if runtime is None:
+        return False
+    ctx = getattr(runtime, "context", None) or {}
+    val = ctx.get("use_virtual_paths")
+    if isinstance(val, bool):
+        return val
+    return False
 
 
 def is_local_sandbox(runtime: ToolRuntime[ContextT, ThreadState] | None) -> bool:
@@ -803,16 +910,42 @@ def bash_tool(runtime: ToolRuntime[ContextT, ThreadState], description: str, com
         command: The bash command to execute. Always use absolute paths for files and directories.
     """
     try:
+        if _looks_like_shell_web_search(command):
+            return (
+                "Error: Network search via shell is disabled. "
+                "Please use the `web_search` tool directly for search/news queries, "
+                "and use `web_fetch` only for follow-up reading of specific URLs."
+            )
+        if (not _bash_network_access_allowed()) and _looks_like_network_command(command):
+            return (
+                "Error: Network access via `bash` is disabled by policy. "
+                "Use `web_search` for discovery and `web_fetch` for fetching specific URLs. "
+                f"If you really need network in bash, set env `{_DEERFLOW_ALLOW_NETWORK_IN_BASH_ENV}=1`."
+            )
+        if is_local_sandbox(runtime) and (not _use_virtual_paths(runtime)) and _looks_like_linux_shell_only(command):
+            return (
+                "Error: LOCAL_HOST mode detected. Do not use Linux `/mnt/...` paths or Linux-only commands "
+                "like `grep/head/source/&&` in bash requests. "
+                "Use local Windows paths and PowerShell-compatible syntax (e.g. `Get-ChildItem`, `Select-String`, "
+                "`Select-Object -First`)."
+            )
         sandbox = ensure_sandbox_initialized(runtime)
         if is_local_sandbox(runtime):
             if not is_host_bash_allowed():
                 return f"Error: {LOCAL_HOST_BASH_DISABLED_MESSAGE}"
             ensure_thread_directories_exist(runtime)
             thread_data = get_thread_data(runtime)
-            validate_local_bash_command_paths(command, thread_data)
-            command = replace_virtual_paths_in_command(command, thread_data)
+            if _use_virtual_paths(runtime):
+                validate_local_bash_command_paths(command, thread_data)
+                command = replace_virtual_paths_in_command(command, thread_data)
+            else:
+                # Local-host mode: tolerate accidental /mnt/... inputs by translating
+                # them to host paths before execution (e.g. /mnt/skills -> local skills dir).
+                command = replace_virtual_paths_in_command(command, thread_data)
             output = sandbox.execute_command(command)
-            return mask_local_paths_in_output(output, thread_data)
+            if _use_virtual_paths(runtime):
+                return mask_local_paths_in_output(output, thread_data)
+            return _replace_virtual_paths_in_output(output, thread_data)
         ensure_thread_directories_exist(runtime)
         return sandbox.execute_command(command)
     except SandboxError as e:
@@ -842,11 +975,16 @@ def ls_tool(runtime: ToolRuntime[ContextT, ThreadState], description: str, path:
                 path = _resolve_skills_path(path)
             elif _is_acp_workspace_path(path):
                 path = _resolve_acp_workspace_path(path, _extract_thread_id_from_thread_data(thread_data))
+            elif not _use_virtual_paths(runtime):
+                path = str(Path(path).resolve())
             elif _local_host_reads_enabled() and _is_explicit_host_filesystem_path(path):
                 path = str(Path(path).resolve())
             else:
                 path = _resolve_and_validate_user_data_path(path, thread_data)
         children = sandbox.list_dir(path)
+        if is_local_sandbox(runtime) and not _use_virtual_paths(runtime):
+            thread_data = get_thread_data(runtime)
+            children = [_replace_virtual_paths_in_output(c, thread_data) for c in children]
         if not children:
             return "(empty)"
         return "\n".join(children)
@@ -887,6 +1025,8 @@ def read_file_tool(
                 path = _resolve_skills_path(path)
             elif _is_acp_workspace_path(path):
                 path = _resolve_acp_workspace_path(path, _extract_thread_id_from_thread_data(thread_data))
+            elif not _use_virtual_paths(runtime):
+                path = str(Path(path).resolve())
             elif _local_host_reads_enabled() and _is_explicit_host_filesystem_path(path):
                 path = str(Path(path).resolve())
             else:
@@ -931,7 +1071,10 @@ def write_file_tool(
         if is_local_sandbox(runtime):
             thread_data = get_thread_data(runtime)
             validate_local_tool_path(path, thread_data)
-            path = _resolve_and_validate_user_data_path(path, thread_data)
+            if not _use_virtual_paths(runtime):
+                path = str(Path(path).resolve())
+            else:
+                path = _resolve_and_validate_user_data_path(path, thread_data)
         sandbox.write_file(path, content, append)
         return "OK"
     except SandboxError as e:
@@ -972,7 +1115,10 @@ def str_replace_tool(
         if is_local_sandbox(runtime):
             thread_data = get_thread_data(runtime)
             validate_local_tool_path(path, thread_data)
-            path = _resolve_and_validate_user_data_path(path, thread_data)
+            if not _use_virtual_paths(runtime):
+                path = str(Path(path).resolve())
+            else:
+                path = _resolve_and_validate_user_data_path(path, thread_data)
         content = sandbox.read_file(path)
         if not content:
             return "OK"

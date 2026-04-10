@@ -1,7 +1,14 @@
 import logging
 import os
 from pathlib import Path
-from typing import Any, Self
+from typing import Any
+
+try:
+    # Python 3.11+
+    from typing import Self  # type: ignore
+except ImportError:  # pragma: no cover
+    # Python 3.10 fallback
+    from typing_extensions import Self  # type: ignore
 
 import yaml
 from dotenv import load_dotenv

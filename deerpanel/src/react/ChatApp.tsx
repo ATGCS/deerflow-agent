@@ -16,9 +16,10 @@ import { HostedAgentPanel } from './components/HostedAgentPanel.js'
 import { TaskSidebar } from './components/TaskSidebar.js'
 import { RunManager } from './components/RunManager.js'
 import { toast } from '../components/toast.js'
-import { showConfirm } from '../components/modal.js'
+import { showConfirm, showModal } from '../components/modal.js'
 import { openMobileShellAside, toggleShellAsideCollapsed } from '../components/shell-aside.js'
 import { useHostedAgent } from './hooks/useHostedAgent.js'
+import { getUseVirtualPaths, setUseVirtualPaths } from '../lib/path-mode.js'
 
 // ========== 任务进度可视化系统集成 ==========
 import { tasksAPI } from '../lib/api-client.js'
@@ -49,6 +50,34 @@ const SHELL_SIDEBAR_SYNC_STORAGE_KEY = 'ytpanel_shell_sidebar_sync'
 /** 与「新建任务」等生成的草稿会话 id 一致，避免 includes(':new-') 误匹配普通会话 key */
 const NEW_DRAFT_SESSION_KEY_RE = /^agent:[^:]+:new-[a-z0-9]+$/i
 
+function _pathBasename(p: string): string {
+  const s = String(p || '').trim()
+  if (!s) return ''
+  const noSlash = s.replace(/[\\/]+$/, '')
+  const parts = noSlash.split(/[\\/]/).filter(Boolean)
+  return parts[parts.length - 1] || noSlash
+}
+
+function promptWorkspacePath(current: string): Promise<string> {
+  return new Promise((resolve) => {
+    showModal({
+      title: '设置工作空间目录',
+      fields: [
+        {
+          name: 'path',
+          label: '本机工作空间目录（绝对路径）',
+          value: current || '',
+          placeholder: '例如：D:\\work\\project',
+          hint: '提示：Web 模式无法读取系统绝对路径；桌面端建议直接使用「选择文件夹」窗口。',
+        },
+      ],
+      onConfirm: (result: any) => {
+        resolve(String(result?.path || '').trim())
+      },
+    })
+  })
+}
+
 // 状态过期时间：5 分钟（300 秒）
 const THREAD_STATE_EXPIRY_MS = 5 * 60 * 1000
 
@@ -69,6 +98,63 @@ const QUICK_PROMPTS: Array<{ label: string; prompt: string }> = [
   { label: '学习', prompt: '帮我学习[主题]：先给学习路线，再出练习题并批改。' },
   { label: '创建', prompt: '创建一个[类型]的作品：给方案、步骤和可交付物。' },
 ]
+
+function debugSubtaskTooltipEnabled(): boolean {
+  try {
+    // 默认开启；显式设为 '0' 才关闭
+    return localStorage.getItem('DEERFLOW_DEBUG_SUBTASK_TOOLTIP') !== '0'
+  } catch {
+    return true
+  }
+}
+
+function debugSubtaskFlowEnabled(): boolean {
+  try {
+    // 默认开启；显式设为 '0' 才关闭
+    return localStorage.getItem('DEERFLOW_DEBUG_SUBTASK_FLOW') !== '0'
+  } catch {
+    return true
+  }
+}
+
+function parseParentAndSubtaskIdFromComposite(taskId: string): { parentTaskId: string; subtaskId: string } | null {
+  const raw = String(taskId || '').trim()
+  if (!raw) return null
+  const parts = raw.split('-').filter(Boolean)
+  if (parts.length < 3) return null
+  const a = parts[parts.length - 3] || ''
+  const b = parts[parts.length - 2] || ''
+  if (!/^[a-f0-9]{8}$/i.test(a) || !/^[a-f0-9]{8}$/i.test(b)) return null
+  return { parentTaskId: a.toLowerCase(), subtaskId: b.toLowerCase() }
+}
+
+function shortLogText(v: unknown, maxLen = 220): string {
+  const s = String(v ?? '').trim()
+  if (!s) return ''
+  return s.length > maxLen ? `${s.slice(0, maxLen)}…` : s
+}
+
+function textFromSubtaskRawMessage(msg: unknown): string {
+  if (msg == null) return ''
+  if (typeof msg === 'string') return shortLogText(msg, 220)
+  if (typeof msg !== 'object') return shortLogText(String(msg), 220)
+  const m = msg as Record<string, unknown>
+  const c = m.content
+  if (typeof c === 'string') return shortLogText(c, 220)
+  if (Array.isArray(c)) {
+    let out = ''
+    for (const b of c) {
+      if (typeof b === 'string') out += b
+      else if (b && typeof b === 'object') {
+        const bb = b as Record<string, unknown>
+        const t = bb.text
+        if (typeof t === 'string') out += t
+      }
+    }
+    return shortLogText(out, 220)
+  }
+  return ''
+}
 
 function emptyStream(): StreamState {
   return {
@@ -93,6 +179,7 @@ function emptyThreadPanel(): ThreadPanelState {
     activityDetail: '',
     reasoningPreview: null,
     clarification: null,
+    subagentTasks: {},
     collabTask: null,
     collabSubtasks: [],
     supervisorSteps: [],
@@ -105,9 +192,11 @@ function emptyThreadPanel(): ThreadPanelState {
 /** 子智能体流事件 → 协作子任务 status（与 DeerFlow 存储 / TaskSidebar 一致） */
 function collabStatusFromSubagentStreamEv(ev: Record<string, unknown>): string | null {
   const t = ev.type
+  // running/started 只能表示“执行中”，绝不能把子任务误置为终态（否则 UI 会抖动：变绿/显示名称）
   if (t === 'task_started' || t === 'task_running') return 'executing'
   if (t === 'task_completed') return 'completed'
-  if (t === 'task_failed' || t === 'task_timed_out') return 'failed'
+  if (t === 'task_failed') return 'failed'
+  if (t === 'task_timed_out') return 'timed_out'
   return null
 }
 
@@ -115,12 +204,26 @@ function patchCollabSubtasksById(
   list: CollabSubtaskSnapshot[],
   subtaskId: string,
   status: string,
+  patch?: Partial<CollabSubtaskSnapshot>,
 ): CollabSubtaskSnapshot[] {
+  const normalizeStatus = (v?: string) =>
+    String(v || '')
+      .trim()
+      .toLowerCase()
+      .replace(/-/g, '_')
+  const isTerminal = (v?: string) => {
+    const s = normalizeStatus(v)
+    return s === 'completed' || s === 'failed' || s === 'cancelled' || s === 'timed_out'
+  }
+  const nextStatusNorm = normalizeStatus(status)
+  const nextIsTerminal = isTerminal(nextStatusNorm)
   let changed = false
   const next = list.map((s) => {
     if (s.subtaskId !== subtaskId) return s
+    // 终态子任务禁止被后续心跳/进度回刷为 executing，避免 UI 在 completed <-> running 闪烁。
+    if (isTerminal(s.status) && !nextIsTerminal) return s
     changed = true
-    return { ...s, status, ...(status === 'completed' ? { progress: 100 } : {}) }
+    return { ...s, status, ...(status === 'completed' ? { progress: 100 } : {}), ...(patch || {}) }
   })
   return changed ? next : list
 }
@@ -328,20 +431,49 @@ function noteNewToolIds(S: StreamState, newIds: string[]) {
   }
 }
 
+function collectToolIdsFromSegments(segments: MessageSegment[]): Set<string> {
+  const seen = new Set<string>()
+  for (const s of segments) {
+    if (s.kind === 'tools') {
+      for (const id of s.ids || []) {
+        if (id) seen.add(String(id))
+      }
+    }
+  }
+  return seen
+}
+
 function finalizeAssistantSegments(S: StreamState): MessageSegment[] | undefined {
   const seg: MessageSegment[] = [...S.segments]
   if (S.text.trim()) seg.push({ kind: 'text', text: S.text })
-  
-  if (S.tools.length) {
-    const ids = S.tools
-      .map((t) => String((t as Record<string, unknown>).id || (t as Record<string, unknown>).tool_call_id || ''))
-      .filter(Boolean)
-    if (ids.length) {
-      seg.push({ kind: 'tools', ids })
-    }
+
+  const seenInSeg = collectToolIdsFromSegments(seg)
+  const remaining = S.tools
+    .map((t) => String((t as Record<string, unknown>).id || (t as Record<string, unknown>).tool_call_id || ''))
+    .filter(Boolean)
+    .filter((id) => !seenInSeg.has(id))
+  if (remaining.length) {
+    seg.push({ kind: 'tools', ids: remaining })
   }
-  
+
   return seg.length ? seg : undefined
+}
+
+/** 流式尾文封存为 text segment，再在其后插入本轮新工具（与 delta / tool 事件顺序一致） */
+function flushStreamTailTextToSegments(S: StreamState) {
+  const raw = S.text || ''
+  if (!raw.trim()) {
+    S.text = ''
+    return
+  }
+  S.segments.push({ kind: 'text', text: raw })
+  S.text = ''
+}
+
+function appendStreamToolSegments(S: StreamState, newIds: string[]) {
+  if (!newIds.length) return
+  flushStreamTailTextToSegments(S)
+  S.segments.push({ kind: 'tools', ids: [...newIds] })
 }
 
 /** 流式正文：单调合并到 S.text；工具由 delta/tool 事件写入 S.tools，由 MessageRow 实时渲染 */
@@ -358,7 +490,29 @@ function applyAssistantTextDelta(S: StreamState, incoming: string): boolean {
     }
     return false
   }
-  
+  // 明显回退片段（更短且是前缀）直接忽略，避免闪烁。
+  if (prevText.startsWith(inc)) return false
+
+  // 尝试“尾-头重叠”拼接，避免重复堆叠。
+  const maxOverlap = Math.min(prevText.length, inc.length, 240)
+  for (let k = maxOverlap; k >= 40; k--) {
+    if (prevText.endsWith(inc.slice(0, k))) {
+      const next = prevText + inc.slice(k)
+      if (next !== prevText) {
+        S.text = next
+        return true
+      }
+      return false
+    }
+  }
+
+  // 若新片段像是“本轮重写的完整文本”（同开头，且长度明显更长），用新文本覆盖。
+  const headN = Math.min(48, prevText.length, inc.length)
+  if (headN >= 24 && prevText.slice(0, headN) === inc.slice(0, headN) && inc.length >= Math.max(80, prevText.length * 0.85)) {
+    S.text = inc
+    return true
+  }
+
   S.text = prevText + inc
   return true
 }
@@ -374,7 +528,17 @@ export default function ChatApp() {
 
   const [listLoading, setListLoading] = useState(true)
   const [isSending, setIsSending] = useState(false)
+  const isSendingRef = useRef(false)
   const streamRef = useRef<StreamState>(emptyStream())
+  const [resumeBusy, setResumeBusy] = useState(false)
+  const resumeInFlightRef = useRef(false)
+  // 断点续流只允许“每个会话一次”，防止 busy 残留导致反复触发 resume-stream
+  const resumeAttemptedRef = useRef<Record<string, boolean>>({})
+  // NOTE: 已移除 task-progress 快照刷新逻辑
+
+  useEffect(() => {
+    isSendingRef.current = isSending
+  }, [isSending])
   const [threadPanelState, setThreadPanelState] = useState<ThreadPanelState>(emptyThreadPanel())
   const apiRef = useRef<any>(null)
   const [sessionMode, setSessionMode] = useState<SessionMode>(() => getSessionModeFromMeta(selectedSessionKey))
@@ -405,19 +569,27 @@ export default function ChatApp() {
   const [bottomModelOpen, setBottomModelOpen] = useState(false)
   const [bottomAgentOpen, setBottomAgentOpen] = useState(false)
   const [bottomCreativeOpen, setBottomCreativeOpen] = useState(false)
+  const [bottomWorkspaceOpen, setBottomWorkspaceOpen] = useState(false)
+  const [useVirtualPaths, setUseVirtualPathsState] = useState<boolean>(() => getUseVirtualPaths())
+  const [localWorkspaceRoot, setLocalWorkspaceRoot] = useState<string>('')
+  const [workspaceHistory, setWorkspaceHistory] = useState<string[]>([])
   const [pendingNewAgentBootstrapName, setPendingNewAgentBootstrapName] = useState<string | null>(null)
   const [newAgentModalOpen, setNewAgentModalOpen] = useState(false)
   const [newAgentNameDraft, setNewAgentNameDraft] = useState('')
   const [newAgentModalBusy, setNewAgentModalBusy] = useState(false)
   const [newAgentModalError, setNewAgentModalError] = useState<string | null>(null)
-  const [subagentDockTasks, setSubagentDockTasks] = useState<Record<string, SubagentStreamTask>>({})
+  const [, setSubagentDockTasks] = useState<Record<string, SubagentStreamTask>>({})
   const [sidebarTaskViews, setSidebarTaskViews] = useState<Record<string, SidebarTaskView>>({})
   const [sidebarSelectedTaskId, setSidebarSelectedTaskId] = useState<string | null>(null)
   const bottomModelRootRef = useRef<HTMLDivElement | null>(null)
   const bottomAgentRootRef = useRef<HTMLDivElement | null>(null)
   const bottomCreativeRootRef = useRef<HTMLDivElement | null>(null)
+  const bottomWorkspaceRootRef = useRef<HTMLDivElement | null>(null)
   const newAgentNameInputRef = useRef<HTMLInputElement | null>(null)
   const [sessionFilter, setSessionFilter] = useState('')
+  const projectEventsRef = useRef<EventSource | null>(null)
+  const [projectEventsRetry, bumpProjectEventsRetry] = useReducer((x: number) => x + 1, 0)
+  const parentTaskToSubtaskRef = useRef<Record<string, string>>({})
 
   const upsertSidebarTaskView = useCallback(
     (
@@ -445,7 +617,7 @@ export default function ChatApp() {
     [],
   )
 
-  /** 流式 supervisor 工具一有结果就刷新侧栏（create_task / create_subtask 等） */
+  /** 从流式工具结果构建侧栏所需的主任务/子任务/步骤（不再依赖 task-progress 快照）。 */
   const patchCollabFromStreamTools = useCallback(() => {
     const tools = streamRef.current.tools as unknown[]
     const built = buildCollabSidebarFromTools(tools) as {
@@ -458,32 +630,275 @@ export default function ChatApp() {
       built.subtasks.length > 0 ||
       built.supervisorSteps.length > 0
     if (!hasAny) return
-    setThreadPanelState((prev) => {
-      const incomingTaskId = (built.main?.taskId || '').trim()
-      const prevTaskId = (prev.collabTask?.taskId || '').trim()
-      const switchedTask = !!incomingTaskId && !!prevTaskId && incomingTaskId !== prevTaskId
-      return {
-        ...prev,
-        ...(built.main?.taskId
-          ? { collabTask: { ...(switchedTask ? {} : prev.collabTask || {}), ...built.main } as CollabTaskSnapshot }
-          : {}),
-        ...(built.supervisorSteps.length
-          ? { supervisorSteps: built.supervisorSteps }
-          : switchedTask
-            ? { supervisorSteps: [] }
+    // 进度优化/快照功能下线后：子任务需要直接由工具结果驱动写入 state。
+    if (built.main?.taskId || built.subtasks.length || built.supervisorSteps.length) {
+      setThreadPanelState((prev) => {
+        const incomingTaskId = (built.main?.taskId || '').trim()
+        const prevTaskId = (prev.collabTask?.taskId || '').trim()
+        const switchedTask = !!incomingTaskId && !!prevTaskId && incomingTaskId !== prevTaskId
+        return {
+          ...prev,
+          ...(built.main?.taskId
+            ? { collabTask: { ...(switchedTask ? {} : prev.collabTask || {}), ...built.main } as CollabTaskSnapshot }
             : {}),
-        ...(built.subtasks.length
-          ? { collabSubtasks: built.subtasks }
-          : switchedTask
-            ? { collabSubtasks: [] }
-            : {}),
-      }
-    })
-    upsertSidebarTaskView(built.main || null, built.subtasks, built.supervisorSteps)
-    if (built.main?.taskId || built.subtasks.length > 0 || built.supervisorSteps.length > 0) {
+          ...(built.subtasks.length
+            ? { collabSubtasks: built.subtasks }
+            : switchedTask
+              ? { collabSubtasks: [] }
+              : {}),
+          ...(built.supervisorSteps.length
+            ? { supervisorSteps: built.supervisorSteps }
+            : switchedTask
+              ? { supervisorSteps: [] }
+              : {}),
+        }
+      })
+      upsertSidebarTaskView(built.main || null, built.subtasks, built.supervisorSteps)
+    }
+    // 仅当已经创建出子任务时才展开侧栏（避免“只有主任务”时就展示 TODO 区域）
+    if (built.subtasks.length > 0) {
       openTaskSidebar()
     }
   }, [openTaskSidebar, upsertSidebarTaskView])
+
+  // 子任务 detached 模式下，LangGraph custom 流可能只发 task_started；用 Project SSE 事件补齐持续状态/心跳/结果。
+  useEffect(() => {
+    const projId =
+      String(threadPanelState.collabTask?.projectId || threadPanelState.boundProjectId || '').trim()
+    if (!projId) return
+
+    // 防止重复连接
+    if (projectEventsRef.current) return
+
+    const es = new EventSource(`/api/events/projects/${encodeURIComponent(projId)}/stream`)
+    projectEventsRef.current = es
+    if (debugSubtaskFlowEnabled()) {
+      // eslint-disable-next-line no-console
+      console.debug(`[subtask-flow][project-sse] connected project_id=${projId}`)
+    }
+    let lastMessageAt = Date.now()
+    const staleCheckTimer = window.setInterval(() => {
+      const age = Date.now() - lastMessageAt
+      // 连接长时间无任何事件（含 ping/业务事件）时，主动重连，避免“看起来一直运行中但无后续”。
+      if (age < 45000) return
+      if (debugSubtaskFlowEnabled()) {
+        // eslint-disable-next-line no-console
+        console.debug(`[subtask-flow][project-sse] stale-reconnect project_id=${projId} idle_ms=${age}`)
+      }
+      try { es.close() } catch {}
+      if (projectEventsRef.current === es) projectEventsRef.current = null
+      bumpProjectEventsRetry()
+    }, 10000)
+
+    const patchByTaskId = (
+      taskId: string,
+      patch: Partial<CollabSubtaskSnapshot>,
+      extraIds?: string[],
+    ) => {
+      const tid = String(taskId || '').trim()
+      if (!tid) return
+      const candidateIds = [tid, ...(Array.isArray(extraIds) ? extraIds : [])]
+        .map((x) => String(x || '').trim())
+        .filter(Boolean)
+      const candidate8 = candidateIds.map((x) => (x.length > 8 ? x.slice(-8) : x))
+      setThreadPanelState((prev) => {
+        const allSubtasks = prev.collabSubtasks || []
+        const mappedSid = candidateIds
+          .map((id) => String(parentTaskToSubtaskRef.current[id] || '').trim())
+          .find(Boolean)
+        const parentMatched = allSubtasks.filter((s) => {
+          const pid = String(s.parentTaskId || '').trim()
+          const pid8 = pid.length > 8 ? pid.slice(-8) : pid
+          return !!pid && (candidateIds.includes(pid) || candidate8.includes(pid8))
+        })
+        // 兜底策略：若没有 parent->subtask 映射，父任务只允许命中“一个”子任务，避免同父任务全量刷
+        const parentFallbackSid = (() => {
+          if (mappedSid || !parentMatched.length) return ''
+          const runningOne = parentMatched.find((s) => {
+            const st = String(s.status || '').trim().toLowerCase()
+            return st === 'executing' || st === 'running' || st === 'in_progress' || st === 'pending'
+          })
+          return String((runningOne || parentMatched[0])?.subtaskId || '').trim()
+        })()
+        let matchedSubtask = 0
+        let matchedParent = 0
+        const next = allSubtasks.map((s) => {
+          const sid = String(s.subtaskId || '').trim()
+          const sid8 = sid.length > 8 ? sid.slice(-8) : sid
+          const pid = String(s.parentTaskId || '').trim()
+          const pid8 = pid.length > 8 ? pid.slice(-8) : pid
+          const hitSubtask = candidateIds.includes(sid) || candidate8.includes(sid8)
+          // 某些 project-sse 事件只给主任务 task_id：允许用 parentTaskId 兜底命中子任务
+          const hitParent = !hitSubtask && (!!pid && (candidateIds.includes(pid) || candidate8.includes(pid8)))
+          const hitMappedSubtask =
+            !hitSubtask &&
+            !!mappedSid &&
+            (sid === mappedSid || (sid8 && mappedSid.length > 8 ? mappedSid.slice(-8) === sid8 : false))
+          const hitParentFallback =
+            !hitSubtask &&
+            !hitMappedSubtask &&
+            !mappedSid &&
+            !!parentFallbackSid &&
+            sid === parentFallbackSid &&
+            hitParent
+          if (hitSubtask || hitMappedSubtask || hitParentFallback) {
+            if (hitSubtask) matchedSubtask += 1
+            if (hitMappedSubtask || hitParentFallback) matchedParent += 1
+            return { ...s, ...patch }
+          }
+          return s
+        })
+        if (debugSubtaskFlowEnabled()) {
+          const patchOutputSummary = shortLogText((patch as any)?.outputSummary || '')
+          // eslint-disable-next-line no-console
+          console.debug(
+            `[subtask-flow][project-sse][output] task_id=${tid} text="${patchOutputSummary}" matched_subtask=${matchedSubtask} matched_parent=${matchedParent}`,
+          )
+        }
+        return next === allSubtasks ? prev : { ...prev, collabSubtasks: next }
+      })
+    }
+
+    es.onmessage = (ev) => {
+      lastMessageAt = Date.now()
+      let msg: any = null
+      try {
+        msg = JSON.parse(String(ev.data || ''))
+      } catch {
+        // 非 JSON 的 keepalive 帧（如 ping）也算活跃流量
+        lastMessageAt = Date.now()
+        return
+      }
+      const type = String(msg?.type || '')
+      const data = msg?.data || {}
+      if (!data || typeof data !== 'object') return
+      if (debugSubtaskFlowEnabled()) {
+        const stepForLog = shortLogText((data as any).current_step || '')
+        const resultForLog = shortLogText((data as any).result || '')
+        const errorForLog = shortLogText((data as any).error || '')
+        const outputText = stepForLog || resultForLog || errorForLog || ''
+        const outputSource = stepForLog
+          ? 'current_step'
+          : resultForLog
+            ? 'result'
+            : errorForLog
+              ? 'error'
+              : ''
+        // eslint-disable-next-line no-console
+        console.debug(
+          `[subtask-flow][project-sse][event] type=${type} task_id=${String((data as any).task_id || '')} source=${outputSource} text="${outputText}"`,
+        )
+      }
+
+      if (type === 'task:started') {
+        patchByTaskId(
+          String((data as any).task_id || ''),
+          { status: 'executing' },
+          [String((data as any).subtask_id || ''), String((data as any).collab_subtask_id || '')],
+        )
+        return
+      }
+      if (type === 'task:running') {
+        const resolvedCollabSid = String(
+          (data as any).collab_subtask_id || (data as any).subtask_id || (data as any).task_id || '',
+        )
+        const evObj: Record<string, unknown> = {
+          type: 'task_running',
+          task_id: String((data as any).task_exec_id || (data as any).task_id || ''),
+          collab_subtask_id: resolvedCollabSid,
+          message: (data as any).message,
+          message_index: (data as any).message_index,
+          total_messages: (data as any).total_messages,
+          subagent_type: (data as any).subagent_type,
+        }
+        if (debugSubtaskFlowEnabled()) {
+          const sTaskId = String((data as any).task_id || '')
+          const sCollabId = resolvedCollabSid
+          const sText = textFromSubtaskRawMessage((data as any).message)
+          // eslint-disable-next-line no-console
+          console.debug(
+            `[subtask-flow][project-sse][raw] task_id=${sTaskId} collab_subtask_id=${sCollabId} source=message text="${sText}"`,
+          )
+        }
+        setSubagentDockTasks((prev) => {
+          const next = { ...prev }
+          mergeSubagentStreamEvent(next, evObj)
+          setThreadPanelState((tp) => ({ ...tp, subagentTasks: next }))
+          return next
+        })
+        patchByTaskId(
+          String((data as any).task_id || ''),
+          { status: 'executing' },
+          [String((data as any).subtask_id || ''), String((data as any).collab_subtask_id || '')],
+        )
+        return
+      }
+      if (type === 'task_memory:updated') {
+        const tId = String((data as any).task_id || '')
+        const subtaskId = String((data as any).subtask_id || '')
+        const collabSubtaskId = String((data as any).collab_subtask_id || '')
+        patchByTaskId(tId, { status: 'executing' }, [subtaskId, collabSubtaskId])
+        return
+      }
+      if (type === 'task:heartbeat' || type === 'task:progress') {
+        const tId = String((data as any).task_id || '')
+        const subtaskId = String((data as any).subtask_id || '')
+        const collabSubtaskId = String((data as any).collab_subtask_id || '')
+        const st = String((data as any).status || '').trim()
+        const prog = (data as any).progress
+        patchByTaskId(tId, {
+          status: st || 'executing',
+          ...(typeof prog === 'number' ? { progress: prog } : {}),
+        }, [subtaskId, collabSubtaskId])
+        return
+      }
+      if (type === 'task:completed') {
+        patchByTaskId(
+          String((data as any).task_id || ''),
+          {
+            status: 'completed',
+            progress: 100,
+            ...(typeof (data as any).result === 'string' ? { outputSummary: (data as any).result } : {}),
+          },
+          [String((data as any).subtask_id || ''), String((data as any).collab_subtask_id || '')],
+        )
+        return
+      }
+      if (type === 'task:failed') {
+        patchByTaskId(
+          String((data as any).task_id || ''),
+          {
+            status: 'failed',
+            progress: 0,
+            ...(typeof (data as any).error === 'string' ? { outputSummary: (data as any).error } : {}),
+          },
+          [String((data as any).subtask_id || ''), String((data as any).collab_subtask_id || '')],
+        )
+      }
+    }
+
+    es.onerror = () => {
+      if (debugSubtaskFlowEnabled()) {
+        // eslint-disable-next-line no-console
+        console.debug(`[subtask-flow][project-sse] error/close project_id=${projId}`)
+      }
+      // 断线后立即触发重连，避免卡在“运行中…”且无后续事件
+      try { es.close() } catch {}
+      if (projectEventsRef.current === es) projectEventsRef.current = null
+      bumpProjectEventsRetry()
+    }
+
+    return () => {
+      if (debugSubtaskFlowEnabled()) {
+        // eslint-disable-next-line no-console
+        console.debug(`[subtask-flow][project-sse] cleanup project_id=${projId}`)
+      }
+      window.clearInterval(staleCheckTimer)
+      try { es.close() } catch {}
+      if (projectEventsRef.current === es) projectEventsRef.current = null
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [threadPanelState.collabTask?.projectId, threadPanelState.boundProjectId, projectEventsRetry])
 
   /** task-progress / 刷新 / 本轮 final 后：合并 collab_phase、bound_*、持久化 supervisor_steps 与主任务快照 */
   const applyTaskProgressSnapshot = useCallback(
@@ -538,6 +953,16 @@ export default function ChatApp() {
                 ...(typeof r.status === 'string' ? { status: r.status } : {}),
                 ...(typeof r.progress === 'number' ? { progress: r.progress } : {}),
                 ...(typeof r.assignedAgent === 'string' ? { assignedAgent: r.assignedAgent } : {}),
+                ...(typeof (r as any).memory?.output_summary === 'string'
+                  ? { outputSummary: (r as any).memory.output_summary }
+                  : typeof (r as any).outputSummary === 'string'
+                    ? { outputSummary: (r as any).outputSummary }
+                    : {}),
+                ...(Array.isArray((r as any).observedToolCalls)
+                  ? { observedToolCalls: (r as any).observedToolCalls }
+                  : Array.isArray((r as any).observed_tool_calls)
+                    ? { observedToolCalls: (r as any).observed_tool_calls }
+                    : []),
               }
               return out
             })
@@ -573,6 +998,8 @@ export default function ChatApp() {
     },
     [upsertSidebarTaskView],
   )
+
+  // NOTE: 已移除 scheduleCollabTaskProgressRefresh（不再通过 /task-progress 拉取侧栏快照）
 
   /** 从 MCP/技能等页点侧栏会话列表进入聊天时，shell-aside 写入待选会话 */
   useEffect(() => {
@@ -652,16 +1079,18 @@ export default function ChatApp() {
 
   // 底部下拉（模型/智能体）：点击空白处关闭
   useEffect(() => {
-    if (!bottomModelOpen && !bottomAgentOpen && !bottomCreativeOpen) return
+    if (!bottomModelOpen && !bottomAgentOpen && !bottomCreativeOpen && !bottomWorkspaceOpen) return
     const onDown = (e: MouseEvent) => {
       const target = e.target as HTMLElement | null
       if (!target) return
       if (bottomModelRootRef.current && bottomModelRootRef.current.contains(target)) return
       if (bottomAgentRootRef.current && bottomAgentRootRef.current.contains(target)) return
       if (bottomCreativeRootRef.current && bottomCreativeRootRef.current.contains(target)) return
+      if (bottomWorkspaceRootRef.current && bottomWorkspaceRootRef.current.contains(target)) return
       setBottomModelOpen(false)
       setBottomAgentOpen(false)
       setBottomCreativeOpen(false)
+      setBottomWorkspaceOpen(false)
     }
     document.addEventListener('mousedown', onDown)
     const onKey = (ev: KeyboardEvent) => {
@@ -669,6 +1098,7 @@ export default function ChatApp() {
         setBottomModelOpen(false)
         setBottomAgentOpen(false)
         setBottomCreativeOpen(false)
+        setBottomWorkspaceOpen(false)
       }
     }
     document.addEventListener('keydown', onKey)
@@ -676,7 +1106,7 @@ export default function ChatApp() {
       document.removeEventListener('mousedown', onDown)
       document.removeEventListener('keydown', onKey)
     }
-  }, [bottomModelOpen, bottomAgentOpen, bottomCreativeOpen])
+  }, [bottomModelOpen, bottomAgentOpen, bottomCreativeOpen, bottomWorkspaceOpen])
 
   const appendHostedSystemMessage = useCallback(
     (text: string) => {
@@ -754,6 +1184,73 @@ export default function ChatApp() {
     apiRef.current = mod.api
     return apiRef.current
   }
+
+  const applyLocalWorkspaceRoot = useCallback(
+    async (inputPath: string) => {
+      const raw = (inputPath || '').trim()
+      if (!raw) return
+      try {
+        const api = await getApi()
+        const resolvedInfo = await api.resolveWorkspacePath(raw)
+        const resolved = String(resolvedInfo?.resolved || raw).trim()
+        if (!resolved) return
+        if (resolvedInfo && resolvedInfo.exists === false) {
+          toast(`目录不存在：${resolved}`, 'error')
+          return
+        }
+        if (resolvedInfo && resolvedInfo.is_dir === false) {
+          toast(`不是文件夹：${resolved}`, 'error')
+          return
+        }
+
+        setLocalWorkspaceRoot(resolved)
+
+        // 历史：按当前会话存储；去重 + 最新置顶 + 截断
+        setWorkspaceHistory((prev) => {
+          const next = [resolved, ...prev.filter((x) => x !== resolved)].slice(0, 30)
+          if (selectedSessionKey) wsClient.setWorkspaceHistory(selectedSessionKey, next)
+          return next
+        })
+
+        if (selectedSessionKey) {
+          await api.chatUpdateContext(selectedSessionKey, { local_workspace_root: resolved, use_virtual_paths: false })
+        }
+        if (useVirtualPaths) {
+          setUseVirtualPaths(false)
+          setUseVirtualPathsState(false)
+        }
+        toast(`已设置工作空间：${resolved}`, 'success')
+      } catch (err) {
+        toast(String((err as Error)?.message || err), 'error')
+      }
+    },
+    [selectedSessionKey, useVirtualPaths],
+  )
+
+  const openWorkspaceFolderPicker = useCallback(async () => {
+    try {
+      // Tauri v2：优先用系统目录选择对话框
+      if ((window as any).__TAURI__) {
+        const dlg = await import('@tauri-apps/plugin-dialog')
+        const picked = await dlg.open({
+          directory: true,
+          multiple: false,
+          title: '选择工作空间文件夹',
+        })
+        const p = Array.isArray(picked) ? picked[0] : picked
+        if (!p) return
+        await applyLocalWorkspaceRoot(String(p))
+        return
+      }
+    } catch {
+      // ignore and fallback
+    }
+    // Web fallback：用自定义弹窗替代 window.prompt（更美观）
+    const current = (localWorkspaceRoot || '').trim()
+    const next = await promptWorkspacePath(current)
+    if (!next) return
+    await applyLocalWorkspaceRoot(next)
+  }, [applyLocalWorkspaceRoot, localWorkspaceRoot])
 
   async function reconcileCollabWithMode(sessionKey: string) {
     const api = await getApi()
@@ -1035,6 +1532,18 @@ export default function ChatApp() {
       
       // 2. 取消所有全局运行（释放后端 worker 资源，避免新会话被旧任务阻塞）
       import('../lib/ws-client.js').then(({ wsClient }) => {
+        // 同步把“协作阶段”置空闲：用于后端 `resume-stream` SSE 终止
+        // 避免某些桌面端取消请求不完全生效，导致仍持续接收/增量推送。
+        try {
+          const prevThreadId = wsClient.getSessionThreadId(prevSessionKey)
+          if (prevThreadId) {
+            void wsClient.putThreadCollabState(prevThreadId, { collab_phase: 'idle' }).catch(() => {
+              /* ignore */
+            })
+          }
+        } catch {
+          /* ignore */
+        }
         wsClient.cancelAllGlobalRunsBestEffort().catch(() => {
           // 忽略错误
         })
@@ -1042,6 +1551,12 @@ export default function ChatApp() {
     }
     
     streamRef.current = emptyStream()
+    // 切换会话时，必须清空“发送中/续流中”标记，否则历史会话会错误显示“正在处理中”
+    setIsSending(false)
+    setResumeBusy(false)
+    resumeInFlightRef.current = false
+    // 切换到新会话后允许重新尝试一次续流
+    if (selectedSessionKey) resumeAttemptedRef.current[String(selectedSessionKey)] = false
     seenRunIdsRef.current = new Set()
     setSubagentDockTasks({})
     setSidebarTaskViews({})
@@ -1054,121 +1569,103 @@ export default function ChatApp() {
     setCollabOn(getSessionCollabModeFromMeta(selectedSessionKey))
     setModeMenuOpen(false)
     bumpStream()
+
+    // 工作空间与本会话绑定：切换会话时同步「当前目录」与「历史」显示
+    try {
+      const ctx = wsClient.getSessionContext(selectedSessionKey)
+      setLocalWorkspaceRoot(String(ctx.local_workspace_root || '').trim())
+      setWorkspaceHistory(wsClient.getWorkspaceHistory(selectedSessionKey))
+    } catch {
+      setLocalWorkspaceRoot('')
+      setWorkspaceHistory([])
+    }
   }, [selectedSessionKey])
 
-  // 刷新页或切换会话后：按 LangGraph thread_id 拉取持久化的主任务/子任务，恢复任务侧栏（与会话绑定）
+  // NOTE: 已移除「刷新/切换会话后恢复任务侧栏（task-progress 快照）」的逻辑（优化进度展示功能下线）
+
+  // 刷新/切换后：如果当前 thread 仍有 pending/running run，
+  // 通过后端 `resume-stream` 重新挂接 SSE 流，恢复真正的“流式增量”展示。
   useEffect(() => {
+    if (!selectedSessionKey) return
+
     let cancelled = false
-    const sk = selectedSessionKey
-    if (!sk) return
-
-    const mergeTaskFromApi = (taskId: string) => {
-      void tasksAPI
-        .getTask(taskId)
-        .then((task: unknown) => {
-          if (cancelled) return
-          if (!task || typeof task !== 'object') return
-          const t = task as Record<string, unknown>
-          const resolvedId =
-            typeof t.id === 'string' && t.id.trim() ? t.id.trim() : taskId
-          const rawSubs = t.subtasks
-          const collabSubtasks: CollabSubtaskSnapshot[] = Array.isArray(rawSubs)
-            ? (rawSubs
-                .map((row) => {
-                  const r = row as Record<string, unknown>
-                  const sid = typeof r.id === 'string' ? r.id.trim() : ''
-                  if (!sid) return null
-                  const out: CollabSubtaskSnapshot = {
-                    subtaskId: sid,
-                    parentTaskId: resolvedId,
-                    ...(typeof r.name === 'string' ? { name: r.name } : {}),
-                    ...(typeof r.description === 'string'
-                      ? { description: r.description }
-                      : {}),
-                    ...(typeof r.status === 'string' ? { status: r.status } : {}),
-                    ...(typeof r.progress === 'number' ? { progress: r.progress } : {}),
-                    ...(typeof r.assigned_to === 'string'
-                      ? { assignedAgent: r.assigned_to }
-                      : {}),
-                  }
-                  return out
-                })
-                .filter(Boolean) as CollabSubtaskSnapshot[])
-            : []
-          const projRaw =
-            typeof t.parent_project_id === 'string'
-              ? t.parent_project_id.trim()
-              : typeof t.project_id === 'string'
-                ? t.project_id.trim()
-                : ''
-          if (cancelled) return
-          const snapTask: CollabTaskSnapshot = {
-            taskId: resolvedId,
-            projectId: projRaw || undefined,
-            name: typeof t.name === 'string' ? t.name : undefined,
-            status: typeof t.status === 'string' ? t.status : undefined,
-            progress: typeof t.progress === 'number' ? t.progress : undefined,
-          }
-          upsertSidebarTaskView(snapTask, collabSubtasks, undefined)
-          setThreadPanelState((prev) => ({
-            ...prev,
-            collabTask: {
-              ...(((prev.collabTask?.taskId || '').trim() !== resolvedId) ? {} : (prev.collabTask || {})),
-              taskId: resolvedId,
-              projectId: projRaw || prev.collabTask?.projectId,
-              name:
-                typeof t.name === 'string'
-                  ? t.name
-                  : prev.collabTask?.name,
-              status:
-                typeof t.status === 'string'
-                  ? t.status
-                  : prev.collabTask?.status,
-              progress:
-                typeof t.progress === 'number'
-                  ? t.progress
-                  : prev.collabTask?.progress,
-            },
-            collabSubtasks: Array.isArray(rawSubs) ? collabSubtasks : ((prev.collabTask?.taskId || '').trim() !== resolvedId ? [] : prev.collabSubtasks),
-            supervisorSteps: (prev.collabTask?.taskId || '').trim() !== resolvedId ? [] : prev.supervisorSteps,
-          }))
-        })
-        .catch(() => {})
-    }
-
-    const tick = async () => {
+    // 只在挂载后的短窗口内尝试一次“断点续流”，避免正常流式过程中重复发起 resume-stream。
+    const startResumeIfNeeded = async () => {
       if (cancelled) return
-      const tid = wsClient.getSessionThreadId(sk)
-      if (!tid) return
+      // 已经尝试过一次续流就不再试（避免 busy 残留/状态抖动导致重复调用）
+      if (resumeAttemptedRef.current[String(selectedSessionKey)]) return
+      // 正在发送/已有流式 UI 时，绝不触发断点续流
+      if (isSendingRef.current) return
+      // 前端已有流或正在发送时，不再续流
+      const hasLocalStream =
+        !!(
+          streamRef.current.text ||
+          streamRef.current.segments?.length ||
+          streamRef.current.tools?.length ||
+          streamRef.current.images?.length ||
+          streamRef.current.videos?.length ||
+          streamRef.current.audios?.length ||
+          streamRef.current.files?.length ||
+          Object.keys(streamRef.current.subagentTasks || {}).length > 0
+        )
+      if (hasLocalStream) return
+      if (resumeInFlightRef.current) return
+
+      const threadId = wsClient.getSessionThreadId(selectedSessionKey)
+      if (!threadId) return
+
+      const collabSnap = await wsClient.getThreadCollabState(threadId)
+      const phaseRaw = collabSnap?.collab_phase
+      const phaseStr = typeof phaseRaw === 'string' ? phaseRaw : String(phaseRaw || 'idle')
+      const busy = phaseStr !== 'idle' && phaseStr !== 'done'
+
+      if (!busy) return
+
+      // 旧会话残留的 executing 可能导致“打开任意会话都在续流”。
+      // 如果协作状态长时间未更新，则视为过期并自动纠偏为 idle，避免误触发 resume-stream。
       try {
-        const snap = (await wsClient.getTaskProgressSnapshot(tid)) as Record<
-          string,
-          unknown
-        > | null
-        if (!cancelled) applyTaskProgressSnapshot(snap)
-        if (snap && typeof snap === 'object') {
-          const mainRaw = snap.main_task
-          if (mainRaw && typeof mainRaw === 'object') {
-            const main = mainRaw as Record<string, unknown>
-            const mtid =
-              typeof main.taskId === 'string' ? main.taskId.trim() : ''
-            if (mtid) mergeTaskFromApi(mtid)
-          }
+        const rawUpdatedAt = (collabSnap as any)?.updated_at
+        const ts = rawUpdatedAt ? Date.parse(String(rawUpdatedAt)) : Number.NaN
+        // 经验阈值：5 分钟内仍可能是“真实在跑”；更久基本可判定为残留状态（如异常退出/未正确落盘 done）。
+        const STALE_MS = 5 * 60 * 1000
+        if (!Number.isNaN(ts) && Date.now() - ts > STALE_MS) {
+          void wsClient.putThreadCollabState(threadId, { collab_phase: 'idle' }).catch(() => {
+            /* ignore */
+          })
+          return
         }
       } catch {
         /* ignore */
       }
+
+      // 标记：本会话已尝试续流（成功/失败都算），避免后续重复触发
+      resumeAttemptedRef.current[String(selectedSessionKey)] = true
+      resumeInFlightRef.current = true
+      setResumeBusy(true)
+      setIsSending(true)
+
+      try {
+        // 改为后端 task-stream：即使主对话 run 结束，也能继续看到子任务进度/记忆
+        await wsClient.taskResume(selectedSessionKey, threadId)
+      } catch (e) {
+        // resume 失败时至少不要卡住 UI
+      } finally {
+        resumeInFlightRef.current = false
+        setIsSending(false)
+        setResumeBusy(false)
+        streamRef.current = emptyStream()
+        scheduleBump()
+        void reload()
+      }
     }
 
-    void tick()
-    const t1 = window.setTimeout(() => void tick(), 400)
-    const t2 = window.setTimeout(() => void tick(), 1200)
+    // 单次触发，不再长期轮询
+    void startResumeIfNeeded()
+
     return () => {
       cancelled = true
-      window.clearTimeout(t1)
-      window.clearTimeout(t2)
     }
-  }, [selectedSessionKey, historyLoading, applyTaskProgressSnapshot, upsertSidebarTaskView])
+  }, [selectedSessionKey, scheduleBump, reload])
 
   useEffect(() => {
     if (unsubRef.current) {
@@ -1216,6 +1713,8 @@ export default function ChatApp() {
                 preview: p.clarification.preview || p.clarification.content || undefined,
               }
             : null,
+          // thread_state 更新不应清空子智能体聚合态，否则 TODO hover 会匹配不到实时输出
+          subagentTasks: prev.subagentTasks,
           collabTask: prev.collabTask,
           collabSubtasks: prev.collabSubtasks,
           supervisorSteps: prev.supervisorSteps,
@@ -1236,13 +1735,15 @@ export default function ChatApp() {
       if (payload.sessionKey && payload.sessionKey !== sessionRef.current) return
       const chatPayloadMsg = payload.message as { tools?: unknown[] } | undefined
 
-      // ========== 流式响应调试日志 - 只显示工具相关 ==========
-      // 检查是否有工具调用
+      // ========== 流式调试（默认关闭，避免控制台刷屏；控制台执行 localStorage.setItem('DEERFLOW_DEBUG_STREAM','1') 后刷新） ==========
       const hasTools = !!(chatPayloadMsg?.tools && chatPayloadMsg.tools.length > 0)
       const isToolState = payload.state === 'tool'
-      
-      // 只有工具调用时才输出日志
-      if (hasTools || isToolState) {
+      const streamDebug =
+        import.meta.env.DEV &&
+        typeof localStorage !== 'undefined' &&
+        localStorage.getItem('DEERFLOW_DEBUG_STREAM') === '1'
+
+      if (streamDebug && (hasTools || isToolState)) {
         console.log('%c====== [流式响应] 🎯 检测到工具调用 ======', 'color: #ff00ff; font-size: 16px; font-weight: bold; background: #000')
         console.log('[流式响应] 事件类型:', msg.event)
         console.log('[流式响应] 状态:', payload.state)
@@ -1311,6 +1812,7 @@ export default function ChatApp() {
       if (state === 'tool') {
         const entries = normalizeChatToolPayloadToEntries(payload as Record<string, unknown>)
         const newIds = collectNewToolIds(S.tools, entries)
+        appendStreamToolSegments(S, newIds)
         noteNewToolIds(S, newIds)
         for (const e of entries) upsertTool(S.tools, { ...e })
         if (!S.runId && runId) S.runId = runId
@@ -1329,6 +1831,33 @@ export default function ChatApp() {
           setSubagentDockTasks((prev) => {
             const next = { ...prev }
             mergeSubagentStreamEvent(next, evObj)
+            // 子智能体输出不再进主消息区，仅供顶部 TODO hover 预览
+            setThreadPanelState((tp) => ({ ...tp, subagentTasks: next }))
+            if (debugSubtaskTooltipEnabled()) {
+              const type = String(evObj.type || '')
+              const tid = String(evObj.task_id || '')
+              const cid = String(evObj.collab_subtask_id || evObj.collabSubtaskId || '')
+              const t = tid ? next[tid] : null
+              const hasTxt = !!String(t?.liveOutput || t?.progressHint || '').trim()
+              const toolN = Array.isArray(t?.tools) ? t?.tools.length : 0
+              // eslint-disable-next-line no-console
+              console.debug(
+                `[subtask-tooltip] type=${type} task_id=${tid} collab_subtask_id=${cid} has_text=${hasTxt} tools=${toolN}`,
+              )
+            }
+            if (debugSubtaskFlowEnabled()) {
+              const type = String(evObj.type || '')
+              const tid = String(evObj.task_id || '')
+              const cid = String(evObj.collab_subtask_id || evObj.collabSubtaskId || '')
+              const t = tid ? next[tid] : null
+              const liveOutputText = shortLogText(t?.liveOutput || '')
+              const progressHintText = shortLogText(t?.progressHint || '')
+              const mergedOutputText = liveOutputText || progressHintText || ''
+              // eslint-disable-next-line no-console
+              console.debug(
+                `[subtask-flow][custom][output] type=${type} task_id=${tid} collab_subtask_id=${cid} source=${liveOutputText ? 'liveOutput' : progressHintText ? 'progressHint' : ''} text="${mergedOutputText}"`,
+              )
+            }
             return next
           })
           const collabSid =
@@ -1338,10 +1867,42 @@ export default function ChatApp() {
                 ? evObj.collabSubtaskId.trim()
                 : ''
           const nextStatus = collabStatusFromSubagentStreamEv(evObj)
+          const rawTaskId = String(evObj.task_id || '').trim()
+          const parsed = parseParentAndSubtaskIdFromComposite(rawTaskId)
+          const evType = String(evObj.type || '')
+          const aggTask = rawTaskId ? (S.subagentTasks || {})[rawTaskId] : undefined
+          const customOutputText = String(aggTask?.liveOutput || aggTask?.progressHint || '').trim()
+          const placeholderOutput =
+            evType === 'task_started'
+              ? '（已启动，等待首条输出…）'
+              : evType === 'task_running'
+                ? '运行中…'
+                : ''
+          const patchOutput = customOutputText || placeholderOutput || undefined
+          if (collabSid && parsed?.parentTaskId) {
+            parentTaskToSubtaskRef.current[parsed.parentTaskId] = collabSid
+            if (debugSubtaskFlowEnabled()) {
+              // eslint-disable-next-line no-console
+              console.debug(
+                `[subtask-flow][custom] parent-map task_id=${rawTaskId} parent_task_id=${parsed.parentTaskId} collab_subtask_id=${collabSid}`,
+              )
+            }
+          }
+          if (debugSubtaskFlowEnabled()) {
+            // eslint-disable-next-line no-console
+            console.debug(
+              `[subtask-flow][custom] status-map collab_subtask_id=${collabSid} ev_type=${String(evObj.type || '')} next_status=${nextStatus || ''}`,
+            )
+          }
           if (collabSid && nextStatus) {
             setThreadPanelState((prev) => ({
               ...prev,
-              collabSubtasks: patchCollabSubtasksById(prev.collabSubtasks || [], collabSid, nextStatus),
+              collabSubtasks: patchCollabSubtasksById(
+                prev.collabSubtasks || [],
+                collabSid,
+                nextStatus,
+                patchOutput ? { outputSummary: patchOutput } : undefined,
+              ),
             }))
             setSidebarTaskViews((prev) => {
               let touched = false
@@ -1349,7 +1910,12 @@ export default function ChatApp() {
               for (const k of Object.keys(out)) {
                 const v = out[k]
                 if (!v?.subtasks?.some((s) => s.subtaskId === collabSid)) continue
-                const patched = patchCollabSubtasksById(v.subtasks || [], collabSid, nextStatus)
+                const patched = patchCollabSubtasksById(
+                  v.subtasks || [],
+                  collabSid,
+                  nextStatus,
+                  patchOutput ? { outputSummary: patchOutput } : undefined,
+                )
                 if (patched !== v.subtasks) {
                   out[k] = { ...v, subtasks: patched, updatedAt: Date.now() }
                   touched = true
@@ -1391,6 +1957,7 @@ export default function ChatApp() {
         }
         if (c.tools?.length) {
           const newIds = collectNewToolIds(S.tools, c.tools)
+          appendStreamToolSegments(S, newIds)
           noteNewToolIds(S, newIds)
           for (const t of c.tools) upsertTool(S.tools, t)
           changed = true
@@ -1399,7 +1966,9 @@ export default function ChatApp() {
           if (!S.runId && runId) S.runId = runId
           if (!S.startTs) S.startTs = Date.now()
           scheduleBump()
-          if (c.tools?.length) patchCollabFromStreamTools()
+          if (c.tools?.length) {
+            patchCollabFromStreamTools()
+          }
         }
         return
       }
@@ -1496,7 +2065,8 @@ export default function ChatApp() {
           supervisorSteps: SupervisorStepSnapshot[]
         }
         const collabSnap = built.main
-        upsertSidebarTaskView(collabSnap || null, built.subtasks, built.supervisorSteps)
+        // final 时也不再用工具结果直接覆盖任务进度，统一等后端 task-progress 快照。
+        upsertSidebarTaskView(collabSnap || null, undefined, built.supervisorSteps)
         if (collabSnap?.taskId) {
           openTaskSidebar()
           void tasksAPI
@@ -1535,12 +2105,7 @@ export default function ChatApp() {
             collabSnap?.taskId != null
               ? { ...(prev.collabTask || {}), ...collabSnap }
               : prev.collabTask,
-          collabSubtasks:
-            collabSnap?.taskId && (prev.collabTask?.taskId || '').trim() !== collabSnap.taskId
-              ? built.subtasks
-              : built.subtasks.length
-                ? built.subtasks
-                : prev.collabSubtasks,
+          collabSubtasks: prev.collabSubtasks,
           supervisorSteps:
             collabSnap?.taskId && (prev.collabTask?.taskId || '').trim() !== collabSnap.taskId
               ? built.supervisorSteps
@@ -1548,18 +2113,44 @@ export default function ChatApp() {
                 ? built.supervisorSteps
                 : prev.supervisorSteps,
         }))
-        const skFinal = sessionRef.current
-        if (getSessionCollabModeFromMeta(skFinal)) {
-          const tid = wsClient.getSessionThreadId(skFinal)
-          if (tid) {
-            void wsClient.getTaskProgressSnapshot(tid).then((snap: Record<string, unknown> | null) => {
-              applyTaskProgressSnapshot(snap)
-            })
-          }
-        }
         setIsSending(false)
         scheduleBump()
         void refreshSessions()
+        // 关键：同一会话内主对话先结束、子任务仍在跑时，立即接力 task-stream，
+        // 避免用户看到“主智能体回复后就停了”。
+        {
+          const sk = sessionRef.current
+          const tid = wsClient.getSessionThreadId(sk)
+          if (tid && !resumeInFlightRef.current) {
+            void (async () => {
+              try {
+                const collabSnap = await wsClient.getThreadCollabState(tid)
+                const phaseRaw = collabSnap?.collab_phase
+                const phaseStr = typeof phaseRaw === 'string' ? phaseRaw : String(phaseRaw || 'idle')
+                const busy = phaseStr !== 'idle' && phaseStr !== 'done'
+                if (!busy) return
+                // final 后的接力属于强制兜底，不受“本会话仅一次尝试”限制
+                resumeAttemptedRef.current[String(sk)] = false
+                resumeAttemptedRef.current[String(sk)] = true
+                resumeInFlightRef.current = true
+                setResumeBusy(true)
+                setIsSending(true)
+                await wsClient.taskResume(sk, tid)
+              } catch (e) {
+                // 失败后允许后续再次尝试，避免一次失败永久失去接力能力
+                resumeAttemptedRef.current[String(sk)] = false
+                console.warn('[ChatApp] taskResume after final failed:', e)
+              } finally {
+                resumeInFlightRef.current = false
+                setIsSending(false)
+                setResumeBusy(false)
+                streamRef.current = emptyStream()
+                scheduleBump()
+                void reload()
+              }
+            })()
+          }
+        }
         return
       }
 
@@ -1648,6 +2239,16 @@ export default function ChatApp() {
         .map((x) => x.task),
     [sidebarTaskViews],
   )
+
+  // 刷新/切换后恢复 run 时：末尾落库的“进行中 assistant”会导致流式气泡不再出现（MessageVirtualList 只在 lastRow 是 user 时渲染 _stream）。
+  // 因此 run 忙碌时临时隐藏最后一条 assistant，并用 streamRef 恢复当前文本/工具。
+  const renderRows = useMemo(() => {
+    if (!resumeBusy) return rows
+    if (!Array.isArray(rows) || rows.length === 0) return rows
+    const last = rows[rows.length - 1]
+    if (last?.role === 'assistant') return rows.slice(0, -1)
+    return rows
+  }, [rows, resumeBusy])
   const sidebarActiveTaskId = sidebarSelectedTaskId || sidebarHistory[0]?.taskId || threadPanelState.collabTask?.taskId || null
   const sidebarActiveView = sidebarActiveTaskId ? sidebarTaskViews[sidebarActiveTaskId] : undefined
   const runManagerTaskNames = useMemo(
@@ -1701,6 +2302,8 @@ export default function ChatApp() {
     if (!selectedSessionKey) return
     // 更新活跃时间，防止状态被过期
     lastActivityRef.current[selectedSessionKey] = Date.now()
+    // 新一轮用户输入后，允许该会话再次触发一次“断点续流”（用于中途断线/异常终止的兜底）
+    resumeAttemptedRef.current[String(selectedSessionKey)] = false
 
     setSubagentDockTasks({})
     if (streamRef.current.subagentTasks) streamRef.current.subagentTasks = {}
@@ -1731,8 +2334,32 @@ export default function ChatApp() {
   }
 
   async function handleAbort() {
+    const sessionKey = selectedSessionKey
+    if (!sessionKey) return
+
     const { api } = await import('../lib/tauri-api.js')
-    await api.chatAbort(selectedSessionKey)
+    try {
+      await api.chatAbort(sessionKey)
+    } finally {
+      // 关键：把 collab_phase 置空闲，让后端 `resume-stream` 退出轮询循环
+      // 避免用户点“停止”后刷新/切会话仍继续“接收增量流”。
+      try {
+        const { wsClient } = await import('../lib/ws-client.js')
+        const tid = wsClient.getSessionThreadId(sessionKey)
+        if (tid) {
+          await wsClient.putThreadCollabState(tid, { collab_phase: 'idle' })
+        }
+      } catch {
+        /* ignore */
+      }
+
+      // 前端立刻清理流式缓冲，降低用户看到“仍在接收”的窗口期。
+      streamRef.current = emptyStream()
+      setIsSending(false)
+      setResumeBusy(false)
+      resumeInFlightRef.current = false
+      scheduleBump()
+    }
   }
 
   async function handleNewSession() {
@@ -1874,32 +2501,14 @@ export default function ChatApp() {
           {historyLoading && <div className="react-chat-muted react-chat-loading">加载历史中…</div>}
           <div className="react-chat-messages-wrap chat-messages-wrap">
             <MessageVirtualList
-              rows={rows}
+              rows={renderRows}
               streamRef={streamRef}
               streamTick={streamTick}
               historyLoading={historyLoading}
               layoutKey={hosted.hosted.panelOpen ? 1 : 0}
-              inlineSubagentTasks={subagentDockTasks}
+              inlineSubagentTasks={undefined}
             />
           </div>
-          {streaming || isSending ? (
-            <div className="react-chat-processing-row" aria-live="polite">
-              <div className="react-chat-processing-bar react-chat-processing-bar--thread">
-                <span className="react-chat-processing-cursor" aria-hidden />
-                <span className="react-chat-processing-text">
-                  {(() => {
-                    const d = (threadPanelState.activityDetail || '').trim()
-                    const k = threadPanelState.activityKind
-                    const hideGenericSupervisor =
-                      k === 'tools' &&
-                      (d.startsWith('调用：supervisor') || d.toLowerCase().includes('supervisor'))
-                    if (d && (k === 'tools' || k === 'thinking') && !hideGenericSupervisor) return `正在处理 · ${d}`
-                    return '正在处理中'
-                  })()}
-                </span>
-              </div>
-            </div>
-          ) : null}
           <ThreadPanel state={threadPanelState} />
           <TaskSidebar
             state={threadPanelState}
@@ -1927,7 +2536,26 @@ export default function ChatApp() {
             setDraft={hosted.hosted.setDraft}
             onToggleRun={hosted.hosted.toggleHostedRun}
           />
-          <div className="react-chat-bottom-area">
+          <div className="react-chat-bottom-dock">
+            {streaming || isSending ? (
+              <div className="react-chat-processing-row react-chat-processing-row--dock" aria-live="polite">
+                <div className="react-chat-processing-bar react-chat-processing-bar--thread">
+                  <span className="react-chat-processing-cursor" aria-hidden />
+                  <span className="react-chat-processing-text">
+                    {(() => {
+                      const d = (threadPanelState.activityDetail || '').trim()
+                      const k = threadPanelState.activityKind
+                      const hideGenericSupervisor =
+                        k === 'tools' &&
+                        (d.startsWith('调用：supervisor') || d.toLowerCase().includes('supervisor'))
+                      if (d && (k === 'tools' || k === 'thinking') && !hideGenericSupervisor) return `正在处理 · ${d}`
+                      return '正在处理中'
+                    })()}
+                  </span>
+                </div>
+              </div>
+            ) : null}
+            <div className="react-chat-bottom-area">
             <ChatComposer
               sessionReady={!!selectedSessionKey}
               sending={isSending}
@@ -1945,6 +2573,7 @@ export default function ChatApp() {
                 return (
                   <div className="react-chat-composer-bottom-controls">
                     <div className="react-chat-composer-bottom-row1">
+                      <div className="react-chat-composer-bottom-row1-main">
                       <div className="react-chat-bottom-pill-root" ref={bottomModelRootRef}>
                         <button
                           type="button"
@@ -2227,6 +2856,77 @@ export default function ChatApp() {
                           <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" />
                         </svg>
                       </button>
+                      </div>
+
+                      <div className="react-chat-composer-bottom-row1-workspace">
+                        <div className="react-chat-bottom-pill-root" ref={bottomWorkspaceRootRef}>
+                          <button
+                            type="button"
+                            className={`react-chat-bottom-pill${bottomWorkspaceOpen ? ' react-chat-bottom-pill--open' : ''}`}
+                            title={useVirtualPaths ? '工作空间：虚拟沙箱路径' : (localWorkspaceRoot ? `工作空间：${localWorkspaceRoot}` : '工作空间：未设置')}
+                            onClick={() => setBottomWorkspaceOpen((v) => !v)}
+                          >
+                            <svg
+                              className="react-chat-bottom-pill-icon"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="2"
+                            >
+                              <path d="M3 7h18" />
+                              <path d="M6 3h12l2 4v14H4V7l2-4z" />
+                            </svg>
+                            <span className="react-chat-bottom-pill-text">
+                              工作空间: {useVirtualPaths ? '虚拟' : (localWorkspaceRoot ? _pathBasename(localWorkspaceRoot) : '本机')}
+                            </span>
+                            <span className="react-chat-bottom-pill-caret">▾</span>
+                          </button>
+                          {bottomWorkspaceOpen ? (
+                            <div className="react-chat-bottom-dropdown" role="menu">
+                              <button
+                                type="button"
+                                role="menuitem"
+                                className="react-chat-bottom-dropdown-item"
+                                onClick={async () => {
+                                  setBottomWorkspaceOpen(false)
+                                  await openWorkspaceFolderPicker()
+                                }}
+                              >
+                                设置本机工作目录
+                              </button>
+                              {(workspaceHistory || []).length ? (
+                                <>
+                                  <div
+                                    className="react-chat-bottom-dropdown-item"
+                                    style={{ opacity: 0.75, cursor: 'default' }}
+                                    role="presentation"
+                                  >
+                                    历史工作空间
+                                  </div>
+                                  <div style={{ maxHeight: 260, overflowY: 'auto' }}>
+                                    {(workspaceHistory || []).map((p) => (
+                                      <button
+                                        key={p}
+                                        type="button"
+                                        role="menuitem"
+                                        className={`react-chat-bottom-dropdown-item${localWorkspaceRoot === p && !useVirtualPaths ? ' react-chat-bottom-dropdown-item--active' : ''}`}
+                                        disabled={useVirtualPaths}
+                                        title={p}
+                                        onClick={async () => {
+                                          setBottomWorkspaceOpen(false)
+                                          await applyLocalWorkspaceRoot(p)
+                                        }}
+                                      >
+                                        {_pathBasename(p)}
+                                      </button>
+                                    ))}
+                                  </div>
+                                </>
+                              ) : null}
+                            </div>
+                          ) : null}
+                        </div>
+                      </div>
                     </div>
 
                     {/* creative dropdown 常驻在 row1，避免占用 row2 */}
@@ -2234,6 +2934,7 @@ export default function ChatApp() {
                 )
               }}
             />
+            </div>
           </div>
         </div>
       </div>

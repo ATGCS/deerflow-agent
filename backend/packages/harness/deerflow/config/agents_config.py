@@ -23,10 +23,11 @@ class AgentConfig(BaseModel):
         description: What the agent does.
         model: Model to use (optional).
         tool_groups: Optional tool group whitelist.
+        tools: Optional tool whitelist (builtin tool names).
+        mcp_servers: Optional MCP server names.
+        skills: Optional skill names (injected via skills prompt section).
         agent_type: Type of agent - 'custom', 'subagent', or 'acp'.
         system_prompt: For subagents - the system prompt.
-        tools: For subagents - optional tool whitelist.
-        skills: For subagents - optional skill names (injected via skills prompt section).
         disallowed_tools: For subagents - optional tool blacklist.
         max_turns: For subagents - maximum number of turns.
         timeout_seconds: For subagents/ACP - timeout in seconds.
@@ -41,13 +42,16 @@ class AgentConfig(BaseModel):
     model: str | None = None
     tool_groups: list[str] | None = None
     
+    # Tool / MCP / Skills configuration
+    tools: list[str] | None = None
+    mcp_servers: list[str] | None = None
+    skills: list[str] | None = None
+    
     # Agent type discriminator
     agent_type: Literal["custom", "subagent", "acp"] = "custom"
     
     # Subagent-specific fields
     system_prompt: str | None = None
-    tools: list[str] | None = None
-    skills: list[str] | None = None
     disallowed_tools: list[str] | None = None
     max_turns: int = 50
     timeout_seconds: int = 900
@@ -129,6 +133,7 @@ def list_custom_agents() -> list[AgentConfig]:
 
     Returns:
         List of AgentConfig for each valid agent directory found.
+        Includes both 'custom' and 'subagent' types (excludes 'acp').
     """
     agents_dir = get_paths().agents_dir
 
@@ -148,8 +153,11 @@ def list_custom_agents() -> list[AgentConfig]:
 
         try:
             agent_cfg = load_agent_config(entry.name)
-            # Only return custom agents (not subagents or ACP agents)
-            if agent_cfg.agent_type == "custom":
+            # Skip 'main' — handled separately by list_agents()
+            if entry.name.lower() == "main":
+                continue
+            # Return custom and subagent agents (exclude ACP agents from this list)
+            if agent_cfg.agent_type in ("custom", "subagent"):
                 agents.append(agent_cfg)
         except Exception as e:
             logger.warning(f"Skipping agent '{entry.name}': {e}")

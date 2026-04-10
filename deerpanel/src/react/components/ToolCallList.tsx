@@ -71,7 +71,6 @@ export function ToolCallList({
           <details
             key={key}
             className={`msg-tool-item${running ? ' msg-tool-item--running' : ''} msg-tool-item--${toolKind}`}
-            open={running}
           >
             <summary title={titleText}>
               <span className="msg-tool-icon" aria-hidden="true">

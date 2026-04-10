@@ -4,8 +4,10 @@ import logging
 from dataclasses import replace
 
 from deerflow.config.agents_config import list_subagents as list_file_subagents
+from deerflow.config.subagents_config import get_subagents_app_config
 from deerflow.sandbox.security import is_host_bash_allowed
 from deerflow.subagents.config import SubagentConfig
+from deerflow.subagents.builtins import BUILTIN_SUBAGENTS
 
 logger = logging.getLogger(__name__)
 
@@ -47,25 +49,37 @@ def get_subagent_config(name: str) -> SubagentConfig | None:
     Returns:
         SubagentConfig if found (with any config.yaml overrides applied), None otherwise.
     """
-    # Load all subagents from filesystem
+    # 1) Prefer filesystem subagent overrides if present
     file_subagents = list_file_subagents()
-    
-    # Find the requested subagent
     for agent_cfg in file_subagents:
-        if agent_cfg.name == name:
-            subagent_cfg = _agent_config_to_subagent_config(agent_cfg)
-            if subagent_cfg:
-                # Apply timeout override from config.yaml (lazy import to avoid circular deps)
-                from deerflow.config.subagents_config import get_subagents_app_config
+        if agent_cfg.name != name:
+            continue
+        subagent_cfg = _agent_config_to_subagent_config(agent_cfg)
+        if not subagent_cfg:
+            return None
 
-                app_config = get_subagents_app_config()
-                effective_timeout = app_config.get_timeout_for(name)
-                if effective_timeout != subagent_cfg.timeout_seconds:
-                    logger.debug(f"Subagent '{name}': timeout overridden by config.yaml ({subagent_cfg.timeout_seconds}s -> {effective_timeout}s)")
-                    from dataclasses import replace
-                    subagent_cfg = replace(subagent_cfg, timeout_seconds=effective_timeout)
-                return subagent_cfg
-    
+        # Apply timeout override from config.yaml
+        app_config = get_subagents_app_config()
+        effective_timeout = app_config.get_timeout_for(name)
+        if effective_timeout != subagent_cfg.timeout_seconds:
+            logger.debug(
+                "Subagent '%s': timeout overridden by config.yaml (%ss -> %ss)",
+                name,
+                subagent_cfg.timeout_seconds,
+                effective_timeout,
+            )
+            subagent_cfg = replace(subagent_cfg, timeout_seconds=effective_timeout)
+        return subagent_cfg
+
+    # 2) Fallback to built-in subagents (so registry works even without filesystem configs)
+    if name in BUILTIN_SUBAGENTS:
+        cfg = BUILTIN_SUBAGENTS[name]
+        app_config = get_subagents_app_config()
+        effective_timeout = app_config.get_timeout_for(name)
+        if effective_timeout != cfg.timeout_seconds:
+            cfg = replace(cfg, timeout_seconds=effective_timeout)
+        return cfg
+
     return None
 
 
@@ -76,12 +90,28 @@ def list_subagents() -> list[SubagentConfig]:
         List of all registered SubagentConfig instances.
     """
     file_subagents = list_file_subagents()
-    result = []
+    by_name: dict[str, SubagentConfig] = {}
+
+    # 1) filesystem configs
     for agent_cfg in file_subagents:
         subagent_cfg = _agent_config_to_subagent_config(agent_cfg)
         if subagent_cfg:
-            result.append(subagent_cfg)
-    return result
+            by_name[subagent_cfg.name] = subagent_cfg
+
+    # 2) built-ins (only when not overridden)
+    for name, cfg in BUILTIN_SUBAGENTS.items():
+        by_name.setdefault(name, cfg)
+
+    # 3) apply timeout overrides
+    app_config = get_subagents_app_config()
+    out: list[SubagentConfig] = []
+    for name, cfg in by_name.items():
+        effective_timeout = app_config.get_timeout_for(name)
+        if effective_timeout != cfg.timeout_seconds:
+            cfg = replace(cfg, timeout_seconds=effective_timeout)
+        out.append(cfg)
+
+    return out
 
 
 def get_subagent_names() -> list[str]:

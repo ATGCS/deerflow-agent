@@ -78,6 +78,34 @@ export function showModal({ title, fields, onConfirm }) {
           ${f.hint ? `<div class="form-hint">${f.hint}</div>` : ''}
         </div>`
     }
+    if (f.type === 'checkbox-list') {
+      // 多选列表：用于工具/MCP/技能选择
+      const selectedValues = Array.isArray(f.value) ? f.value : []
+      const optionsHtml = f.options.map(o => {
+        const checked = selectedValues.includes(o.value) ? 'checked' : ''
+        return `
+          <label style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:4px;cursor:pointer;transition:background 0.2s" onmouseover="this.style.background='var(--bg-tertiary)'" onmouseout="this.style.background='transparent'">
+            <input type="checkbox" data-name="${f.name}" value="${escapeAttr(o.value)}" ${checked}>
+            <span style="font-size:var(--font-size-sm)">${o.icon || ''} ${o.label}</span>
+          </label>`
+      }).join('')
+      return `
+        <div class="form-group">
+          <label class="form-label">${f.label}</label>
+          <div data-checkbox-list="${f.name}" style="max-height:200px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:8px;background:var(--bg-secondary)">
+            ${optionsHtml}
+          </div>
+          ${f.hint ? `<div class="form-hint">${f.hint}</div>` : ''}
+        </div>`
+    }
+    if (f.type === 'textarea') {
+      return `
+        <div class="form-group">
+          <label class="form-label">${f.label}</label>
+          <textarea class="form-input" data-name="${f.name}" placeholder="${escapeAttr(f.placeholder)}" rows="${f.rows || 4}"${f.readonly ? ' readonly style="opacity:0.6;cursor:not-allowed;resize:vertical"' : ' style="resize:vertical"'}>${escapeAttr(f.value)}</textarea>
+          ${f.hint ? `<div class="form-hint">${f.hint}</div>` : ''}
+        </div>`
+    }
     return `
       <div class="form-group">
         <label class="form-label">${f.label}</label>
@@ -108,11 +136,33 @@ export function showModal({ title, fields, onConfirm }) {
 
   overlay.querySelector('[data-action="confirm"]').onclick = () => {
     const result = {}
+    // 处理普通字段
     overlay.querySelectorAll('[data-name]').forEach(el => {
       if (el.type === 'checkbox') {
-        result[el.dataset.name] = el.checked
+        // 检查是否在 checkbox-list 中
+        const listContainer = el.closest('[data-checkbox-list]')
+        if (listContainer) {
+          // 多选列表：收集所有选中的值
+          const listName = listContainer.dataset.checkboxList
+          if (!result[listName]) {
+            result[listName] = []
+          }
+          if (el.checked) {
+            result[listName].push(el.value)
+          }
+        } else {
+          // 普通复选框
+          result[el.dataset.name] = el.checked
+        }
       } else {
         result[el.dataset.name] = el.value
+      }
+    })
+    // 确保 checkbox-list 即使没有选中项也有空数组
+    overlay.querySelectorAll('[data-checkbox-list]').forEach(container => {
+      const name = container.dataset.checkboxList
+      if (!(name in result)) {
+        result[name] = []
       }
     })
     // 先调用回调，再移除 overlay，避免嵌套对话框时序问题

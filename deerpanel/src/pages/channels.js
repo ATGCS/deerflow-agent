@@ -1,9 +1,5 @@
-/**
- * 消息渠道管理页面 - 管理 DeerFlaw 多渠道（飞书、Slack、Telegram 等）
- */
 import { api } from '../lib/tauri-api.js'
 import { toast } from '../components/toast.js'
-import { showModal } from '../components/modal.js'
 
 function esc(str) {
   if (!str) return ''
@@ -15,15 +11,8 @@ let _loadSeq = 0
 function channelsShellHtml(settingsModal) {
   if (settingsModal) {
     return `
-      <div class="settings-modal-pane-toolbar settings-modal-pane-toolbar--channels">
-        <div class="channels-toolbar-meta">
-          <span class="channels-toolbar-title">渠道状态</span>
-          <span class="channels-toolbar-hint">飞书 / Slack / Telegram 等</span>
-        </div>
-        <button type="button" class="btn btn-sm btn-secondary" id="btn-reload">刷新</button>
-      </div>
       <div class="settings-modal-pane-body settings-modal-pane-body--channels">
-        <div id="channels-loading" class="settings-modal-pane-loading" role="status"><span>加载渠道状态…</span></div>
+        <div id="channels-loading" class="settings-modal-pane-loading" role="status"><span>loading...</span></div>
         <div id="channels-content" class="settings-modal-pane-fill channels-page-inner" hidden></div>
         <div id="channels-error" class="settings-modal-pane-fill settings-modal-pane-error" hidden></div>
       </div>
@@ -32,15 +21,15 @@ function channelsShellHtml(settingsModal) {
   return `
     <div class="page-header">
       <div>
-        <h1 class="page-title">消息渠道</h1>
-        <p class="page-desc">管理 DeerFlaw 多渠道接入（飞书、Slack、Telegram 等）</p>
+        <h1 class="page-title">IM Channels</h1>
+        <p class="page-desc">Manage DeerFlaw multi-channel (Feishu, Slack, Telegram, etc)</p>
       </div>
       <div class="page-actions">
-        <button type="button" class="btn btn-secondary btn-sm" id="btn-reload">刷新</button>
+        <button type="button" class="btn btn-secondary btn-sm" id="btn-reload">Reload</button>
       </div>
     </div>
     <div class="page-content channels-page">
-      <div id="channels-loading" class="channels-phase-loading" role="status">加载渠道状态…</div>
+      <div id="channels-loading" class="channels-phase-loading" role="status">loading...</div>
       <div id="channels-content" class="channels-page-inner" style="display:none"></div>
       <div id="channels-error" class="channels-phase-error" style="display:none"></div>
     </div>
@@ -53,19 +42,9 @@ function setChannelsPhase(page, phase) {
   const errorEl = page.querySelector('#channels-error')
   const modal = !!page.querySelector('.settings-modal-pane-body--channels')
   if (modal) {
-    if (phase === 'loading') {
-      loadingEl?.removeAttribute('hidden')
-      contentEl?.setAttribute('hidden', '')
-      errorEl?.setAttribute('hidden', '')
-    } else if (phase === 'content') {
-      loadingEl?.setAttribute('hidden', '')
-      contentEl?.removeAttribute('hidden')
-      errorEl?.setAttribute('hidden', '')
-    } else if (phase === 'error') {
-      loadingEl?.setAttribute('hidden', '')
-      contentEl?.setAttribute('hidden', '')
-      errorEl?.removeAttribute('hidden')
-    }
+    if (phase === 'loading') { loadingEl?.removeAttribute('hidden'); contentEl?.setAttribute('hidden', ''); errorEl?.setAttribute('hidden', '') }
+    else if (phase === 'content') { loadingEl?.setAttribute('hidden', ''); contentEl?.removeAttribute('hidden'); errorEl?.setAttribute('hidden', '') }
+    else if (phase === 'error') { loadingEl?.setAttribute('hidden', ''); contentEl?.setAttribute('hidden', ''); errorEl?.removeAttribute('hidden') }
     return
   }
   if (loadingEl) loadingEl.style.display = phase === 'loading' ? 'block' : 'none'
@@ -73,9 +52,6 @@ function setChannelsPhase(page, phase) {
   if (errorEl) errorEl.style.display = phase === 'error' ? 'block' : 'none'
 }
 
-/**
- * @param {boolean} settingsModal
- */
 export function createChannelsRoot(settingsModal) {
   const root = document.createElement('div')
   root.className = settingsModal ? 'settings-modal-pane settings-modal-pane--channels' : 'page channels-page'
@@ -90,7 +66,6 @@ export async function render() {
   return page
 }
 
-/** 设置弹窗：固定高度内容区 + 覆盖式加载，避免切换 Tab 时布局塌缩 */
 export function mountChannelsForSettingsModal(container) {
   const root = createChannelsRoot(true)
   container.replaceChildren(root)
@@ -100,214 +75,255 @@ export function mountChannelsForSettingsModal(container) {
 
 async function loadChannels(page) {
   const errorEl = page.querySelector('#channels-error')
-
   setChannelsPhase(page, 'loading')
-
   const seq = ++_loadSeq
-
   try {
     const data = await api.getChannelsStatus()
     if (seq !== _loadSeq) return
-
     setChannelsPhase(page, 'content')
     renderChannels(page, data)
   } catch (e) {
     if (seq !== _loadSeq) return
     setChannelsPhase(page, 'error')
-    if (errorEl) errorEl.textContent = '加载失败: ' + e
-    toast('加载渠道状态失败: ' + e, 'error')
+    if (errorEl) errorEl.textContent = 'Failed to load: ' + e
+    toast('Failed: ' + e, 'error')
   }
+}
+
+const CHANNEL_ICONS = {
+  feishu: '<img src="/assets/feishu-logo.png" width="20" height="20" alt="Feishu" style="border-radius:4px">',
+  dingtalk: '<svg viewBox="0 0 24 24" width="20" height="20" fill="#0083FF"><path d="M10.64 2.68a1.33 1.33 0 0 1 1.72 0l6.87 5.84c.53.45.59 1.24.14 1.77L16.07 13H19a1 1 0 0 1 .89.55l2 4A1 1 0 0 1 21 19h-5.62l-3.38 2.86a1.33 1.33 0 0 1-1.72 0L3.41 16.02a1.33 1.33 0 0 1-.14-1.77L7.93 9H5a1 1 0 0 1-.89-.55l-2-4A1 1 0 0 1 3 3h5.62l3.38-2.86z"/></svg>',
+  slack: '<svg role="img" viewBox="0 0 24 24" width="20" height="20" xmlns="http://www.w3.org/2000/svg"><title>Slack</title><path d="M5.042 15.165a2.528 2.528 0 0 1-2.52 2.523A2.528 2.528 0 0 1 0 15.165a2.527 2.527 0 0 1 2.522-2.52h2.52v2.52zM6.313 15.165a2.527 2.527 0 0 1 2.521-2.52 2.527 2.527 0 0 1 2.521 2.52v6.313A2.528 2.528 0 0 1 8.834 24a2.528 2.528 0 0 1-2.521-2.522v-6.313zM8.834 5.042a2.528 2.528 0 0 1-2.521-2.52A2.528 2.528 0 0 1 8.834 0a2.528 2.528 0 0 1 2.521 2.522v2.52H8.834zM8.834 6.313a2.528 2.528 0 0 1 2.521 2.523 2.528 2.528 0 0 1-2.521 2.521H2.522A2.528 2.528 0 0 1 0 8.836a2.528 2.528 0 0 1 2.522-2.523h6.312zM18.956 8.834a2.528 2.528 0 0 1 2.522-2.521A2.528 2.528 0 0 1 24 8.834a2.528 2.528 0 0 1-2.522 2.521h-2.522V8.834zM17.688 8.834a2.528 2.528 0 0 1-2.522 2.521 2.528 2.528 0 0 1-2.522-2.521V2.522A2.528 2.528 0 0 1 15.166 0a2.528 2.528 0 0 1 2.522 2.522v6.312zM15.166 18.956a2.528 2.528 0 0 1 2.522 2.522A2.528 2.528 0 0 1 15.166 24a2.528 2.528 0 0 1-2.522-2.522v-2.522h2.522zM15.166 17.688a2.528 2.528 0 0 1-2.522-2.522 2.528 2.528 0 0 1 2.522-2.522h6.312A2.528 2.528 0 0 1 24 15.166a2.528 2.528 0 0 1-2.522 2.522h-6.312z"/></svg>',
+  telegram: '<svg role="img" viewBox="0 0 24 24" width="20" height="20" xmlns="http://www.w3.org/2000/svg"><title>Telegram</title><path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z"/></svg>',
+}
+
+const CHANNEL_LABELS = {
+  feishu: '\u98de\u4e66',
+  dingtalk: '\u9489\u9489',
+  slack: 'Slack',
+  telegram: 'Telegram',
+  wecom: '\u4f01\u4e1a\u5fae\u4fe1',
+  qq: 'QQ',
+  yunxin: '\u4fe1\u606f',
+  xiaomifeng: '\u5c0f\u8702\u8702',
+  wechat: '\u5fae\u4fe1',
+}
+
+const CHANNEL_TIPS = {
+  feishu: '<ol><li>\u524d\u5f80 <a href="https://open.feishu.cn/" target="_blank" rel="noopener">\u98de\u4e66\u5f00\u653e\u5e73\u53f0</a> \u521b\u5efa\u673a\u5668\u4eba\u5e94\u7528</li><li>\u83b7\u53d6 App ID \u548c App Secret</li><li>\u5f00\u542f\u673a\u5668\u4eba\u80fd\u529b\uff0c\u586b\u5199\u4e0b\u65b9\u914d\u7f6e</li><li>\u5f00\u542f\u5de6\u4fa7\u5f00\u5173\uff0c\u673a\u5668\u4eba\u5c06\u901a\u8fc7 Stream \u6a21\u5f0f\u8fde\u63a5</li></ol><a href="https://open.feishu.cn/document/home/introduction-to-custom-bot-development/bot-info-obtain-client-credentials" target="_blank" rel="noopener" class="im-setup-link">\u67e5\u770b\u6587\u6863</a>',
+  dingtalk: '<ol><li>\u524d\u5f80 <a href="https://open-dev.dingtalk.com/" target="_blank" rel="noopener">\u9489\u9489\u5f00\u653e\u5e73\u53f0</a> \u521b\u5efa\u673a\u5668\u4eba\u5e94\u7528</li><li>\u83b7\u53d6 Client ID \u548c Client Secret</li><li>\u5f00\u542f\u673a\u5668\u4eba\u80fd\u529b\uff0c\u586b\u5199\u4e0b\u65b9\u914d\u7f6e</li><li>\u5f00\u542f\u5de6\u4fa7\u5f00\u5173\uff0c\u673a\u5668\u4eba\u5c06\u81ea\u52a8\u8fde\u63a5</li></ol><a href="https://open.dingtalk.com/document/orgapp/custom-robot-access" target="_blank" rel="noopener" class="im-setup-link">\u67e5\u770b\u6587\u6863</a>',
+  default: '<ol><li>\u5728\u5bf9\u5e94\u5e73\u53f0\u521b\u5efa\u673a\u5668\u4eba\u5e94\u7528\u5e76\u83b7\u53d6\u51ed\u8bc1</li><li>\u586b\u5199\u4e0b\u65b9 Client ID \u548c Client Secret</li><li>\u5f00\u542f\u5de6\u4fa7\u5f00\u5173\u5373\u53ef\u5efa\u7acb\u8fde\u63a5</li></ol>',
 }
 
 function renderChannels(page, data) {
   const contentEl = page.querySelector('#channels-content')
-  const serviceRunning = data?.service_running || false
   const channels = data?.channels || {}
-
   const channelList = Object.entries(channels)
-  const runningCount = channelList.filter(([, c]) => c.running).length
-  const enabledCount = channelList.filter(([, c]) => c.enabled).length
-
-  const svcClass = serviceRunning ? 'is-up' : 'is-down'
-  let html = `
-    <section class="channels-summary" aria-label="渠道服务概览">
-      <div class="channels-summary-main">
-        <span class="channels-summary-label">渠道服务</span>
-        <span class="channels-summary-service ${svcClass}">
-          <span class="channels-status-dot" aria-hidden="true"></span>
-          ${serviceRunning ? '运行中' : '未运行'}
-        </span>
-      </div>
-      <p class="channels-summary-meta">
-        共 <strong>${channelList.length}</strong> 个渠道 ·
-        <span class="channels-stat-on">${enabledCount} 已启用</span>
-        ·
-        <span class="channels-stat-run">${runningCount} 进程运行中</span>
-      </p>
-    </section>
-  `
 
   if (!channelList.length) {
-    html += `
-      <div class="channels-empty">
-        <p class="channels-empty-title">暂无渠道</p>
-        <p class="channels-empty-desc">请在配置文件的 <code>channels</code> 段添加渠道后刷新本页。</p>
-      </div>
-    `
-    contentEl.innerHTML = html
+    contentEl.innerHTML = `<div class="channels-empty"><p class="channels-empty-title">No channels</p><p class="channels-empty-desc">Add channels in config.</p></div>`
     return
   }
 
-  html += `<div class="channels-grid" role="list">`
+  const firstChannel = channelList[0][0]
 
-  const channelIcons = {
-    feishu: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M8 12h8M12 8v8"/></svg>',
-    slack: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><path d="M14.5 10c-.83 0-1.5-.67-1.5-1.5v-5c0-.83.67-1.5 1.5-1.5s1.5.67 1.5 1.5v5c0 .83-.67 1.5-1.5 1.5z"/><path d="M20.5 10H19V8.5c0-.83.67-1.5 1.5-1.5s1.5.67 1.5 1.5-.67 1.5-1.5 1.5z"/><path d="M9.5 14c.83 0 1.5.67 1.5 1.5v5c0 .83-.67 1.5-1.5 1.5S8 21.33 8 20.5v-5c0-.83.67-1.5 1.5-1.5z"/><path d="M3.5 14H5v1.5c0 .83-.67 1.5-1.5 1.5S2 16.33 2 15.5 2.67 14 3.5 14z"/><path d="M14 14.5c0-.83.67-1.5 1.5-1.5h5c.83 0 1.5.67 1.5 1.5s-.67 1.5-1.5 1.5h-5c-.83 0-1.5-.67-1.5-1.5z"/><path d="M15.5 19H14v1.5c0 .83.67 1.5 1.5 1.5s1.5-.67 1.5-1.5-.67-1.5-1.5-1.5z"/><path d="M10 9.5C10 8.67 9.33 8 8.5 8h-5C2.67 8 2 8.67 2 9.5S2.67 11 3.5 11h5c.83 0 1.5-.67 1.5-1.5z"/><path d="M8.5 5H10V3.5C10 2.67 9.33 2 8.5 2S7 2.67 7 3.5 7.67 5 8.5 5z"/></svg>',
-    telegram: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><path d="M22 2L11 13"/><path d="M22 2L15 22l-4-9-9-4 20-7z"/></svg>',
-  }
-
-  const channelLabels = {
-    feishu: '飞书',
-    slack: 'Slack',
-    telegram: 'Telegram',
-  }
+  let html = '<div class="im-split-layout">'
+  // Sidebar
+  html += '<aside class="im-sidebar"><nav class="im-channel-list" id="im-channel-list">'
 
   for (const [name, status] of channelList) {
-    const label = channelLabels[name] || name
-    const icon = channelIcons[name] || '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><path d="M12 2a10 10 0 100 20 10 10 0 000-20z"/><path d="M12 6v6l4 2"/></svg>'
+    const label = CHANNEL_LABELS[name] || name
+    const icon = CHANNEL_ICONS[name] || ''
     const enabled = status.enabled
     const running = status.running
+    const isSelected = name === firstChannel
 
-    const runClass = running ? 'channels-runtime--on' : 'channels-runtime--off'
-    html += `
-      <article class="channels-card" role="listitem">
-        <div class="channels-card-head">
-          <div class="channels-card-brand">
-            <div class="channels-card-icon" aria-hidden="true">${icon}</div>
-            <div class="channels-card-titles">
-              <div class="channels-card-name">${esc(label)}</div>
-              <div class="channels-card-id"><code>${esc(name)}</code></div>
-            </div>
-          </div>
-          <label class="channels-enable">
-            <input type="checkbox" class="channel-toggle channels-enable-input" data-channel="${esc(name)}" ${enabled ? 'checked' : ''}>
-            <span class="channels-enable-track" aria-hidden="true"></span>
-            <span class="channels-toggle-label ${enabled ? 'is-on' : ''}">${enabled ? '已启用' : '已禁用'}</span>
-          </label>
-        </div>
-        <div class="channels-card-foot">
-          <span class="channels-runtime ${runClass}">
-            <span class="channels-status-dot" aria-hidden="true"></span>
-            ${running ? '运行中' : '已停止'}
-          </span>
-          <div class="channels-card-btns">
-            <button type="button" class="btn btn-sm btn-secondary" data-action="restart" data-channel="${esc(name)}" ${!running ? '' : 'disabled'}>重启</button>
-            <button type="button" class="btn btn-sm btn-secondary" data-action="config" data-channel="${esc(name)}">配置</button>
-          </div>
-        </div>
-      </article>
-    `
+    html += '<div class="im-channel-item' + (isSelected ? ' im-channel-item--active' : '') + '" data-channel="' + esc(name) + '">'
+    html += '<div class="im-item-left"><span class="im-item-icon">' + icon + '</span>'
+    html += '<span class="im-item-name">' + esc(label) + '</span></div>'
+    html += '<label class="im-toggle"><input type="checkbox" class="channel-toggle im-toggle-input" data-channel="' + esc(name) + '"' + (enabled ? ' checked' : '') + '>'
+    html += '<span class="im-toggle-track" aria-hidden="true"></span></label>'
+    if (running) html += '<span class="im-item-status im-item-status--on" title="Running"></span>'
+    html += '</div>'
   }
 
-  html += '</div>'
-  contentEl.innerHTML = html
+  html += '</nav></aside>'
 
-  // 绑定启用/禁用事件
+  // Main panel
+  const selName = firstChannel
+  const selLabel = CHANNEL_LABELS[selName] || selName
+  const selIcon = CHANNEL_ICONS[selName] || ''
+  const selStatus = channelList.find(([n]) => n === selName)?.[1]
+  const selRunning = selStatus?.running || false
+
+  html += '<main class="im-main" id="im-main-panel">'
+  // Title bar
+  html += '<div class="im-title-bar">'
+  html += '<span class="im-title-icon">' + selIcon + '</span>'
+  html += '<strong>' + esc(selLabel) + '\u8bbe\u7f6e</strong>'
+  html += '<span class="im-title-status' + (selRunning ? '' : ' im-title-status--off') + '">' + (selRunning ? '\u5df2\u8fde\u63a5' : '\u672a\u8fde\u63a5') + '</span>'
+  html += '</div>'
+
+  // Tips
+  const tips = CHANNEL_TIPS[selName] || CHANNEL_TIPS.default
+  html += '<div class="im-tips">' + tips + '</div>'
+
+  // Form
+  html += '<form class="im-form" id="im-config-form" data-channel="' + esc(selName) + '">'
+  html += '<div class="im-field-group"><label class="im-label" for="im-app-id">App ID</label>'
+  html += '<input class="im-input" id="im-app-id" name="app_id" type="text" placeholder="cli_xxxxxxxx"></div>'
+  html += '<div class="im-field-group"><label class="im-label" for="im-app-secret">App Secret</label>'
+  html += '<div class="im-secret-wrap"><input class="im-input" id="im-app-secret" name="app_secret" type="password">'
+  html += '<button type="button" class="im-eye-btn" aria-label="toggle visibility">\uD83D\uDC41\uFE0F</button></div></div>'
+  html += '<details class="im-advanced"><summary>\u9ad8\u7ea7\u8bbe\u7f6e</summary>'
+  html += '<div class="im-advanced-body">'
+  html += '<button type="button" class="btn btn-sm btn-outline" id="im-test-btn"><span class="im-signal-icon">\uD83D\uDCE1</span> \u6d4b\u8bd5\u8fde\u901a\u6027</button>'
+  html += '</div></details>'
+  html += '</form></main></div>'
+
+  contentEl.innerHTML = html
+  loadChannelConfig(selName)
+
+  // Channel selection
+  contentEl.querySelectorAll('.im-channel-item').forEach(item => {
+    item.addEventListener('click', (e) => {
+      if (e.target.closest('.im-toggle')) return
+      contentEl.querySelectorAll('.im-channel-item').forEach(i => i.classList.remove('im-channel-item--active'))
+      item.classList.add('im-channel-item--active')
+      const ch = item.dataset.channel
+      updateRightPanel(ch, CHANNEL_LABELS[ch], CHANNEL_ICONS[ch] || '', channelList.find(([n]) => n === ch)?.[1])
+      loadChannelConfig(ch)
+    })
+  })
+
+  // Toggle enable/disable
   contentEl.querySelectorAll('.channel-toggle').forEach(checkbox => {
     checkbox.onchange = async () => {
       const name = checkbox.dataset.channel
       const enabled = checkbox.checked
-      const label = checkbox.closest('.channels-enable')?.querySelector('.channels-toggle-label')
-
       try {
         const result = await api.enableChannel(name, enabled)
         if (result.success) {
-          toast(`渠道 ${name} 已${enabled ? '启用' : '禁用'}`, 'success')
-          if (label) {
-            label.textContent = enabled ? '已启用' : '已禁用'
-            label.classList.toggle('is-on', enabled)
-          }
+          toast('Channel ' + name + (enabled ? ' enabled' : ' disabled'), 'success')
           loadChannels(page)
         } else {
-          toast(result.message || '操作失败', 'error')
+          toast(result.message || 'Failed', 'error')
           checkbox.checked = !enabled
         }
       } catch (e) {
-        toast('操作失败: ' + e, 'error')
+        toast('Error: ' + e, 'error')
         checkbox.checked = !enabled
       }
     }
   })
 
-  // 绑定重启事件
-  contentEl.querySelectorAll('[data-action="restart"]').forEach(btn => {
-    btn.onclick = async () => {
-      const name = btn.dataset.channel
-      btn.disabled = true
-      btn.textContent = '重启中...'
+  // Eye toggle
+  const eyeBtn = contentEl.querySelector('#im-app-secret')?.parentElement?.querySelector('.im-eye-btn')
+  if (eyeBtn) {
+    eyeBtn.onclick = () => {
+      const input = contentEl.querySelector('#im-app-secret')
+      input.type = input.type === 'password' ? 'text' : 'password'
+    }
+  }
 
+  // Auto-save on input blur
+  const configForm = contentEl.querySelector('#im-config-form')
+  let _saveTimer = null
+  async function autoSave() {
+    const ch = configForm.dataset.channel
+    const appId = configForm.querySelector('[name="app_id"]').value.trim()
+    const secret = configForm.querySelector('[name="app_secret"]').value.trim()
+    const newConfig = {}
+    if (appId) newConfig.app_id = appId
+    if (secret) newConfig.app_secret = secret
+    try {
+      const result = await api.updateChannelConfig(ch, newConfig)
+      if (result.success) {
+        toast('\u5df2\u4fdd\u5b58', 'success')
+      } else {
+        toast(result.message || '\u4fdd\u5b58\u5931\u8d25', 'error')
+      }
+    } catch (ex) {
+      toast('\u4fdd\u5b58\u9519\u8bef: ' + ex, 'error')
+    }
+  }
+  configForm.querySelectorAll('.im-input').forEach(input => {
+    input.addEventListener('blur', () => { if (_saveTimer) clearTimeout(_saveTimer); _saveTimer = setTimeout(autoSave, 300) })
+  })
+
+  // Test connectivity
+  const testBtn = contentEl.querySelector('#im-test-btn')
+  if (testBtn) {
+    testBtn.addEventListener('click', async () => {
+      const ch = configForm.dataset.channel
+      const appId = configForm.querySelector('[name="app_id"]').value.trim()
+      const secret = configForm.querySelector('[name="app_secret"]').value.trim()
+      if (!appId || !secret) {
+        toast('\u8bf7\u5148\u586b\u5199 App ID \u548c App Secret', 'warning')
+        return
+      }
+      testBtn.disabled = true
+      const origText = testBtn.innerHTML
+      testBtn.innerHTML = '<span class="im-signal-icon">\uD83D\uDCE1</span> \u6d4b\u8bd5\u4e2d...'
       try {
-        const result = await api.restartChannel(name)
+        await api.updateChannelConfig(ch, { app_id: appId, app_secret: secret })
+        toast('\u914d\u7f6e\u5df2\u66f4\u65b0\uff0c\u6b63\u5728\u5c1d\u8bd5\u8fde\u63a5...', 'info')
+        const result = await api.restartChannel(ch)
         if (result.success) {
-          toast(`渠道 ${name} 重启成功`, 'success')
+          toast('\u2705 ' + (result.message || '\u8fde\u901a\u6210\u529f'), 'success')
+          setTimeout(() => loadChannels(page), 1000)
         } else {
-          toast(result.message || '重启失败', 'error')
+          toast('\u274C ' + (result.message || '\u8fde\u63a5\u5931\u8d25\uff0c\u8bf7\u68c0\u67e5\u51ed\u8bc1'), 'error')
         }
-      } catch (e) {
-        toast('重启失败: ' + e, 'error')
+      } catch (ex) {
+        toast('\u274C \u6d4b\u8bd5\u5931\u8d25: ' + ex, 'error')
       } finally {
-        btn.disabled = false
-        btn.textContent = '重启'
+        testBtn.disabled = false
+        testBtn.innerHTML = origText
       }
-    }
-  })
-
-  // 绑定配置事件
-  contentEl.querySelectorAll('[data-action="config"]').forEach(btn => {
-    btn.onclick = async () => {
-      const name = btn.dataset.channel
-      try {
-        const configData = await api.getChannelConfig(name)
-        showChannelConfigDialog(page, name, configData)
-      } catch (e) {
-        toast('获取配置失败: ' + e, 'error')
-      }
-    }
-  })
+    })
+  }
 }
 
-function showChannelConfigDialog(page, name, configData) {
-  const config = configData.config || {}
-  const label = { feishu: '飞书', slack: 'Slack', telegram: 'Telegram' }[name] || name
+function updateRightPanel(name, label, icon, status) {
+  const main = document.getElementById('im-main-panel')
+  if (!main) return
+  const running = status?.running || false
+  main.querySelector('.im-title-bar strong').textContent = label + '\u8bbe\u7f6e'
+  main.querySelector('.im-title-icon').innerHTML = icon
+  const st = main.querySelector('.im-title-status')
+  st.textContent = running ? '\u5df2\u8fde\u63a5' : '\u672a\u8fde\u63a5'
+  st.classList.toggle('im-title-status--off', !running)
+  main.querySelector('#im-config-form').dataset.channel = name
 
-  showModal({
-    title: `${label} 配置`,
-    fields: [
-      { name: 'app_id', label: 'App ID', value: config.app_id || '', placeholder: '请输入 App ID' },
-      { name: 'app_secret', label: 'App Secret', value: config.app_secret || '', placeholder: '请输入 App Secret' },
-      { name: 'bot_name', label: 'Bot 名称', value: config.bot_name || '', placeholder: '请输入 Bot 名称' },
-    ],
-    onConfirm: async (result) => {
-      const newConfig = {}
-      if (result.app_id) newConfig.app_id = result.app_id
-      if (result.app_secret) newConfig.app_secret = result.app_secret
-      if (result.bot_name) newConfig.bot_name = result.bot_name
+  const tipsMap = {
+    feishu: CHANNEL_TIPS.feishu,
+    dingtalk: CHANNEL_TIPS.dingtalk,
+  }
+  const tipsEl = main.querySelector('.im-tips')
+  if (tipsEl && (tipsMap[name])) {
+    tipsEl.innerHTML = tipsMap[name]
+  }
+  main.querySelector('#im-app-id').value = ''
+  main.querySelector('#im-app-secret').value = ''
+}
 
-      try {
-        const updateResult = await api.updateChannelConfig(name, newConfig)
-        if (updateResult.success) {
-          toast(`渠道 ${name} 配置已更新`, 'success')
-          loadChannels(page)
-        } else {
-          toast(updateResult.message || '更新失败', 'error')
-        }
-      } catch (e) {
-        toast('更新失败: ' + e, 'error')
-      }
-    }
-  })
+async function loadChannelConfig(name) {
+  const main = document.getElementById('im-main-panel')
+  if (!main) return
+  try {
+    const configData = await api.getChannelConfig(name)
+    const config = configData.config || {}
+    const idInput = main.querySelector('#im-app-id')
+    const secInput = main.querySelector('#im-app-secret')
+    if (idInput) idInput.value = config.app_id || ''
+    if (secInput) secInput.value = config.app_secret || ''
+  } catch (e) {
+    // silent
+  }
 }
 
 function bindEvents(page) {
-  page.querySelector('#btn-reload').onclick = () => loadChannels(page)
+  const btn = page.querySelector('#btn-reload')
+  if (btn) btn.onclick = () => loadChannels(page)
 }

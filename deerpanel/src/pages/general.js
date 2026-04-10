@@ -3,6 +3,7 @@
  */
 import { toast } from '../components/toast.js'
 import { getThemePreference, setThemePreference } from '../lib/theme.js'
+import { getUseVirtualPaths, setUseVirtualPaths } from '../lib/path-mode.js'
 
 const THEME_PREF_EVENT = 'ytpanel-theme-pref-changed'
 
@@ -20,6 +21,15 @@ const GENERAL_INNER_HTML = `
     <div class="config-section-title">外观</div>
     <div id="general-appearance-bar"><div class="stat-card loading-placeholder" style="height:44px"></div></div>
   </div>
+  <div class="config-section">
+    <div class="config-section-title">文件系统模式</div>
+    <label class="switch-row">
+      <span class="switch-label">启用虚拟/沙箱路径（/mnt/user-data）</span>
+      <input id="general-virtual-path-toggle" type="checkbox" />
+      <span class="switch-slider"></span>
+    </label>
+    <p class="form-hint">关闭后，智能体会优先使用你本机路径和当前终端语法（例如 Windows PowerShell）。</p>
+  </div>
 `
 
 /** 嵌入设置中心等容器（不含外层 .page） */
@@ -30,6 +40,7 @@ export async function mountGeneralInto(container) {
   _themeListener = () => renderAppearanceBar(root)
   window.addEventListener(THEME_PREF_EVENT, _themeListener)
   renderAppearanceBar(root)
+  renderPathMode(root)
   root.addEventListener('click', (e) => {
     const themeBtn = e.target.closest('[data-action="set-theme-pref"]')
     if (!themeBtn) return
@@ -39,6 +50,13 @@ export async function mountGeneralInto(container) {
       renderAppearanceBar(root)
       toast('外观已保存', 'success')
     }
+  })
+  root.addEventListener('change', (e) => {
+    const t = e.target
+    if (!(t instanceof HTMLInputElement)) return
+    if (t.id !== 'general-virtual-path-toggle') return
+    setUseVirtualPaths(!!t.checked)
+    toast('文件系统模式已保存', 'success')
   })
 }
 
@@ -58,6 +76,12 @@ export async function render() {
 
   await mountGeneralInto(page.querySelector('#general-standalone-root'))
   return page
+}
+
+function renderPathMode(page) {
+  const toggle = page.querySelector('#general-virtual-path-toggle')
+  if (!toggle) return
+  toggle.checked = getUseVirtualPaths()
 }
 
 export function renderAppearanceBar(page) {

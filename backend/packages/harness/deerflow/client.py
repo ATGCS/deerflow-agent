@@ -195,6 +195,8 @@ class DeerFlowClient:
             "is_plan_mode": overrides.get("plan_mode", self._plan_mode),
             "subagent_enabled": overrides.get("subagent_enabled", self._subagent_enabled),
             "include_search": overrides.get("include_search", True),
+            "use_virtual_paths": overrides.get("use_virtual_paths", False),
+            "local_workspace_root": overrides.get("local_workspace_root"),
         }
         return RunnableConfig(
             configurable=configurable,
@@ -210,6 +212,8 @@ class DeerFlowClient:
             cfg.get("is_plan_mode"),
             cfg.get("subagent_enabled"),
             cfg.get("include_search"),
+            cfg.get("use_virtual_paths"),
+            cfg.get("local_workspace_root"),
         )
 
         if self._agent is not None and self._agent_config_key == key:
@@ -220,14 +224,37 @@ class DeerFlowClient:
         subagent_enabled = cfg.get("subagent_enabled", False)
         max_concurrent_subagents = cfg.get("max_concurrent_subagents", 3)
 
+        # Load agent config for tools/skills filtering
+        try:
+            from deerflow.config.agents_config import load_agent_config
+            agent_config = load_agent_config(self._agent_name) if self._agent_name else None
+        except Exception:
+            agent_config = None
+
+        # Determine available skills from config: None = all, [] = none, ["a","b"] = filtered
+        _cfg_skills = agent_config.skills if agent_config else None
+        _available_skills = set(_cfg_skills) if _cfg_skills is not None else None
+
+        # Determine available tools from config: None = all, [] = none, ["a","b"] = filtered
+        _cfg_tools = agent_config.tools if agent_config else None
+        _tool_whitelist = set(_cfg_tools) if _cfg_tools is not None else None
+
+        tools = self._get_tools(model_name=model_name, subagent_enabled=subagent_enabled)
+
+        # Apply tool whitelist filter
+        if _tool_whitelist is not None:
+            tools = [t for t in tools if getattr(t, "name", "") in _tool_whitelist]
+
         kwargs: dict[str, Any] = {
             "model": create_chat_model(name=model_name, thinking_enabled=thinking_enabled),
-            "tools": self._get_tools(model_name=model_name, subagent_enabled=subagent_enabled),
+            "tools": tools,
             "middleware": _build_middlewares(config, model_name=model_name, agent_name=self._agent_name, custom_middlewares=self._middlewares),
             "system_prompt": apply_prompt_template(
                 subagent_enabled=subagent_enabled,
                 max_concurrent_subagents=max_concurrent_subagents,
                 agent_name=self._agent_name,
+                available_skills=_available_skills,
+                loaded_tool_names=[t.name for t in tools],
             ),
             "state_schema": ThreadState,
         }

@@ -291,6 +291,8 @@ def make_lead_agent(config: RunnableConfig):
     is_bootstrap = cfg.get("is_bootstrap", False)
     agent_name = cfg.get("agent_name")
     include_search = cfg.get("include_search", True)
+    use_virtual_paths = cfg.get("use_virtual_paths", False)
+    local_workspace_root = cfg.get("local_workspace_root")
 
     agent_config = load_agent_config(agent_name) if not is_bootstrap else None
     # Custom agent model or fallback to global/default model resolution
@@ -333,24 +335,60 @@ def make_lead_agent(config: RunnableConfig):
             "is_plan_mode": is_plan_mode,
             "subagent_enabled": subagent_enabled,
             "include_search": include_search,
+            "use_virtual_paths": use_virtual_paths,
         }
     )
 
     if is_bootstrap:
         # Special bootstrap agent with minimal prompt for initial custom agent creation flow
+        tools = get_available_tools(model_name=model_name, subagent_enabled=subagent_enabled, include_search=include_search)
         return create_agent(
             model=create_chat_model(name=model_name, thinking_enabled=thinking_enabled),
-            tools=get_available_tools(model_name=model_name, subagent_enabled=subagent_enabled, include_search=include_search),
+            tools=tools,
             middleware=_build_middlewares(config, model_name=model_name),
-            system_prompt=apply_prompt_template(subagent_enabled=subagent_enabled, max_concurrent_subagents=max_concurrent_subagents, available_skills=set(["bootstrap"])),
+            system_prompt=apply_prompt_template(
+                subagent_enabled=subagent_enabled,
+                max_concurrent_subagents=max_concurrent_subagents,
+                available_skills=set(["bootstrap"]),
+                loaded_tool_names=[t.name for t in tools],
+                use_virtual_paths=use_virtual_paths,
+                local_workspace_root=local_workspace_root,
+            ),
             state_schema=ThreadState,
         )
 
-    # Default lead agent (unchanged behavior)
+    # Default lead agent
+    # Determine available skills from config: None = all, [] = none, ["a","b"] = filtered
+    _cfg_skills = agent_config.skills if agent_config else None
+    _available_skills = set(_cfg_skills) if _cfg_skills is not None else None
+
+    # Determine available tools from config: None = all, [] = none, ["a","b"] = filtered
+    _cfg_tools = agent_config.tools if agent_config else None
+    _tool_whitelist = set(_cfg_tools) if _cfg_tools is not None else None
+
+    tools = get_available_tools(
+        model_name=model_name,
+        groups=agent_config.tool_groups if agent_config else None,
+        subagent_enabled=subagent_enabled,
+        include_search=include_search,
+    )
+
+    # Apply tool whitelist filter: if config specifies tools, only keep those
+    if _tool_whitelist is not None:
+        tools = [t for t in tools if getattr(t, "name", "") in _tool_whitelist]
+
     return create_agent(
         model=create_chat_model(name=model_name, thinking_enabled=thinking_enabled, reasoning_effort=reasoning_effort),
-        tools=get_available_tools(model_name=model_name, groups=agent_config.tool_groups if agent_config else None, subagent_enabled=subagent_enabled, include_search=include_search),
+        tools=tools,
         middleware=_build_middlewares(config, model_name=model_name, agent_name=agent_name),
-        system_prompt=apply_prompt_template(subagent_enabled=subagent_enabled, max_concurrent_subagents=max_concurrent_subagents, agent_name=agent_name),
+        system_prompt=apply_prompt_template(
+            subagent_enabled=subagent_enabled,
+            max_concurrent_subagents=max_concurrent_subagents,
+            agent_name=agent_name,
+            available_skills=_available_skills,
+            loaded_tool_names=[t.name for t in tools],
+            use_virtual_paths=use_virtual_paths,
+            local_workspace_root=local_workspace_root,
+        ),
         state_schema=ThreadState,
     )

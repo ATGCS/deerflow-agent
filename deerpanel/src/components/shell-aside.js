@@ -390,7 +390,7 @@ export function initShellAside(el) {
             <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/>
           </svg>
         </span>
-        <span>新建任务</span>
+        <span>新建对话</span>
       </button>
       <button type="button" class="react-chat-aside-nav-item" data-shell-nav="/tasks">
         <span class="react-chat-aside-nav-ic" aria-hidden>

@@ -5,6 +5,9 @@
 
 const isTauri = !!window.__TAURI_INTERNALS__
 
+// 仅在 Web 模式下通过 HTTP 代理的命令（桌面端全部走原生 invoke）
+const WEB_ONLY_CMDS = new Set()
+
 // 兼容旧接口：返回 Gateway 直连地址
 export function getBackendBaseURL() {
   const origin = window.location.origin
@@ -49,6 +52,19 @@ async function gatewayProxy(method, path, body = null, query = null) {
   try { result = JSON.parse(text) } catch { result = text }
   if (!res.ok) throw new Error(result?.detail || result?.error || `Gateway API failed: ${res.status}`)
   return result
+}
+
+// 带缓存的 Gateway 调用（用于不常变的数据）
+function cachedGateway(method, path, ttl = 30000) {
+  const key = `gw:${method}:${path}`
+  const cached = _cache.get(key)
+  if (cached && Date.now() - cached.ts < ttl) return Promise.resolve(cached.val)
+  const p = gatewayProxy(method, path).then(val => {
+    _cache.set(key, { val, ts: Date.now() })
+    return val
+  })
+  _cache.set(key, { val: p, ts: 0 }) // 防止并发请求
+  return p
 }
 
 // 预加载 Tauri invoke，避免每次 API 调用都做动态 import
@@ -251,6 +267,10 @@ export const api = {
 
   // Agent 扩展能力（非 Gateway 标准协议）
   backupAgent: (id) => invoke('backup_agent', { id }),
+  // 工作空间（本机路径校验/规范化）
+  resolveWorkspacePath: async (path) => {
+    return gatewayProxy('POST', '/workspaces/resolve', { path })
+  },
   // Agent 管理（Web 版语义）
   listAgents: async () => {
     const data = await gatewayProxy('GET', '/agents');
@@ -465,6 +485,9 @@ export const api = {
   getMCPConfig: async () => gatewayProxy('GET', '/mcp/config'),
   updateMCPConfig: async (mcpServers) => gatewayProxy('PUT', '/mcp/config', { mcp_servers: mcpServers }),
 
+  // 工具元数据（内置工具列表 + MCP服务器 + Skills，用于 Agent 配置 UI）
+  getToolsMetadata: () => cachedGateway('GET', '/tools/metadata'),
+
   // DeerFlaw 多渠道 API
   getChannelsStatus: async () => gatewayProxy('GET', '/channels'),
   restartChannel: async (name) => gatewayProxy('POST', `/channels/${name}/restart`),
@@ -484,6 +507,9 @@ export const api = {
   skillsClawHubSearch: (query) => invoke('skills_clawhub_search', { query }),
   skillsClawHubInstall: (slug) => invoke('skills_clawhub_install', { slug }),
   skillsUninstall: (name) => invoke('skills_uninstall', { name }),
+
+  // MCP 市场搜索（Glama AI）
+  mcpMarketSearch: (query) => invoke('mcp_market_search', { query }),
 
   // 实例管理
   instanceList: () => (isTauri

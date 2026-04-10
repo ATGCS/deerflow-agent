@@ -133,6 +133,7 @@ def test_start_execution_success_shape_matches_user_payload(isolated_supervisor_
     assert data["taskId"] == TASK_ID
     assert data["authorizedBy"] == "user"
     assert data["collabPhaseAdvanced"] is True
+    assert data.get("waitForCompletion") is False
     assert data["subtaskIds"] == [SUBTASK_ID]
     assert data.get("delegationAllSucceeded") is True
     assert len(data.get("delegatedSubtasks") or []) == 1

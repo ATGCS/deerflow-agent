@@ -168,6 +168,34 @@ export function buildCollabSidebarFromTools(tools) {
       }
     }
 
+    if (action === 'create_subtasks') {
+      const created = Array.isArray(o.created) ? o.created : []
+      for (const row of created) {
+        if (!row || typeof row !== 'object') continue
+        const r = row
+        const sid = String(r.subtaskId || r.subtask_id || r.id || '')
+        const parentTaskId = String(r.parentTaskId || r.task_id || (input && input.task_id) || '')
+        if (!sid) continue
+        const prev = subtasksMap.get(sid) || {}
+        const assignedFromOut =
+          typeof r.assignedTo === 'string'
+            ? r.assignedTo.trim()
+            : typeof r.assigned_to === 'string'
+              ? r.assigned_to.trim()
+              : ''
+        subtasksMap.set(sid, {
+          ...prev,
+          subtaskId: sid,
+          ...(parentTaskId ? { parentTaskId } : {}),
+          ...(typeof r.name === 'string' ? { name: r.name } : {}),
+          ...(typeof r.description === 'string' ? { description: r.description } : {}),
+          ...(typeof r.status === 'string' ? { status: r.status } : {}),
+          ...(typeof r.progress === 'number' ? { progress: r.progress } : {}),
+          ...(assignedFromOut ? { assignedAgent: assignedFromOut } : {}),
+        })
+      }
+    }
+
     if (action === 'assign_subtask') {
       const sid = String(o.subtaskId || o.subtask_id || (input && input.subtask_id) || '')
       const assigned = String(o.assignedTo || (input && input.assigned_agent) || '')
@@ -215,19 +243,22 @@ export function buildCollabSidebarFromTools(tools) {
         const r = row
         const sid = String(r.subtaskId || r.subtask_id || '')
         if (!sid) continue
+        const detached = r.detached === true
         const ok = r.ok === true
         const prev = subtasksMap.get(sid) || { subtaskId: sid, parentTaskId: tid || undefined }
         subtasksMap.set(sid, {
           ...prev,
           subtaskId: sid,
           ...(tid ? { parentTaskId: tid } : {}),
-          status: ok ? 'completed' : 'failed',
+          // 异步（detached=true）代表仍在后台跑：绝不能在 UI 里标为 completed/failed
+          status: detached ? 'executing' : ok ? 'completed' : 'failed',
           progress: ok ? 100 : typeof prev.progress === 'number' ? prev.progress : 0,
         })
       }
 
       // 若明确全部成功，主任务直接标记为完成
-      if (o.delegationAllSucceeded === true && main && main.taskId === tid) {
+      // 注意：异步模式下 delegatedSubtasks 可能都是 detached，此时不能提前 completed
+      if (o.delegationAllSucceeded === true && main && main.taskId === tid && delegated.every((x) => x && typeof x === 'object' && x.detached !== true)) {
         main = { ...main, status: 'completed', progress: 100 }
       }
     }

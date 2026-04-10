@@ -120,8 +120,8 @@ fn patch_gateway_origins() {
         "tauri://localhost".into(),
         "https://tauri.localhost".into(),
         "http://tauri.localhost".into(),
-        "http://localhost:1420".into(),
-        "http://127.0.0.1:1420".into(),
+        "http://localhost:1421".into(),
+        "http://127.0.0.1:1421".into(),
     ];
 
     if let Some(obj) = config.as_object_mut() {

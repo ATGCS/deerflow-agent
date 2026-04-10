@@ -11,6 +11,7 @@ from app.gateway.routers import (
     channels,
     collab,
     events,
+    langgraph_proxy,
     mcp,
     memory,
     models,
@@ -22,6 +23,7 @@ from app.gateway.routers import (
     tasks,
     threads,
     uploads,
+    workspaces,
 )
 from deerflow.config.app_config import get_app_config
 
@@ -201,6 +203,9 @@ This gateway provides custom endpoints for models, MCP configuration, skills, an
     # Thread cleanup API is mounted at /api/threads/{thread_id}
     app.include_router(threads.router)
 
+    # Workspaces API is mounted at /api/workspaces
+    app.include_router(workspaces.router)
+
     # Agents API is mounted at /api/agents
     app.include_router(agents.router)
 
@@ -227,6 +232,8 @@ This gateway provides custom endpoints for models, MCP configuration, skills, an
 
     # Runs API is mounted at /api/langgraph/runs
     app.include_router(runs.router)
+    # LangGraph proxy API is mounted at /api/langgraph/*
+    app.include_router(langgraph_proxy.router)
 
     @app.get("/health", tags=["health"])
     async def health_check() -> dict:

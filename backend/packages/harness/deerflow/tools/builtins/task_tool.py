@@ -5,7 +5,7 @@ import json
 import logging
 import uuid
 from dataclasses import replace
-from typing import Annotated
+from typing import Annotated, Any
 
 from langchain.tools import InjectedToolCallId, ToolRuntime, tool
 from langgraph.config import get_stream_writer
@@ -35,6 +35,107 @@ from deerflow.subagents.executor import SubagentResult, SubagentStatus, cleanup_
 logger = logging.getLogger(__name__)
 
 
+def _collect_tool_names_from_stream_message(message: object) -> list[str]:
+    """Best-effort extraction of tool names from stream message payload."""
+    out: list[str] = []
+    seen: set[str] = set()
+
+    def _push(v: object) -> None:
+        name = str(v or "").strip()
+        if not name or name in seen:
+            return
+        seen.add(name)
+        out.append(name)
+
+    try:
+        if isinstance(message, dict):
+            # Common schema: {"tool_calls":[{"name":"web_search", ...}]}
+            tcs = message.get("tool_calls")
+            if isinstance(tcs, list):
+                for tc in tcs:
+                    if isinstance(tc, dict):
+                        _push(tc.get("name") or tc.get("tool_name"))
+
+            # LangChain content blocks may also include tool metadata
+            content = message.get("content")
+            if isinstance(content, list):
+                for block in content:
+                    if not isinstance(block, dict):
+                        continue
+                    if str(block.get("type") or "").lower() in {"tool_call", "tool_use"}:
+                        _push(block.get("name") or block.get("tool_name"))
+        # Non-dict messages are ignored.
+    except Exception:
+        return out
+    return out
+
+
+def _normalize_tool_output_content(v: object) -> str:
+    if v is None:
+        return ""
+    if isinstance(v, str):
+        return v
+    try:
+        return json.dumps(v, ensure_ascii=False)
+    except Exception:
+        return str(v)
+
+
+def _extract_tool_events_from_stream_message(message: object) -> list[dict[str, Any]]:
+    """Extract realtime tool call/result events with input/output."""
+    out: list[dict[str, Any]] = []
+    if not isinstance(message, dict):
+        return out
+    try:
+        tcs = message.get("tool_calls")
+        if isinstance(tcs, list):
+            for tc in tcs:
+                if not isinstance(tc, dict):
+                    continue
+                name = str(tc.get("name") or tc.get("tool_name") or "").strip()
+                if not name:
+                    continue
+                tool_call_id = str(tc.get("id") or tc.get("tool_call_id") or "").strip()
+                args = tc.get("args")
+                if args is None:
+                    fn = tc.get("function")
+                    if isinstance(fn, dict):
+                        raw = fn.get("arguments")
+                        if isinstance(raw, str):
+                            try:
+                                args = json.loads(raw)
+                            except Exception:
+                                args = {"raw": raw}
+                        elif isinstance(raw, dict):
+                            args = raw
+                if not isinstance(args, dict):
+                    args = {}
+                out.append(
+                    {
+                        "phase": "call",
+                        "name": name,
+                        "toolCallId": tool_call_id,
+                        "input": args,
+                    }
+                )
+
+        m_type = str(message.get("type") or message.get("role") or "").strip().lower()
+        if m_type == "tool":
+            name = str(message.get("name") or message.get("tool_name") or "").strip()
+            if name:
+                out.append(
+                    {
+                        "phase": "result",
+                        "name": name,
+                        "toolCallId": str(message.get("tool_call_id") or message.get("id") or "").strip(),
+                        "output": _normalize_tool_output_content(message.get("content")),
+                    }
+                )
+    except Exception:
+        return out
+    return out
+
+
 @tool("task", parse_docstring=True)
 async def task_tool(
     runtime: ToolRuntime[ContextT, ThreadState],
@@ -45,6 +146,7 @@ async def task_tool(
     max_turns: int | None = None,
     collab_task_id: str | None = None,
     collab_subtask_id: str | None = None,
+    detach: bool = False,
 ) -> str:
     """Delegate a task to a specialized subagent that runs in its own context.
 
@@ -80,6 +182,9 @@ async def task_tool(
             in project storage (no execution_authorized / thread_id gate).
         collab_subtask_id: With collab_task_id, load ``worker_profile`` from storage (§5.2 → §5.4):
             ``base_subagent``, ``tools`` (whitelist ∩ global tools), ``skills``, ``instruction``.
+        detach: When True with both collab ids set, start the background subagent and return
+            immediately; completion is persisted via the same polling path asynchronously.
+            Used by supervisor ``start_execution``; leave False for normal ``task`` calls.
     """
     available_subagent_names = get_available_subagent_names()
 
@@ -144,6 +249,8 @@ async def task_tool(
                 wp = sub_row.get("worker_profile")
                 if wp:
                     try:
+                        if isinstance(wp, dict) and "base_subagent" not in wp:
+                            wp = {**wp, "base_subagent": subagent_type}
                         profile_model = WorkerProfile.model_validate(wp)
                     except ValidationError as e:
                         return f"Error: invalid worker_profile in storage for subtask {resolved_subtask!r}: {e}"
@@ -216,23 +323,64 @@ async def task_tool(
                         pst,
                         resolved_collab,
                         resolved_subtask,
-                        {"status": "completed", "progress": 100},
+                        {"status": "completed", "progress": 100, "result": (r.result or "")[:8000]},
                     )
                 elif outcome == "failed":
                     patch_collab_subtask_in_project_storage(
                         pst,
                         resolved_collab,
                         resolved_subtask,
-                        {"status": "failed", "progress": 0},
+                        {"status": "failed", "progress": 0, "error": (r.error or "")[:2000]},
                     )
                 else:
                     patch_collab_subtask_in_project_storage(
                         pst,
                         resolved_collab,
                         resolved_subtask,
-                        {"status": "failed", "progress": 0},
+                        {"status": "failed", "progress": 0, "error": (r.error or "")[:2000]},
                     )
                 rollup_root_task_progress_from_subtasks(pst, resolved_collab)
+                # 后端即时收敛：若主任务下所有子任务已终态，立即把 collab_phase 置 done（不等后续轮询）。
+                row_main = find_main_task(pst, resolved_collab)
+                if row_main is not None:
+                    _proj2, main2 = row_main
+                    subs2 = [x for x in (main2.get("subtasks") or []) if isinstance(x, dict)]
+                    if subs2 and all(
+                        str(x.get("status") or "").strip().lower() in {"completed", "failed", "cancelled", "timed_out"}
+                        for x in subs2
+                    ):
+                        try:
+                            from deerflow.collab.models import CollabPhase
+                            from deerflow.collab.thread_collab import merge_thread_collab_state, save_thread_collab_state
+
+                            tid2 = str(main2.get("thread_id") or thread_id or "").strip()
+                            if tid2:
+                                cur2 = load_thread_collab_state(get_paths(), tid2)
+                                merged2 = merge_thread_collab_state(cur2, {"collab_phase": CollabPhase.DONE.value})
+                                save_thread_collab_state(get_paths(), tid2, merged2)
+                        except Exception:
+                            logger.debug("task_tool: immediate collab done convergence failed", exc_info=True)
+                # depends_on 链：上游子任务已落库终态后，由后端自动启动下一波可运行子任务（无需主智能体再次 start_execution）
+                if runtime is not None:
+
+                    async def _auto_followup() -> None:
+                        try:
+                            from deerflow.tools.builtins.supervisor_tool import (
+                                auto_delegate_collab_followup_wave,
+                            )
+
+                            await auto_delegate_collab_followup_wave(runtime, resolved_collab)
+                        except Exception:
+                            logger.exception(
+                                "collab auto follow-up delegation failed main=%s sub=%s",
+                                resolved_collab,
+                                resolved_subtask,
+                            )
+
+                    asyncio.create_task(
+                        _auto_followup(),
+                        name=f"collab-followup-{str(resolved_collab)[:12]}",
+                    )
             except Exception:
                 logger.exception(
                     "sync collab subtask row after subagent outcome=%s main=%s sub=%s",
@@ -436,110 +584,214 @@ async def task_tool(
                 resolved_subtask,
             )
 
-    try:
-        while True:
-            result = get_background_task_result(task_id)
+    detach_effective = bool(detach) and bool(resolved_collab) and bool(resolved_subtask)
+    if detach and not detach_effective:
+        logger.warning(
+            "task_tool: detach=True ignored (requires collab_task_id and collab_subtask_id)"
+        )
 
-            if result is None:
-                logger.error(f"[trace={trace_id}] Task {task_id} not found in background tasks")
-                writer(_ws({"type": "task_failed", "task_id": task_id, "error": "Task disappeared from background tasks"}))
-                cleanup_background_task(task_id)
-                return f"Error: Task {task_id} disappeared from background tasks"
-
-            # Log status changes for debugging
-            if result.status != last_status:
-                logger.info(f"[trace={trace_id}] Task {task_id} status: {result.status.value}")
-                last_status = result.status
-
-            # 新消息：优先 stream_messages（含 AIMessage + ToolMessage），否则仅 ai_messages
-            stream_list = result.stream_messages or []
-            legacy_list = result.ai_messages or []
-            use_stream = len(stream_list) > 0
-            current_message_count = len(stream_list) if use_stream else len(legacy_list)
-            if current_message_count > last_message_count:
-                # Send task_running event for each new message
-                for i in range(last_message_count, current_message_count):
-                    message = stream_list[i] if use_stream else legacy_list[i]
-                    writer(
-                        _ws(
-                            {
-                                "type": "task_running",
-                                "task_id": task_id,
-                                "message": message,
-                                "message_index": i + 1,  # 1-based index for display
-                                "total_messages": current_message_count,
-                                "subagent_type": effective_subagent_type,
-                            }
-                        )
-                    )
-                    logger.info(f"[trace={trace_id}] Task {task_id} sent message #{i + 1}/{current_message_count}")
-                last_message_count = current_message_count
-
-            # Check if task completed, failed, or timed out
-            if result.status == SubagentStatus.COMPLETED:
-                writer(_ws({"type": "task_completed", "task_id": task_id, "result": result.result}))
-                logger.info(f"[trace={trace_id}] Task {task_id} completed after {poll_count} polls")
-                await _persist_collab_task_memory("completed", result)
-                cleanup_background_task(task_id)
-                return f"Task Succeeded. Result: {result.result}"
-            elif result.status == SubagentStatus.FAILED:
-                writer(_ws({"type": "task_failed", "task_id": task_id, "error": result.error}))
-                logger.error(f"[trace={trace_id}] Task {task_id} failed: {result.error}")
-                await _persist_collab_task_memory("failed", result)
-                cleanup_background_task(task_id)
-                return f"Task failed. Error: {result.error}"
-            elif result.status == SubagentStatus.TIMED_OUT:
-                writer(_ws({"type": "task_timed_out", "task_id": task_id, "error": result.error}))
-                logger.warning(f"[trace={trace_id}] Task {task_id} timed out: {result.error}")
-                await _persist_collab_task_memory("timed_out", result)
-                cleanup_background_task(task_id)
-                return f"Task timed out. Error: {result.error}"
-
-            # Still running, wait before next poll
-            await asyncio.sleep(5)
-            poll_count += 1
-
-            # Polling timeout as a safety net (in case thread pool timeout doesn't work)
-            # Set to execution timeout + 60s buffer, in 5s poll intervals
-            # This catches edge cases where the background task gets stuck
-            # Note: We don't call cleanup_background_task here because the task may
-            # still be running in the background. The cleanup will happen when the
-            # executor completes and sets a terminal status.
-            if poll_count > max_poll_count:
-                timeout_minutes = config.timeout_seconds // 60
-                logger.error(f"[trace={trace_id}] Task {task_id} polling timed out after {poll_count} polls (should have been caught by thread pool timeout)")
-                writer(_ws({"type": "task_timed_out", "task_id": task_id}))
-                return f"Task polling timed out after {timeout_minutes} minutes. This may indicate the background task is stuck. Status: {result.status.value}"
-    except asyncio.CancelledError:
-
-        async def cleanup_when_done() -> None:
-            max_cleanup_polls = max_poll_count
-            cleanup_poll_count = 0
-
+    async def _poll_subagent_to_completion() -> str:
+        nonlocal poll_count, last_status, last_message_count
+        try:
             while True:
                 result = get_background_task_result(task_id)
+
                 if result is None:
-                    return
-
-                if result.status in {SubagentStatus.COMPLETED, SubagentStatus.FAILED, SubagentStatus.TIMED_OUT} or getattr(result, "completed_at", None) is not None:
+                    logger.error(f"[trace={trace_id}] Task {task_id} not found in background tasks")
+                    writer(_ws({"type": "task_failed", "task_id": task_id, "error": "Task disappeared from background tasks"}))
                     cleanup_background_task(task_id)
+                    return f"Error: Task {task_id} disappeared from background tasks"
+
+                # Log status changes for debugging
+                if result.status != last_status:
+                    logger.info(f"[trace={trace_id}] Task {task_id} status: {result.status.value}")
+                    last_status = result.status
+
+                # 新消息：优先 stream_messages（含 AIMessage + ToolMessage），否则仅 ai_messages
+                stream_list = getattr(result, "stream_messages", None) or []
+                legacy_list = getattr(result, "ai_messages", None) or []
+                use_stream = len(stream_list) > 0
+                current_message_count = len(stream_list) if use_stream else len(legacy_list)
+                if current_message_count > last_message_count:
+                    # Send task_running event for each new message
+                    observed_tools: set[str] = set()
+                    observed_events: list[dict[str, Any]] = []
+                    for i in range(last_message_count, current_message_count):
+                        message = stream_list[i] if use_stream else legacy_list[i]
+                        for tn in _collect_tool_names_from_stream_message(message):
+                            observed_tools.add(tn)
+                        for ev in _extract_tool_events_from_stream_message(message):
+                            ev2 = dict(ev)
+                            ev2["messageIndex"] = i + 1
+                            observed_events.append(ev2)
+                        writer(
+                            _ws(
+                                {
+                                    "type": "task_running",
+                                    "task_id": task_id,
+                                    "message": message,
+                                    "message_index": i + 1,  # 1-based index for display
+                                    "total_messages": current_message_count,
+                                    "subagent_type": effective_subagent_type,
+                                }
+                            )
+                        )
+                        # detached 模式下前端主流可能已结束；同时向 project SSE 广播原始 task_running，
+                        # 让 TODO 侧栏仍能实时看到工具调用/模型输出/工具结果。
+                        if collab_project_id and collab_memory_task_id:
+                            from deerflow.collab.sse_notify import broadcast_project_event
+                            msg_preview = _normalize_tool_output_content(message)
+                            msg_preview = (msg_preview or "").replace("\n", " ").strip()
+                            if len(msg_preview) > 220:
+                                msg_preview = msg_preview[:220] + "…"
+                            logger.info(
+                                "[trace=%s] task:running sse main=%s sub=%s exec=%s idx=%s/%s text=%s",
+                                trace_id,
+                                collab_memory_task_id,
+                                (resolved_subtask or collab_memory_task_id),
+                                task_id,
+                                i + 1,
+                                current_message_count,
+                                msg_preview,
+                            )
+
+                            await broadcast_project_event(
+                                collab_project_id,
+                                "task:running",
+                                {
+                                    "task_id": collab_memory_task_id,
+                                    "task_exec_id": task_id,
+                                    "collab_subtask_id": resolved_subtask or collab_memory_task_id,
+                                    "message": message,
+                                    "message_index": i + 1,
+                                    "total_messages": current_message_count,
+                                    "subagent_type": effective_subagent_type,
+                                },
+                            )
+                        logger.info(f"[trace={trace_id}] Task {task_id} sent message #{i + 1}/{current_message_count}")
+                    last_message_count = current_message_count
+                    if (observed_tools or observed_events) and resolved_subtask and resolved_collab:
+                        try:
+                            pst = get_project_storage()
+                            current_st = find_subtask_by_ids(pst, resolved_collab, resolved_subtask) or {}
+                            existed = current_st.get("observed_tools") or []
+                            if not isinstance(existed, list):
+                                existed = []
+                            merged: list[str] = []
+                            seen_tool: set[str] = set()
+                            for x in [*existed, *sorted(observed_tools)]:
+                                n = str(x or "").strip()
+                                if not n or n in seen_tool:
+                                    continue
+                                seen_tool.add(n)
+                                merged.append(n)
+                            patch_collab_subtask_in_project_storage(
+                                pst,
+                                resolved_collab,
+                                resolved_subtask,
+                                {
+                                    "observed_tools": merged,
+                                    "observed_tool_calls": (
+                                        (
+                                            (current_st.get("observed_tool_calls") or [])
+                                            if isinstance(current_st.get("observed_tool_calls"), list)
+                                            else []
+                                        )
+                                        + observed_events
+                                    )[-80:],
+                                },
+                            )
+                        except Exception:
+                            logger.debug("task_tool: persist observed_tools failed", exc_info=True)
+
+                # Check if task completed, failed, or timed out
+                if result.status == SubagentStatus.COMPLETED:
+                    writer(_ws({"type": "task_completed", "task_id": task_id, "result": result.result}))
+                    logger.info(f"[trace={trace_id}] Task {task_id} completed after {poll_count} polls")
+                    await _persist_collab_task_memory("completed", result)
+                    cleanup_background_task(task_id)
+                    return f"Task Succeeded. Result: {result.result}"
+                elif result.status == SubagentStatus.FAILED:
+                    writer(_ws({"type": "task_failed", "task_id": task_id, "error": result.error}))
+                    logger.error(f"[trace={trace_id}] Task {task_id} failed: {result.error}")
+                    await _persist_collab_task_memory("failed", result)
+                    cleanup_background_task(task_id)
+                    return f"Task failed. Error: {result.error}"
+                elif result.status == SubagentStatus.TIMED_OUT:
+                    writer(_ws({"type": "task_timed_out", "task_id": task_id, "error": result.error}))
+                    logger.warning(f"[trace={trace_id}] Task {task_id} timed out: {result.error}")
+                    await _persist_collab_task_memory("timed_out", result)
+                    cleanup_background_task(task_id)
+                    return f"Task timed out. Error: {result.error}"
+
+                # Still running, wait before next poll
+                await asyncio.sleep(1)
+                poll_count += 1
+
+                # Polling timeout as a safety net (in case thread pool timeout doesn't work)
+                # Set to execution timeout + 60s buffer, in 5s poll intervals
+                # This catches edge cases where the background task gets stuck
+                # Note: We don't call cleanup_background_task here because the task may
+                # still be running in the background. The cleanup will happen when the
+                # executor completes and sets a terminal status.
+                if poll_count > max_poll_count:
+                    timeout_minutes = config.timeout_seconds // 60
+                    logger.error(f"[trace={trace_id}] Task {task_id} polling timed out after {poll_count} polls (should have been caught by thread pool timeout)")
+                    writer(_ws({"type": "task_timed_out", "task_id": task_id}))
+                    return f"Task polling timed out after {timeout_minutes} minutes. This may indicate the background task is stuck. Status: {result.status.value}"
+        except asyncio.CancelledError:
+
+            async def cleanup_when_done() -> None:
+                max_cleanup_polls = max_poll_count
+                cleanup_poll_count = 0
+
+                while True:
+                    result = get_background_task_result(task_id)
+                    if result is None:
+                        return
+
+                    if result.status in {SubagentStatus.COMPLETED, SubagentStatus.FAILED, SubagentStatus.TIMED_OUT} or getattr(result, "completed_at", None) is not None:
+                        cleanup_background_task(task_id)
+                        return
+
+                    if cleanup_poll_count > max_cleanup_polls:
+                        logger.warning(f"[trace={trace_id}] Deferred cleanup for task {task_id} timed out after {cleanup_poll_count} polls")
+                        return
+
+                    await asyncio.sleep(5)
+                    cleanup_poll_count += 1
+
+            def log_cleanup_failure(cleanup_task: asyncio.Task[None]) -> None:
+                if cleanup_task.cancelled():
                     return
 
-                if cleanup_poll_count > max_cleanup_polls:
-                    logger.warning(f"[trace={trace_id}] Deferred cleanup for task {task_id} timed out after {cleanup_poll_count} polls")
-                    return
+                exc = cleanup_task.exception()
+                if exc is not None:
+                    logger.error(f"[trace={trace_id}] Deferred cleanup failed for task {task_id}: {exc}")
 
-                await asyncio.sleep(5)
-                cleanup_poll_count += 1
+            logger.debug(f"[trace={trace_id}] Scheduling deferred cleanup for cancelled task {task_id}")
+            asyncio.create_task(cleanup_when_done()).add_done_callback(log_cleanup_failure)
+            raise
 
-        def log_cleanup_failure(cleanup_task: asyncio.Task[None]) -> None:
-            if cleanup_task.cancelled():
-                return
+    if detach_effective:
 
-            exc = cleanup_task.exception()
-            if exc is not None:
-                logger.error(f"[trace={trace_id}] Deferred cleanup failed for task {task_id}: {exc}")
+        async def _detached_poll_runner() -> None:
+            try:
+                await _poll_subagent_to_completion()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception(
+                    "detached task_tool poll failed task_id=%s collab=%s sub=%s",
+                    task_id,
+                    resolved_collab,
+                    resolved_subtask,
+                )
 
-        logger.debug(f"[trace={trace_id}] Scheduling deferred cleanup for cancelled task {task_id}")
-        asyncio.create_task(cleanup_when_done()).add_done_callback(log_cleanup_failure)
-        raise
+        asyncio.create_task(
+            _detached_poll_runner(),
+            name=f"task_tool-detached-{str(task_id)[:24]}",
+        )
+        return "Task Detached. Background execution started for collab subtask."
+
+    return await _poll_subagent_to_completion()

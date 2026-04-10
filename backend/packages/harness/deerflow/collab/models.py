@@ -65,7 +65,10 @@ class WorkerProfile(BaseModel):
     instruction: str | None = Field(default=None, description="Extra system instructions for this worker")
     tools: list[str] | None = Field(default=None, description="Override default tools (load from AgentConfig if None)")
     skills: list[str] | None = Field(default=None, description="Override default skills (load from AgentConfig if None)")
-    depends_on: list[str] = Field(default_factory=list, description="Dependent subtask ids (planning hint)")
+    depends_on: list[str] = Field(
+        default_factory=list,
+        description="Upstream subtask ids that must be status completed before this subtask may run (enforced by supervisor start_execution).",
+    )
 
     def to_storage_dict(self) -> dict[str, Any]:
         return self.model_dump(exclude_none=True)

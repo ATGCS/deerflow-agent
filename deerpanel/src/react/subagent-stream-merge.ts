@@ -13,14 +13,81 @@ function textFromLangGraphMessage(msg: unknown, maxLen: number): string {
   if (Array.isArray(c)) {
     let s = ''
     for (const b of c) {
-      if (b && typeof b === 'object' && (b as Record<string, unknown>).type === 'text') {
-        const t = (b as Record<string, unknown>).text
-        if (typeof t === 'string') s += t
+      if (typeof b === 'string') {
+        s += b
+        continue
+      }
+      if (b && typeof b === 'object') {
+        const bb = b as Record<string, unknown>
+        const ty = String(bb.type || '').toLowerCase()
+        if (ty === 'text') {
+          const t = bb.text
+          if (typeof t === 'string') s += t
+        }
       }
     }
     return s.slice(0, maxLen)
   }
   return ''
+}
+
+/** LangChain JSON / httpx 序列化常见：顶层带 kwargs */
+function flattenLangChainMessage(msg: unknown): unknown {
+  if (typeof msg !== 'object' || msg == null) return msg
+  const m = msg as Record<string, unknown>
+  const kw = m.kwargs
+  if (kw && typeof kw === 'object' && !Array.isArray(kw)) {
+    const k = kw as Record<string, unknown>
+    return {
+      ...m,
+      type: m.type ?? k.type,
+      content: m.content ?? k.content,
+      role: m.role ?? k.role,
+      name: m.name ?? k.name,
+      tool_call_id: m.tool_call_id ?? k.tool_call_id,
+      tool_calls: m.tool_calls ?? k.tool_calls,
+    }
+  }
+  return msg
+}
+
+const TOOL_LIVE_PREVIEW = 420
+
+/** 工具结果也写入 liveOutput，避免侧栏一直卡在「工具过程」而看不到检索主题/后续模型段 */
+function toolMessageLivePreview(m: Record<string, unknown>, maxLen: number): string {
+  const raw = m.content
+  const s =
+    typeof raw === 'string'
+      ? raw
+      : raw != null
+        ? (() => {
+            try {
+              return JSON.stringify(raw)
+            } catch {
+              return String(raw)
+            }
+          })()
+        : ''
+  const oneLine = s.replace(/\s+/g, ' ').trim()
+  if (!oneLine) return ''
+  try {
+    const parsed = JSON.parse(typeof raw === 'string' ? raw : JSON.stringify(raw))
+    if (parsed && typeof parsed === 'object') {
+      const q = (parsed as Record<string, unknown>).query
+      if (typeof q === 'string' && q.trim()) {
+        const t = q.trim().slice(0, 220)
+        return t.length < q.trim().length ? `搜索：${t}…` : `搜索：${t}`
+      }
+      const err = (parsed as Record<string, unknown>).error
+      if (typeof err === 'string' && err.trim()) {
+        const t = err.trim().slice(0, 200)
+        return t.length < err.trim().length ? `工具：${t}…` : `工具：${t}`
+      }
+    }
+  } catch {
+    // 非 JSON，走截断全文
+  }
+  return oneLine.length > maxLen ? `${oneLine.slice(0, maxLen)}…` : oneLine
 }
 
 const ARGS_PREVIEW = 6000
@@ -50,8 +117,9 @@ function upsertToolItem(tools: unknown[], next: Record<string, unknown>) {
 }
 
 function mergeToolsFromLangGraphMessage(cur: unknown[] | undefined, msg: unknown): unknown[] | undefined {
-  if (typeof msg !== 'object' || msg == null) return cur
-  const m = msg as Record<string, unknown>
+  const flat = flattenLangChainMessage(msg)
+  if (typeof flat !== 'object' || flat == null) return cur
+  const m = flat as Record<string, unknown>
   let tools = cur ? [...cur] : []
 
   // AIMessage.tool_calls
@@ -89,20 +157,33 @@ function mergeToolsFromLangGraphMessage(cur: unknown[] | undefined, msg: unknown
   return tools.length ? tools : cur
 }
 
-/** 单条消息：仅提取 AI 文本（工具调用与工具结果改走 ToolCallList） */
-function liveChunkFromLangGraphMessage(msg: unknown, maxTextLen: number): string {
-  if (typeof msg !== 'object' || msg === null) {
-    return textFromLangGraphMessage(msg, maxTextLen).trim()
+/** task_running 单条消息 → 写入 liveOutput 的片段（含工具返回摘要 + 模型正文） */
+function liveChunkFromStreamMessage(msg: unknown, maxTextLen: number): string {
+  const flat = flattenLangChainMessage(msg)
+  if (typeof flat !== 'object' || flat === null) {
+    return textFromLangGraphMessage(flat, maxTextLen).trim()
   }
-  const m = msg as Record<string, unknown>
-  if (m.type === 'tool') return ''
-  return textFromLangGraphMessage(msg, maxTextLen).trim()
+  const m = flat as Record<string, unknown>
+  const kind = String(m.type || m.role || '').toLowerCase()
+  if (kind === 'tool') {
+    return toolMessageLivePreview(m, Math.min(TOOL_LIVE_PREVIEW, maxTextLen))
+  }
+  return textFromLangGraphMessage(m, maxTextLen).trim()
 }
 
+const LIVE_SEGMENT_SEP = '\n\n───\n\n'
+
+/** 与上一段内容相同则不再追加（custom 通道 + project SSE 双源、或轮询重复投递会导致成对重复） */
 function appendLive(cur: string | undefined, chunk: string): string {
-  if (!chunk) return cur || ''
-  const sep = cur ? '\n\n───\n\n' : ''
-  let next = (cur || '') + sep + chunk
+  const c = chunk.trim()
+  if (!c) return cur || ''
+  const base = cur || ''
+  const lastSeg = base.includes(LIVE_SEGMENT_SEP)
+    ? (base.split(LIVE_SEGMENT_SEP).pop() || '').trim()
+    : base.trim()
+  if (lastSeg === c) return base
+  const sep = base ? LIVE_SEGMENT_SEP : ''
+  let next = base + sep + chunk
   if (next.length > LIVE_CAP) next = next.slice(-LIVE_CAP)
   return next
 }
@@ -141,6 +222,13 @@ export function mergeSubagentStreamEvent(
     startedAt: Date.now(),
   }
 
+  const collabSubtaskId =
+    typeof ev.collab_subtask_id === 'string' && ev.collab_subtask_id.trim()
+      ? ev.collab_subtask_id.trim()
+      : typeof ev.collabSubtaskId === 'string' && ev.collabSubtaskId.trim()
+        ? ev.collabSubtaskId.trim()
+        : undefined
+
   const subagentFromEv =
     typeof ev.subagent_type === 'string' && ev.subagent_type.trim()
       ? ev.subagent_type.trim()
@@ -151,6 +239,7 @@ export function mergeSubagentStreamEvent(
     map[taskId] = {
       ...cur,
       taskId,
+      collabSubtaskId: collabSubtaskId ?? cur.collabSubtaskId,
       description: description ?? cur.description,
       subagentType: subagentFromEv ?? cur.subagentType,
       phase: 'running',
@@ -160,15 +249,20 @@ export function mergeSubagentStreamEvent(
   }
 
   if (type === 'task_running') {
-    const chunk = liveChunkFromLangGraphMessage(ev.message, 32000)
+    const chunk = liveChunkFromStreamMessage(ev.message, 32000)
     const tools = mergeToolsFromLangGraphMessage(cur.tools, ev.message)
     const mi = typeof ev.message_index === 'number' ? ev.message_index : undefined
     const tm = typeof ev.total_messages === 'number' ? ev.total_messages : undefined
-    const liveOutput = appendLive(cur.liveOutput, chunk)
-    const hintTail = chunk.slice(-HINT_LEN) || cur.progressHint
+    const prevLive = cur.liveOutput || ''
+    const liveOutput = appendLive(prevLive, chunk)
+    const hintTail =
+      liveOutput === prevLive && chunk.trim()
+        ? cur.progressHint
+        : chunk.slice(-HINT_LEN) || cur.progressHint
     map[taskId] = {
       ...cur,
       taskId,
+      collabSubtaskId: collabSubtaskId ?? cur.collabSubtaskId,
       phase: 'running',
       subagentType: subagentFromEv ?? cur.subagentType,
       tools,
@@ -200,6 +294,7 @@ export function mergeSubagentStreamEvent(
     map[taskId] = {
       ...cur,
       taskId,
+      collabSubtaskId: collabSubtaskId ?? cur.collabSubtaskId,
       phase: 'completed',
       subagentType: subagentFromEv ?? cur.subagentType,
       tools: (cur.tools || []).map((t) => {
@@ -218,6 +313,7 @@ export function mergeSubagentStreamEvent(
     map[taskId] = {
       ...cur,
       taskId,
+      collabSubtaskId: collabSubtaskId ?? cur.collabSubtaskId,
       phase: 'failed',
       subagentType: subagentFromEv ?? cur.subagentType,
       tools: (cur.tools || []).map((t) => {
@@ -236,6 +332,7 @@ export function mergeSubagentStreamEvent(
     map[taskId] = {
       ...cur,
       taskId,
+      collabSubtaskId: collabSubtaskId ?? cur.collabSubtaskId,
       phase: 'timed_out',
       subagentType: subagentFromEv ?? cur.subagentType,
       tools: (cur.tools || []).map((t) => {

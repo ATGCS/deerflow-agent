@@ -27,6 +27,7 @@ dependencies = [
     "firecrawl-py>=1.15.0",
     "tiktoken>=0.8.0",
     "ddgs>=9.10.0",
+    "playwright>=1.54.0",
     "duckdb>=1.4.4",
     "langchain-google-genai>=4.2.1",
     "langgraph-checkpoint-sqlite>=3.0.3",

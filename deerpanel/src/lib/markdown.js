@@ -90,6 +90,49 @@ export function renderMarkdown(text) {
   let inList = false
   let listType = ''
 
+  function isTableRow(line) {
+    return /^\s*\|.+\|\s*$/.test(line)
+  }
+
+  function isTableSeparator(line) {
+    // 形如 | --- | --- | 或 :---: 等
+    if (!isTableRow(line)) return false
+    const cells = line.split('|').slice(1, -1).map((c) => c.trim())
+    return cells.length > 0 && cells.every((c) => /^:?-{3,}:?$/.test(c))
+  }
+
+  function parseTable(startIndex) {
+    const headerLine = lines[startIndex]
+    const sepLine = lines[startIndex + 1]
+    if (!isTableRow(headerLine) || !isTableSeparator(sepLine)) return null
+
+    const headerCells = headerLine.split('|').slice(1, -1).map((c) => c.trim())
+    const rows = []
+    let i = startIndex + 2
+    while (i < lines.length && isTableRow(lines[i])) {
+      const rowCells = lines[i].split('|').slice(1, -1).map((c) => c.trim())
+      rows.push(rowCells)
+      i++
+    }
+    if (!rows.length) return null
+
+    let tableHtml = '<table><thead><tr>'
+    for (const cell of headerCells) {
+      tableHtml += `<th>${inlineFormat(cell)}</th>`
+    }
+    tableHtml += '</tr></thead><tbody>'
+    for (const row of rows) {
+      tableHtml += '<tr>'
+      for (let j = 0; j < headerCells.length; j++) {
+        const cell = row[j] != null ? row[j] : ''
+        tableHtml += `<td>${inlineFormat(cell)}</td>`
+      }
+      tableHtml += '</tr>'
+    }
+    tableHtml += '</tbody></table>'
+    return { html: tableHtml, nextIndex: i }
+  }
+
   for (let i = 0; i < lines.length; i++) {
     let line = lines[i]
 
@@ -132,6 +175,24 @@ export function renderMarkdown(text) {
     }
 
     if (inList) { result.push(`</${listType}>`); inList = false }
+
+    // 分割线（hr）：--- / *** / ___（可带空格）
+    // 注意：这里只处理“单独一行”的分割线，避免误伤普通文本。
+    const hrMatch = line.match(/^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/)
+    if (hrMatch) {
+      result.push('<hr />')
+      continue
+    }
+
+    // Markdown 表格（GFM 风格）：| a | b | + 分隔线 + 多行数据
+    if (isTableRow(line) && i + 1 < lines.length && isTableSeparator(lines[i + 1])) {
+      const parsed = parseTable(i)
+      if (parsed) {
+        result.push(parsed.html)
+        i = parsed.nextIndex - 1
+        continue
+      }
+    }
     if (line.trim() === '') { result.push(''); continue }
     if (!line.startsWith('<')) { result.push(`<p>${inlineFormat(line)}</p>`) }
     else { result.push(line) }

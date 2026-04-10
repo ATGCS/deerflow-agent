@@ -89,21 +89,26 @@ class AuthorizeExecutionRequest(BaseModel):
 @router.get("", summary="List All Tasks", description="Get a list of all tasks.")
 async def list_tasks() -> list[dict]:
     """List all tasks (flattened from all projects)."""
-    storage = get_project_storage()
-    projects = storage.list_projects()
+    try:
+        storage = get_project_storage()
+        projects = storage.list_projects()
 
-    all_tasks = []
-    for project_summary in projects:
-        project = storage.load_project(project_summary["id"])
-        if project:
-            for task in project.get("tasks", []):
-                task_data = task.copy()
-                task_data["parent_project_id"] = project["id"]
-                task_data["project_name"] = project.get("name", "")
-                all_tasks.append(task_data)
+        all_tasks = []
+        for project_summary in projects:
+            project = storage.load_project(project_summary["id"])
+            if project:
+                for task in project.get("tasks", []):
+                    task_data = task.copy()
+                    task_data["parent_project_id"] = project["id"]
+                    task_data["project_name"] = project.get("name", "")
+                    all_tasks.append(task_data)
 
-    all_tasks.sort(key=lambda x: x.get("created_at", ""), reverse=True)
-    return all_tasks
+        all_tasks.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+        return all_tasks
+    except Exception:
+        # UI dashboard should not hard-fail due to storage issues.
+        logger.exception("list_tasks failed; returning empty list.")
+        return []
 
 
 @router.get("/{task_id}", summary="Get Task", description="Get a task by ID.")

@@ -61,6 +61,39 @@ def _hash_tool_calls(tool_calls: list[dict]) -> str:
     return hashlib.md5(blob.encode()).hexdigest()[:12]
 
 
+def _is_supervisor_safe_repeat_callset(tool_calls: list[dict]) -> bool:
+    """Whether this tool-call set is a supervisor-only callset safe to repeat.
+
+    We allow repeated polling/launch orchestration calls, otherwise collaborative
+    executions can be falsely detected as loops and forcibly stopped.
+
+    This is intentionally conservative: only supervisor actions that are expected
+    to be retried (polling, start, status) are included.
+    """
+    if not tool_calls:
+        return False
+    for tc in tool_calls:
+        name = str(tc.get("name", "")).strip()
+        if name != "supervisor":
+            return False
+        args = tc.get("args", {})
+        if not isinstance(args, dict):
+            return False
+        action = str(args.get("action", "")).strip()
+        if action not in {
+            # explicit monitor loops
+            "monitor_execution_step",
+            "monitor_execution",
+            # normal orchestration loops (may be retried due to auth/gate/race)
+            "start_execution",
+            "get_status",
+            "list_subtasks",
+            "update_progress",
+        }:
+            return False
+    return True
+
+
 _WARNING_MSG = "[LOOP DETECTED] You are repeating the same tool calls. Stop calling tools and produce your final answer now. If you cannot complete the task, summarize what you accomplished so far."
 
 _HARD_STOP_MSG = "[FORCED STOP] Repeated tool calls exceeded the safety limit. Producing final answer with results collected so far."
@@ -130,6 +163,10 @@ class LoopDetectionMiddleware(AgentMiddleware[AgentState]):
 
         tool_calls = getattr(last_msg, "tool_calls", None)
         if not tool_calls:
+            return None, False
+        if _is_supervisor_safe_repeat_callset(tool_calls):
+            # Supervisor orchestration loops are often intentional (poll/start/status retries).
+            # Skip loop hard-stop logic so we don't abort active collaborative runs.
             return None, False
 
         thread_id = self._get_thread_id(runtime)

@@ -6,13 +6,50 @@
  * 参考文档：DeerFlow 前端实现进度.md - Task 1.1
  */
 
-/** 浏览器走当前源 + Vite `/api` 代理到 Gateway；非浏览器回退 8012 */
+/**
+ * API 路径解析：
+ * - Vite dev：走相对路径 `/api/*`（由 vite proxy 转发到 gateway）
+ * - 生产 Web：直连 gateway（默认 http://localhost:8012），避免没有 proxy 时 `/api/*` 打到前端自身
+ * - Tauri：优先走 Rust `gateway_proxy`（避免 CORS / mixed content）
+ */
+const isTauri = typeof window !== 'undefined' && !!window.__TAURI_INTERNALS__
+
+function guessGatewayBaseUrl() {
+  // 允许通过环境变量显式覆盖（用于 Web 部署把 gateway 放到别的域名/端口）
+  try {
+    const v = (import.meta && import.meta.env && import.meta.env.VITE_DEERFLOW_GATEWAY_URL) || ''
+    if (typeof v === 'string' && v.trim()) return v.trim().replace(/\/+$/, '')
+  } catch {
+    // ignore
+  }
+  const origin = (typeof window !== 'undefined' && window.location?.origin) ? window.location.origin : ''
+  if (!origin) return 'http://localhost:8012'
+  // dev server 默认 1421；桌面端 dev webview 常见 1420/1421 → gateway 8012
+  if (origin.includes(':1420') || origin.includes(':1421')) return origin.replace(/:\d+$/, ':8012')
+  // 本机任意端口的前端 → gateway 8012
+  if (origin === 'http://localhost' || /^http:\/\/localhost:\d+$/.test(origin)) {
+    return origin.replace(/(:\d+)?$/, ':8012')
+  }
+  // 其它域名：默认认为 gateway 与前端同源（由反向代理提供 /api）
+  return origin
+}
+
 function apiUrl(path) {
   const p = path.startsWith('/') ? path : `/${path}`
-  if (typeof window !== 'undefined' && window.location?.origin) {
-    return `/api${p}`
+  // Vite dev：保留相对路径走 proxy
+  try {
+    if (import.meta && import.meta.env && import.meta.env.DEV) return `/api${p}`
+  } catch {
+    // ignore
   }
-  return `http://localhost:8012/api${p}`
+  // 生产 Web：直连 gateway（避免 “Failed to fetch”）
+  const base = guessGatewayBaseUrl()
+  return `${base}/api${p}`
+}
+
+async function tauriTasksApi() {
+  const m = await import('./tauri-api.js')
+  return m.api
 }
 
 /**
@@ -25,10 +62,12 @@ export const tasksAPI = {
    */
   async listTasks() {
     try {
-      const response = await fetch(apiUrl('/tasks'))
-      if (!response.ok) {
-        throw new Error(`Failed to fetch tasks: ${response.status} ${response.statusText}`)
+      if (isTauri) {
+        const api = await tauriTasksApi()
+        return await api.listAllTasks()
       }
+      const response = await fetch(apiUrl('/tasks'))
+      if (!response.ok) throw new Error(`Failed to fetch tasks: ${response.status} ${response.statusText}`)
       return await response.json()
     } catch (error) {
       console.error('Error fetching tasks:', error)
@@ -43,11 +82,13 @@ export const tasksAPI = {
    */
   async getTask(taskId) {
     try {
+      if (isTauri) {
+        const api = await tauriTasksApi()
+        return await api.getTask(taskId)
+      }
       const response = await fetch(apiUrl(`/tasks/${taskId}`))
       if (!response.ok) {
-        if (response.status === 404) {
-          throw new Error(`Task not found: ${taskId}`)
-        }
+        if (response.status === 404) throw new Error(`Task not found: ${taskId}`)
         throw new Error(`Failed to get task: ${response.status} ${response.statusText}`)
       }
       return await response.json()
@@ -67,6 +108,10 @@ export const tasksAPI = {
    */
   async createTask(taskData) {
     try {
+      if (isTauri) {
+        const api = await tauriTasksApi()
+        return await api.createTask(String(taskData?.name || ''), String(taskData?.description || ''))
+      }
       const response = await fetch(apiUrl('/tasks'), {
         method: 'POST',
         headers: { 
@@ -93,6 +138,10 @@ export const tasksAPI = {
    */
   async startTask(taskId) {
     try {
+      if (isTauri) {
+        const api = await tauriTasksApi()
+        return await api.startTaskPlanning(taskId)
+      }
       const response = await fetch(apiUrl(`/tasks/${taskId}/start`), {
         method: 'POST',
         headers: { 
@@ -117,6 +166,10 @@ export const tasksAPI = {
    */
   async stopTask(taskId) {
     try {
+      if (isTauri) {
+        const api = await tauriTasksApi()
+        return await api.stopTaskExecution(taskId)
+      }
       const response = await fetch(apiUrl(`/tasks/${taskId}/stop`), {
         method: 'POST',
         headers: { 
@@ -145,6 +198,10 @@ export const tasksAPI = {
    */
   async updateTask(taskId, updates) {
     try {
+      if (isTauri) {
+        const api = await tauriTasksApi()
+        return await api.updateTask(taskId, updates || {})
+      }
       const response = await fetch(apiUrl(`/tasks/${taskId}`), {
         method: 'PUT',
         headers: { 
@@ -171,6 +228,10 @@ export const tasksAPI = {
    */
   async listSubtasks(taskId) {
     try {
+      if (isTauri) {
+        const api = await tauriTasksApi()
+        return await api.listSubtasks(taskId)
+      }
       const response = await fetch(apiUrl(`/tasks/${taskId}/subtasks`))
       if (!response.ok) {
         throw new Error(`Failed to fetch subtasks: ${response.status} ${response.statusText}`)
@@ -241,6 +302,10 @@ export const tasksAPI = {
    */
   async deleteTask(taskId) {
     try {
+      if (isTauri) {
+        const api = await tauriTasksApi()
+        return await api.deleteTask(taskId)
+      }
       const response = await fetch(apiUrl(`/tasks/${taskId}`), {
         method: 'DELETE',
         headers: { 

@@ -11,6 +11,24 @@ import { version as APP_VERSION } from '../package.json'
 import { statusIcon } from './lib/icons.js'
 import { tryShowEngagement } from './components/engagement.js'
 
+// 动态 import 偶发失败（Vite HMR/缓存失效/网络抖动）时，自动重载一次避免页面卡死。
+const DYNAMIC_IMPORT_RECOVERY_KEY = 'ytpanel_dynamic_import_recovered'
+window.addEventListener('unhandledrejection', (ev) => {
+  const msg = String((ev && ev.reason && (ev.reason.message || ev.reason)) || '')
+  if (!/Failed to fetch dynamically imported module/i.test(msg)) return
+  const recovered = sessionStorage.getItem(DYNAMIC_IMPORT_RECOVERY_KEY) === '1'
+  if (recovered) return
+  try {
+    sessionStorage.setItem(DYNAMIC_IMPORT_RECOVERY_KEY, '1')
+  } catch {}
+  // eslint-disable-next-line no-console
+  console.warn('[boot] dynamic import failed, reloading once:', msg)
+  window.location.reload()
+})
+window.setTimeout(() => {
+  try { sessionStorage.removeItem(DYNAMIC_IMPORT_RECOVERY_KEY) } catch {}
+}, 15000)
+
 // 样式
 import './style/variables.css'
 import './style/reset.css'

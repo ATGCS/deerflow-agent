@@ -7,6 +7,7 @@ from deerflow.reflection import resolve_variable
 from deerflow.sandbox.security import is_host_bash_allowed
 from deerflow.tools.builtins import ask_clarification_tool, present_file_tool, supervisor_tool, task_tool, view_image_tool
 from deerflow.tools.builtins.tool_search import reset_deferred_registry
+from deerflow.community.baidu_search import web_search_tool
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,15 @@ def _is_host_bash_tool(tool: object) -> bool:
     return False
 
 
+def _is_disabled_tool(tool: object) -> bool:
+    """Hard-disable unstable providers/tools at load time."""
+    use = str(getattr(tool, "use", "") or "")
+    # User requirement: do not expose jina_ai tools.
+    if "deerflow.community.jina_ai" in use:
+        return True
+    return False
+
+
 def get_available_tools(
     groups: list[str] | None = None,
     include_mcp: bool = True,
@@ -50,19 +60,30 @@ def get_available_tools(
         include_mcp: Whether to include tools from MCP servers (default: True).
         model_name: Optional model name to determine if vision tools should be included.
         subagent_enabled: Whether to include subagent tools (task, task_status).
-        include_search: Whether to include tool_search and MCP tools (default: True).
+        include_search: Whether to include web_search/tool_search and MCP tools (default: False).
 
     Returns:
         List of available tools.
     """
     config = get_app_config()
     tool_configs = [tool for tool in config.tools if groups is None or tool.group in groups]
+    tool_configs = [tool for tool in tool_configs if not _is_disabled_tool(tool)]
 
     # Do not expose host bash by default when LocalSandboxProvider is active.
     if not is_host_bash_allowed(config):
         tool_configs = [tool for tool in tool_configs if not _is_host_bash_tool(tool)]
 
     loaded_tools = [resolve_variable(tool.use, BaseTool) for tool in tool_configs]
+
+    # Always ensure Baidu-based `web_search` is available when include_search=True,
+    # even if not explicitly listed in config.tools. This matches the system prompt
+    # which references `web_search` as the default search surface.
+    if include_search:
+        names = {getattr(t, "name", "") for t in loaded_tools}
+        if "web_search" not in names:
+            loaded_tools.append(web_search_tool)
+    if not include_search:
+        loaded_tools = [t for t in loaded_tools if getattr(t, "name", "") != "web_search"]
 
     # Conditionally add tools based on config
     builtin_tools = BUILTIN_TOOLS.copy()

@@ -1,89 +1,778 @@
-/* Agent 管理页面样式 */
-.agent-list {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-  gap: 16px;
+/* ============================================================
+ * 角色管理页面 — 全新样式
+ * ============================================================ */
+
+/* ---- 页面容器 ---- */
+.role-page {
+  padding: 0;
 }
 
-.agent-card {
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  padding: 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  transition: border-color 0.2s, box-shadow 0.2s;
-}
-
-.agent-card:hover {
-  border-color: var(--primary);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-}
-
-.agent-card-header {
+/* ---- 头部 ---- */
+.role-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  padding: 28px 32px 20px;
+}
+.role-header-left { display: flex; flex-direction: column; gap: 4px; }
+.role-title {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 800;
+  color: var(--text-primary);
+  letter-spacing: -0.3px;
+}
+.role-desc {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-tertiary);
+  font-weight: 400;
+}
+.role-header-right { display: flex; gap: 8px; }
+
+/* ---- 工具栏（搜索 + 统计） ---- */
+.role-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 32px 18px;
+}
+.role-search-wrap {
+  position: relative;
+  width: 360px;
+}
+.role-search-icon {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-tertiary);
+  pointer-events: none;
+}
+.role-search-input {
+  width: 100%;
+  height: 38px;
+  padding: 0 14px 0 38px;
+  border: 1.5px solid var(--border-primary, rgba(128,128,128,0.2));
+  border-radius: 12px;
+  background: var(--bg-secondary, #f8f9fb);
+  color: var(--text-primary);
+  font-size: 13.5px;
+  outline: none;
+  transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
+  box-sizing: border-box;
+}
+.role-search-input::placeholder { color: var(--text-tertiary); }
+.role-search-input:focus {
+  border-color: #6366f1;
+  box-shadow: 0 0 0 3px rgba(99,102,241,0.10);
+  background: #fff;
 }
 
-.agent-card-title {
+.role-total {
+  font-size: 12.5px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+/* ---- 卡片网格 ---- */
+.role-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 16px;
+  padding: 0 32px 40px;
+}
+
+/* ---- 空状态 ---- */
+.role-empty {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 200px;
+  color: var(--text-tertiary);
+  font-size: 14px;
+}
+
+
+/* ============================================================
+ * 角色卡片（与技能/MCP 卡片风格统一）
+ * ============================================================ */
+.role-card {
+  background: var(--bg-secondary, #fafbfc);
+  border: 1.5px solid var(--border-light, rgba(128,128,128,0.14));
+  border-radius: 12px;
+  padding: 18px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  /* 固定最小高度保证网格对齐 */
+  min-height: 200px;
+  transition: border-color 0.18s, box-shadow 0.18s, transform 0.15s;
+  position: relative;
+  overflow: hidden;
+}
+.role-card:hover {
+  border-color: color-mix(in srgb, var(--accent, #6366f1) 30%, transparent);
+  box-shadow: 0 2px 12px color-mix(in srgb, var(--accent, #6366f1) 7%, transparent);
+  transform: translateY(-1px);
+}
+
+/* 卡片顶部：头像 + 名字（固定高度区） */
+.role-card-top {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-shrink: 0;
+}
+
+.role-avatar {
+  width: 46px; height: 46px;
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 19px;
+  font-weight: 800;
+  color: #fff;
+  flex-shrink: 0;
+  letter-spacing: -0.5px;
+}
+
+.role-info { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.role-name-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.role-name {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: -0.2px;
+}
+.role-model {
+  font-size: 12px;
+  font-weight: 600;
+  font-family: var(--font-mono, monospace);
+  letter-spacing: 0;
+}
+
+/* 角色描述：固定最大2行，flex自动填充剩余空间 */
+.role-desc-text {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  /* 自动填充中间区域 */
+  flex: 1;
+  min-height: calc(2 * 1.55em);
+}
+
+/* 标签 — 固定在底部，flex-shrink:0 不被压缩 */
+.role-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.role-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  background: color-mix(in srgb, var(--tc, #6366f1) 18%, rgba(255,255,255,.92));
+  border: 1px solid color-mix(in srgb, var(--tc, #6366f1) 40%, transparent);
+  border-radius: 8px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--tc, #6366f1);
+  --tag-tool: #d97706;
+  --tag-mcp: #0891b2;
+  --tag-skill: #7c3aed;
+}
+.rt-icon { font-size: 11px; line-height: 1; }
+.role-tag--dim {
+  opacity: 0.7;
+}
+.role-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+}
+.role-badge--default {
+  background: linear-gradient(135deg, #dcfce7, #bbf7d0);
+  color: #15803d;
+}
+
+/* ============================================================
+ * Skill Card — 技能卡片（名称 + 描述）
+ * ============================================================ */
+.re-grid.skill-card-list {
+  grid-template-columns: repeat(2, 1fr) !important;
+  gap: 10px;
+  max-height: none;
+}
+.skill-card {
+  display: flex;
+  flex-direction: column;
+  padding: 14px 16px;
+  border: 1.5px solid var(--border-light, rgba(128,128,128,0.14));
+  border-radius: 12px;
+  background: var(--bg-secondary, #fafbfc);
+  cursor: default;
+  transition: border-color 0.18s, box-shadow 0.18s, transform 0.15s;
+}
+.skill-card:hover {
+  border-color: color-mix(in srgb, var(--tag-skill, #8b5cf6) 30%, transparent);
+  box-shadow: 0 2px 12px color-mix(in srgb, var(--tag-skill, #8b5cf6) 7%, transparent);
+  transform: translateY(-1px);
+}
+.skill-card--editable {
+  cursor: pointer;
+  position: relative;
+}
+.skill-card--editable input[type="checkbox"] {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  width: 20px;
+  height: 20px;
+  accent-color: var(--tag-skill, #8b5cf6);
+  cursor: pointer;
+  z-index: 2;
+}
+/* 当 checkbox 被勾选时，给卡片一个激活样式 */
+.skill-card--editable input:checked ~ .skill-card-head .skill-card-name,
+.skill-card--editable input:checked ~ .skill-card-desc {
+  opacity: 1;
+}
+.skill-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.skill-card-icon {
+  font-size: 22px;
+  line-height: 1;
+  width: 32px; height: 32px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: color-mix(in srgb, var(--tag-skill, #8b5cf6) 10%, transparent);
+  border-radius: 9px;
+  flex-shrink: 0;
+}
+.skill-card-name {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: -0.2px;
+}
+.skill-card--editable .skill-card-name {
+  /* 给 checkbox 留空间，防止文字和开关重叠 */
+  padding-right: 28px;
+}
+.skill-card-desc {
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+
+/* 底部按钮区 — 固定在卡片最底 */
+.role-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: auto;
+  padding-top: 10px;
+  flex-shrink: 0;
+}
+
+.role-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 12px;
+  border: 1.5px solid var(--border-primary, rgba(128,128,128,0.2));
+  border-radius: 10px;
+  background: var(--bg-primary, #fff);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+.role-btn:hover {
+  border-color: #6366f1;
+  color: #6366f1;
+  background: rgba(99,102,241,0.04);
+}
+.role-btn--primary {
+  background: linear-gradient(135deg, #6366f1, #818cf8);
+  border-color: transparent;
+  color: #fff;
+}
+.role-btn--primary:hover {
+  background: linear-gradient(135deg, #4f46e5, #6366f1);
+  color: #fff;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(99,102,241,0.35);
+}
+.role-btn--danger {
+  color: var(--error, #ef4444);
+  border-color: rgba(239,68,68,0.2);
+}
+.role-btn--danger:hover {
+  background: rgba(239,68,68,0.06);
+  border-color: rgba(239,68,68,0.4);
+  color: var(--error, #ef4444);
+}
+
+/* 角色卡片删除按钮（右下角，hover 显示） */
+.role-delete-btn {
+  position: absolute;
+  bottom: 8px; right: 10px;
+  display: flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px;
+  padding: 0; margin: 0;
+  border: none; border-radius: var(--radius-xs,4px);
+  background: transparent;
+  color: transparent;
+  cursor: pointer;
+  opacity: 0;
+  transition: all 0.18s ease;
+}
+.role-card:hover .role-delete-btn {
+  opacity: 1;
+  color: var(--text-tertiary);
+}
+.role-delete-btn:hover {
+  background: rgba(239,68,68,.1);
+  color: #ef4444 !important;
+}
+
+
+/* ============================================================
+ * 骨架屏
+ * ============================================================ */
+.skeleton-card {
+  animation: pulse-bg 1.6s ease-in-out infinite;
+  cursor: default !important;
+}
+.skeleton-avatar {
+  width: 46px; height: 46px;
+  border-radius: 14px;
+  background: rgba(128,128,128,0.12);
+  flex-shrink: 0;
+}
+.skeleton-lines { display: flex; flex-direction: column; gap: 8px; flex: 1; }
+.skeleton-line {
+  height: 14px;
+  border-radius: 6px;
+  background: rgba(128,128,128,0.10);
+}
+.skeleton-line.w50 { width: 45%; }
+.skeleton-line.w70 { width: 65%; }
+.skeleton-tag {
+  height: 24px;
+  width: 60px;
+  border-radius: 8px;
+  background: rgba(128,128,128,0.09);
+}
+.skeleton-tag.short { width: 45px; }
+.skeleton-btn {
+  height: 32px;
+  width: 56px;
+  border-radius: 10px;
+  background: rgba(128,128,128,0.09);
+}
+@keyframes pulse-bg {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+
+/* ============================================================
+ * 角色编辑器弹窗（re-* 前缀）
+ * ============================================================ */
+
+/* Overlay */
+.role-editor-overlay {
+  z-index: 10000;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: blur(6px);
+}
+
+/* Modal 容器 — 固定尺寸 */
+.role-editor-modal {
+  width: 900px;
+  height: 650px;
+  border-radius: 18px;
+  background: var(--bg-primary, #fff);
+  box-shadow:
+    0 0 0 1px var(--border-primary, rgba(128,128,128,0.15)),
+    0 30px 90px rgba(0, 0, 0, 0.2),
+    0 8px 24px rgba(0, 0, 0, 0.08);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* 头部 */
+.re-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--border-primary, rgba(128,128,128,0.12));
+  background: linear-gradient(to bottom, var(--bg-secondary, #f8f9fb), var(--bg-primary, #fff));
+  flex-shrink: 0;
+}
+.re-header-left {
   display: flex;
   align-items: center;
   gap: 10px;
 }
-
-.agent-id {
-  font-family: var(--font-mono);
-  font-size: var(--font-size-lg);
-  font-weight: 600;
+.re-header-dot {
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  box-shadow: 0 0 8px currentColor;
+}
+.re-header strong {
+  font-size: 15px;
+  font-weight: 700;
   color: var(--text-primary);
+  letter-spacing: -0.2px;
 }
-
-.badge {
-  font-size: var(--font-size-xs);
-  padding: 2px 8px;
-  border-radius: var(--radius-sm);
+.re-close {
+  width: 32px; height: 32px;
+  display: flex; align-items: center; justify-content: center;
+  border: none; border-radius: 10px; background: transparent;
+  color: var(--text-tertiary); font-size: 22px; cursor: pointer;
+  transition: all 0.15s;
 }
+.re-close:hover { background: rgba(239,68,68,0.08); color: var(--error); }
 
-.badge-success {
-  background: var(--success-muted);
-  color: var(--success);
-}
-
-.agent-card-actions {
+/* 主体：左右分栏 */
+.re-body {
   display: flex;
-  gap: 8px;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
 }
 
-.agent-card-body {
+/* 左侧导航 */
+.re-nav {
+  width: 172px;
+  flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 3px;
+  padding: 16px 10px;
+  border-right: 1px solid var(--border-primary, rgba(128,128,128,0.1));
+  background: var(--bg-secondary, #fafbfc);
 }
-
-.agent-info-row {
+.re-nav-item {
   display: flex;
-  gap: 12px;
-  font-size: var(--font-size-sm);
-}
-
-.agent-info-label {
-  color: var(--text-tertiary);
-  min-width: 60px;
-  flex-shrink: 0;
-}
-
-.agent-info-value {
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 14px;
+  border: none;
+  border-radius: 11px;
+  background: transparent;
   color: var(--text-secondary);
-  word-break: break-all;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.re-nav-item:hover {
+  background: rgba(99,102,241,0.06);
+  color: var(--text-primary);
+}
+.re-nav-item--active {
+  background: linear-gradient(135deg, rgba(99,102,241,0.10), rgba(139,92,246,0.06));
+  color: #4338ca;
+  font-weight: 600;
+  border: 1px solid rgba(99,102,241,0.12);
+}
+.re-nav-ico { font-size: 15px; line-height: 1; width: 18px; text-align: center; }
+
+/* 右侧内容区 */
+.re-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  background: var(--bg-primary, #fff);
 }
 
-.agent-card-footer {
-  margin-top: auto;
-  padding-top: 12px;
-  border-top: 1px solid var(--border);
+.re-panel-head {
+  padding: 22px 28px 14px;
+  border-bottom: 1px solid var(--border-light, rgba(128,128,128,0.07));
+  flex-shrink: 0;
+  background: var(--bg-primary, #fff);
+}
+.re-panel-head h3 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 750;
+  color: var(--text-primary);
+  letter-spacing: -0.3px;
+}
+.re-panel-head p {
+  margin: 4px 0 0;
+  font-size: 12.5px;
+  color: var(--text-tertiary);
+}
+
+/* 面板容器 */
+.re-panels {
+  padding: 20px 28px;
+}
+.re-panel[hidden] { display: none !important; }
+
+/* 搜索框 */
+.re-search {
+  width: 100%;
+  padding: 9px 14px;
+  border: 1.5px solid var(--border-primary, rgba(128,128,128,0.18));
+  border-radius: 11px;
+  background: var(--bg-secondary, #f8f9fb);
+  color: var(--text-primary);
+  font-size: 13px;
+  outline: none;
+  transition: all 0.2s;
+  box-sizing: border-box;
+  margin-bottom: 12px;
+}
+.re-search::placeholder { color: var(--text-tertiary); }
+.re-search:focus {
+  border-color: #6366f1;
+  box-shadow: 0 0 0 3px rgba(99,102,241,0.10);
+  background: #fff;
+}
+
+/* 工具栏 */
+.re-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  padding: 9px 14px;
+  background: var(--bg-secondary, #f8f9fb);
+  border-radius: 11px;
+  border: 1px solid var(--border-light, rgba(128,128,128,0.08));
+}
+.re-count {
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+.re-num {
+  font-weight: 800;
+  color: #4f46e5;
+  font-style: normal;
+  margin-right: 3px;
+  font-size: 14px;
+}
+.re-bar-btns { display: flex; gap: 6px; }
+
+/* 网格列表 */
+.re-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 8px;
+  max-height: 380px;
+  overflow-y: auto;
+  padding: 4px;
+}
+.re-empty {
+  grid-column: 1 / -1;
+  text-align: center;
+  padding: 28px 0;
+  color: var(--text-tertiary);
+  font-size: 13px;
+}
+
+/* Checkbox 卡片 */
+.re-check {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 13px;
+  border: 1.5px solid var(--border-light, rgba(128,128,128,0.12));
+  border-radius: 11px;
+  cursor: pointer;
+  transition: all 0.15s;
+  user-select: none;
+  background: var(--bg-secondary, #f8f9fb);
+}
+.re-check:hover {
+  border-color: #6366f1;
+  background: rgba(99,102,241,0.03);
+  box-shadow: 0 2px 8px rgba(99,102,241,0.06);
+}
+.re-check input[type=checkbox] {
+  accent-color: #4f46e5;
+  width: 17px; height: 17px; flex-shrink: 0;
+  cursor: pointer;
+}
+.re-ci-icon { font-size: 17px; flex-shrink: 0; line-height: 1; }
+.re-ci-text { overflow: hidden; display: flex; flex-direction: column; gap: 2px; }
+.re-ci-text strong {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-primary);
+}
+.re-ci-text small {
+  display: block;
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 底部操作栏 */
+.re-footer {
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
+  gap: 10px;
+  padding: 14px 24px;
+  border-top: 1px solid var(--border-primary, rgba(128,128,128,0.1));
+  background: var(--bg-secondary, #fafbfc);
+  flex-shrink: 0;
+}
+.re-footer .btn {
+  padding: 8px 22px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+
+/* ============================================================
+ * 详情弹窗专用样式（和编辑器同款 UI，只读模式）
+ * ============================================================ */
+
+/* 基本信息：字段网格 */
+.detail-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px 24px;
+}
+.detail-field { display: flex; flex-direction: column; gap: 5px; }
+.detail-label {
+  font-size: 11.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-tertiary);
+}
+.detail-value {
+  font-size: 14px;
+  color: var(--text-primary);
+  padding: 10px 14px;
+  background: var(--bg-secondary, #f8f9fb);
+  border-radius: 10px;
+  border: 1px solid var(--border-light, rgba(128,128,128,0.08));
+  line-height: 1.5;
+  min-height: 42px;
+  word-break: break-all;
+}
+.detail-value code {
+  font-family: var(--font-mono, monospace);
+  background: rgba(99,102,241,0.08);
+  padding: 2px 7px;
+  border-radius: 5px;
+  font-size: 13px;
+  color: #4f46e5;
+}
+
+/* 内联标签 */
+.re-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 9px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  background: rgba(99,102,241,0.08);
+  color: #4338ca;
+  border: 1px solid rgba(99,102,241,0.12);
+}
+
+/* 详情列表中的卡片（只读） */
+.detail-list .re-check {
+  cursor: default;
+  position: relative;
+}
+.detail-list .re-check:hover {
+  border-color: var(--border-light, rgba(128,128,128,0.12));
+  background: var(--bg-secondary, #f8f9fb);
+  box-shadow: none;
+  transform: none;
+}
+/* 未选中项：半透明 */
+.detail-list .re-check--dim {
+  opacity: 0.40;
+}
+.detail-list .re-check--dim:hover {
+  opacity: 0.50;
+}
+/* 已选中标记 ✓ */
+.re-check-ok {
+  margin-left: auto;
+  flex-shrink: 0;
+  width: 22px; height: 22px;
+  display: flex; align-items: center; justify-content: center;
+  background: linear-gradient(135deg, #10b981, #059669);
+  color: #fff;
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+/* SOUL 人格展示 */
+.detail-soul-wrap {
+  height: 100%;
+  max-height: 420px;
+  overflow-y: auto;
+}
+.detail-soul {
+  margin: 0;
+  padding: 20px 22px;
+  font-family: var(--font-mono, 'Cascadia Code', 'Fira Code', Consolas, monospace);
+  font-size: 12.5px;
+  line-height: 1.75;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--bg-secondary, #fafbfc);
+  border: 1px solid var(--border-light, rgba(128,128,128,0.09));
+  border-radius: 12px;
+  min-height: 200px;
 }
