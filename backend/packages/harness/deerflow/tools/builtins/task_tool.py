@@ -3,7 +3,6 @@
 import asyncio
 import json
 import logging
-import uuid
 from dataclasses import replace
 from typing import Annotated, Any
 
@@ -28,6 +27,7 @@ from deerflow.collab.storage import (
     rollup_root_task_progress_from_subtasks,
 )
 from deerflow.collab.thread_collab import load_thread_collab_state
+from deerflow.collab.id_format import make_trace_id
 from deerflow.config.paths import get_paths
 from deerflow.subagents import SubagentExecutor, get_available_subagent_names, get_subagent_config
 from deerflow.subagents.executor import SubagentResult, SubagentStatus, cleanup_background_task, get_background_task_result
@@ -424,7 +424,7 @@ async def task_tool(
 
         metadata = runtime.config.get("metadata", {})
         parent_model = metadata.get("model_name")
-        trace_id = metadata.get("trace_id") or str(uuid.uuid4())[:8]
+        trace_id = metadata.get("trace_id") or make_trace_id()
 
     from deerflow.tools import get_available_tools
 

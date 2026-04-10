@@ -15,13 +15,13 @@ from __future__ import annotations
 import json
 import logging
 import os
-import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
 
 from langchain.tools import tool
+from deerflow.collab.id_format import make_automation_id
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +52,7 @@ class AutomationStatus(str, Enum):
 @dataclass
 class AutomationTask:
     """Represents a scheduled automation task."""
-    id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
+    id: str = field(default_factory=make_automation_id)
     name: str = ""
     prompt: str = ""  # Task description for execution
     schedule_type: str = "recurring"  # "recurring" or "once"

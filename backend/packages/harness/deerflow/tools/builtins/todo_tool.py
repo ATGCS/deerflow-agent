@@ -5,12 +5,12 @@ Todos are stored in memory and do NOT persist across conversations or to collab 
 For cross-agent task orchestration with dependencies, use the supervisor tool instead.
 """
 
-import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 
 from langchain.tools import tool
+from deerflow.collab.id_format import make_todo_id
 
 
 # ─── Data structures ──────────────────────────────────────────────
@@ -24,7 +24,7 @@ class TodoStatus(str, Enum):
 
 @dataclass
 class TodoItem:
-    id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
+    id: str = field(default_factory=make_todo_id)
     content: str = ""
     status: TodoStatus = TodoStatus.PENDING
     created_at: str = field(default_factory=lambda: datetime.now().isoformat(timespec="seconds"))

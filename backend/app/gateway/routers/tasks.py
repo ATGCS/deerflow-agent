@@ -1,7 +1,6 @@
 """Tasks API router for multi-agent collaboration - task-centric model."""
 
 import logging
-import uuid
 from datetime import datetime
 
 from fastapi import APIRouter, Body, HTTPException
@@ -15,6 +14,7 @@ from deerflow.collab.storage import (
     new_project_bundle_root_task,
 )
 from deerflow.collab.thread_collab import advance_collab_phase_to_executing_for_task
+from deerflow.collab.id_format import make_subtask_id
 from deerflow.config.paths import get_paths
 from app.gateway.routers.events import emit_task_completed, emit_task_progress
 
@@ -312,7 +312,7 @@ async def add_subtask(task_id: str, request: AddSubtaskRequest) -> dict:
                 if task.get("id") == task_id:
                     now = datetime.utcnow().isoformat() + "Z"
                     subtask = {
-                        "id": str(uuid.uuid4())[:8],
+                        "id": make_subtask_id(),
                         "name": request.name,
                         "description": request.description,
                         "status": "pending",

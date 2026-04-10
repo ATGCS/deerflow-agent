@@ -2,8 +2,8 @@
 
 import json
 import logging
+import re
 import threading
-import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -17,15 +17,32 @@ from deerflow.collab.models import (
     TaskMemory,
     TaskStatus,
 )
+from deerflow.collab.id_format import make_fact_id, make_project_id, make_task_id
 
 logger = logging.getLogger(__name__)
+_SAFE_TASK_ID_RE = re.compile(r"^[A-Za-z0-9_\-]+$")
+
+
+def _resolve_storage_dir(paths: Any, leaf: str) -> Path:
+    """Resolve canonical storage dir with backward-compatible fallback.
+
+    Canonical (new):   {base_dir}/{leaf}
+    Legacy (fallback): {base_dir}/.deer-flow/{leaf}
+    """
+    canonical = Path(paths.base_dir) / leaf
+    legacy = Path(paths.base_dir) / ".deer-flow" / leaf
+    # If legacy has data and canonical does not, keep reading/writing legacy
+    # to avoid "data disappeared" during rollout.
+    if not canonical.exists() and legacy.exists():
+        return legacy
+    return canonical
 
 
 def create_empty_project(name: str = "", description: str = "") -> dict[str, Any]:
     """Create an empty project structure."""
     now = datetime.utcnow().isoformat() + "Z"
     return {
-        "id": str(uuid.uuid4())[:8],
+        "id": make_project_id(),
         "name": name,
         "description": description,
         "tasks": [],
@@ -45,7 +62,7 @@ def create_empty_task(
     """Create an empty task structure."""
     now = datetime.utcnow().isoformat() + "Z"
     return {
-        "id": str(uuid.uuid4())[:8],
+        "id": make_task_id(),
         "name": name,
         "description": description,
         "status": TaskStatus.PENDING.value,
@@ -96,7 +113,7 @@ class ProjectStorage:
         if storage_dir is None:
             from deerflow.config.paths import get_paths
             paths = get_paths()
-            storage_dir = paths.base_dir / ".deer-flow" / "projects"
+            storage_dir = _resolve_storage_dir(paths, "projects")
 
         self._storage_dir = Path(storage_dir)
         self._index_file = self._storage_dir / "index.json"
@@ -255,7 +272,7 @@ class TaskMemoryStorage:
         if storage_dir is None:
             from deerflow.config.paths import get_paths
             paths = get_paths()
-            storage_dir = paths.base_dir / ".deer-flow" / "task_memory"
+            storage_dir = _resolve_storage_dir(paths, "task_memory")
 
         self._storage_dir = Path(storage_dir)
         # Cache mtime using nanoseconds to avoid stale reads when writes happen within
@@ -426,7 +443,7 @@ class AgentRuntimeStorage:
         if storage_dir is None:
             from deerflow.config.paths import get_paths
             paths = get_paths()
-            storage_dir = paths.base_dir / ".deer-flow" / "agent_runtime"
+            storage_dir = _resolve_storage_dir(paths, "agent_runtime")
 
         self._storage_dir = Path(storage_dir)
         self._runtime_file = self._storage_dir / "runtime.json"
@@ -468,6 +485,72 @@ class AgentRuntimeStorage:
                 self._save_runtime(runtime_data)
                 return True
             return False
+
+
+class TaskStreamLogStorage:
+    """Append-only task stream event logs for debug/replay bootstrap."""
+
+    def __init__(self, storage_dir: Path | None = None):
+        if storage_dir is None:
+            from deerflow.config.paths import get_paths
+
+            paths = get_paths()
+            storage_dir = _resolve_storage_dir(paths, "task_stream_logs")
+        self._storage_dir = Path(storage_dir)
+        self._lock = threading.RLock()
+
+    def _ensure_dir(self) -> None:
+        self._storage_dir.mkdir(parents=True, exist_ok=True)
+
+    def _validate_task_id(self, task_id: str) -> str:
+        tid = str(task_id or "").strip()
+        if not tid or not _SAFE_TASK_ID_RE.match(tid):
+            raise ValueError(f"Invalid task_id {task_id!r}: only alphanumeric characters, hyphens, and underscores are allowed.")
+        return tid
+
+    def _log_file(self, task_id: str) -> Path:
+        tid = self._validate_task_id(task_id)
+        return self._storage_dir / f"{tid}.jsonl"
+
+    def append_event(self, task_id: str, event: dict[str, Any]) -> bool:
+        """Append one JSON event line for task_id."""
+        try:
+            target = self._log_file(task_id)
+            self._ensure_dir()
+            line = json.dumps(event, ensure_ascii=False, default=str)
+            with self._lock:
+                with open(target, "a", encoding="utf-8") as f:
+                    f.write(line + "\n")
+            return True
+        except Exception:
+            logger.exception("Failed to append task stream event task_id=%s", task_id)
+            return False
+
+    def tail_events(self, task_id: str, limit: int = 200) -> list[dict[str, Any]]:
+        """Read the last N events from task log file."""
+        limit_n = max(1, min(int(limit or 200), 1000))
+        target = self._log_file(task_id)
+        if not target.exists():
+            return []
+        try:
+            with self._lock:
+                with open(target, encoding="utf-8") as f:
+                    lines = f.readlines()
+            out: list[dict[str, Any]] = []
+            for ln in lines[-limit_n:]:
+                s = (ln or "").strip()
+                if not s:
+                    continue
+                try:
+                    obj = json.loads(s)
+                    if isinstance(obj, dict):
+                        out.append(obj)
+                except json.JSONDecodeError:
+                    continue
+            return out
+        except Exception:
+            logger.exception("Failed to tail task stream events task_id=%s", task_id)
+            return []
 
     def get_agent(self, agent_id: str) -> dict[str, Any] | None:
         """Get an agent's runtime status."""
@@ -712,7 +795,7 @@ def persist_task_memory_after_subagent_run(
         else:
             mem["status"] = TaskStatus.FAILED.value
             mem["completed_at"] = now
-        fact_id = f"subagent_{uuid.uuid4().hex[:16]}"
+        fact_id = make_fact_id()
         snippet = (output_summary or "").strip()
         if len(snippet) > 500:
             snippet = snippet[:500] + "…"
@@ -787,6 +870,7 @@ def new_project_bundle_root_task(
 _storage_instance: ProjectStorage | None = None
 _task_memory_instance: TaskMemoryStorage | None = None
 _agent_runtime_instance: AgentRuntimeStorage | None = None
+_task_stream_log_instance: TaskStreamLogStorage | None = None
 _storage_lock = threading.Lock()
 
 
@@ -827,6 +911,19 @@ def get_agent_runtime_storage() -> AgentRuntimeStorage:
             return _agent_runtime_instance
         _agent_runtime_instance = AgentRuntimeStorage()
         return _agent_runtime_instance
+
+
+def get_task_stream_log_storage() -> TaskStreamLogStorage:
+    """Get the task stream log storage instance."""
+    global _task_stream_log_instance
+    if _task_stream_log_instance is not None:
+        return _task_stream_log_instance
+
+    with _storage_lock:
+        if _task_stream_log_instance is not None:
+            return _task_stream_log_instance
+        _task_stream_log_instance = TaskStreamLogStorage()
+        return _task_stream_log_instance
 
 
 from deerflow.collab.authorize_execution import authorize_main_task_execution  # noqa: E402

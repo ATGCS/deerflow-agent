@@ -18,12 +18,12 @@ import json
 import logging
 import os
 import re
-import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 
 from langchain.tools import tool
+from deerflow.collab.id_format import make_memory_id
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +44,7 @@ def _ensure_dir() -> Path:
 @dataclass
 class MemoryEntry:
     """Single knowledge entry."""
-    id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
+    id: str = field(default_factory=make_memory_id)
     title: str = ""
     knowledge: str = ""
     category: str = "general"

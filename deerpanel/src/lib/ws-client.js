@@ -11,6 +11,21 @@ export function uuid() {
   })
 }
 
+function makeFormattedId(prefix) {
+  const d = new Date()
+  const ts = [
+    d.getUTCFullYear(),
+    String(d.getUTCMonth() + 1).padStart(2, '0'),
+    String(d.getUTCDate()).padStart(2, '0'),
+    String(d.getUTCHours()).padStart(2, '0'),
+    String(d.getUTCMinutes()).padStart(2, '0'),
+    String(d.getUTCSeconds()).padStart(2, '0'),
+  ].join('')
+  const rand = String(Math.floor(Math.random() * 1000000)).padStart(6, '0')
+  const p = String(prefix || 'ID').trim() || 'ID'
+  return `${p}_${ts}_${rand}`
+}
+
 const SESSION_MAP_KEY = 'deerflow-chat-session-map-v1'
 const MAIN_SESSION_KEY = 'agent:main:main'
 const VIRTUAL_PATH_MODE_KEY = 'deerpanel_use_virtual_paths'
@@ -490,24 +505,46 @@ function debugPayloadSnippet(payload, maxLen = 300) {
 }
 
 async function createThreadViaApi(sessionKey) {
-  return fetchJson('/api/langgraph/threads', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ metadata: { session_key: sessionKey } }),
-  })
+  const desiredThreadId = makeFormattedId('Thread')
+  try {
+    return await fetchJson('/api/langgraph/threads', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ thread_id: desiredThreadId, metadata: { session_key: sessionKey } }),
+    })
+  } catch {
+    // backward compatibility: some servers reject explicit thread_id
+    return fetchJson('/api/langgraph/threads', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ metadata: { session_key: sessionKey } }),
+    })
+  }
 }
 
 async function createThreadViaTauriProxy(sessionKey) {
   if (!isDeerflowTauri()) return null
   const { invoke } = await import('@tauri-apps/api/core')
-  const res = await invoke('gateway_proxy', {
+  const desiredThreadId = makeFormattedId('Thread')
+  let res = await invoke('gateway_proxy', {
     request: {
       method: 'POST',
       path: '/api/langgraph/threads',
-      body: { metadata: { session_key: sessionKey } },
+      body: { thread_id: desiredThreadId, metadata: { session_key: sessionKey } },
       query: null,
     },
   })
+  if (!res?.ok) {
+    // backward compatibility: some servers reject explicit thread_id
+    res = await invoke('gateway_proxy', {
+      request: {
+        method: 'POST',
+        path: '/api/langgraph/threads',
+        body: { metadata: { session_key: sessionKey } },
+        query: null,
+      },
+    })
+  }
   if (!res?.ok) {
     throw new Error(res?.error || `创建会话失败（gateway_proxy ${res?.status || 'unknown'}）`)
   }
@@ -951,6 +988,20 @@ export class WsClient {
       return await fetchJson(`/api/collab/threads/${encodeURIComponent(threadId)}`)
     } catch {
       return null
+    }
+  }
+
+  async getTaskStreamLog(taskId, limit = 100) {
+    const tid = String(taskId || '').trim()
+    if (!tid) return []
+    const n = Math.max(1, Math.min(Number(limit) || 100, 1000))
+    try {
+      const data = await fetchJson(
+        `/api/collab/tasks/${encodeURIComponent(tid)}/stream-log?limit=${encodeURIComponent(String(n))}`,
+      )
+      return Array.isArray(data?.events) ? data.events : []
+    } catch {
+      return []
     }
   }
 
@@ -1704,20 +1755,7 @@ export class WsClient {
       return { frames: parts, rest }
     }
 
-    const dispatchSseFrame = (frameText) => {
-      const lines = frameText.split('\n')
-      let dataRaw = ''
-      let eventName = ''
-      for (const line of lines) {
-        const l = line.replace(/\r$/, '')
-        if (l.startsWith('event:')) eventName = l.slice(6).trim()
-        if (l.startsWith('data:')) dataRaw += l.slice(5).trim()
-      }
-      if (!dataRaw) return
-      const data = safeParseJSON(dataRaw, null)
-      if (!data) return
-
-      if (eventName === 'task_progress') {
+    const handleTaskProgressData = (data) => {
         const snap = data?.snapshot || null
         const mem = data?.memory || null
         const terminalFromServer = !!data?.terminal
@@ -1793,10 +1831,44 @@ export class WsClient {
             message: { role: 'assistant', content: [{ type: 'text', text: finalText || '任务已结束。' }] },
           })
         }
+    }
+
+    const dispatchSseFrame = (frameText) => {
+      const lines = frameText.split('\n')
+      let dataRaw = ''
+      let eventName = ''
+      for (const line of lines) {
+        const l = line.replace(/\r$/, '')
+        if (l.startsWith('event:')) eventName = l.slice(6).trim()
+        if (l.startsWith('data:')) dataRaw += l.slice(5).trim()
       }
+      if (!dataRaw) return
+      const data = safeParseJSON(dataRaw, null)
+      if (!data) return
+      if (eventName === 'task_progress') handleTaskProgressData(data)
     }
 
     try {
+      // 首次接流前，先回放该任务最近一条持久化快照，避免“跳回对话页时空白等待”。
+      try {
+        const collab = await this.getThreadCollabState(threadId)
+        const replayTaskId = String(collab?.bound_task_id || '').trim()
+        if (replayTaskId) {
+          const events = await this.getTaskStreamLog(replayTaskId, 1)
+          const last = events[events.length - 1]
+          if (last && typeof last === 'object') {
+            handleTaskProgressData({
+              snapshot: last.snapshot || null,
+              memory: last.memory || null,
+              terminal: !!last.terminal,
+              collab_phase: last.collab_phase || null,
+            })
+          }
+        }
+      } catch {
+        // replay is best-effort only
+      }
+
       const resp = await deerflowFetchStream(
         `/api/collab/threads/${encodeURIComponent(threadId)}/task-stream`,
         { method: 'GET', signal: controller.signal },

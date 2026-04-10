@@ -14,6 +14,7 @@ from deerflow.collab.models import CollabPhase, ThreadCollabState
 from deerflow.collab.storage import (
     find_main_task,
     get_project_storage,
+    get_task_stream_log_storage,
     get_task_memory_storage,
     load_task_memory_for_task_id,
 )
@@ -44,6 +45,12 @@ class ThreadCollabStateResponse(BaseModel):
     bound_project_id: str | None
     sidebar_supervisor_steps: list[dict[str, Any]] = Field(default_factory=list)
     updated_at: str
+
+
+class TaskStreamLogResponse(BaseModel):
+    task_id: str
+    count: int
+    events: list[dict[str, Any]] = Field(default_factory=list)
 
 
 @router.get("/threads/{thread_id}", response_model=ThreadCollabStateResponse)
@@ -217,6 +224,25 @@ async def stream_thread_task_progress(
                     "snapshot": snap,
                     "memory": memory_payload,
                 }
+                # Persist per-task stream snapshot for debug/replay bootstrap.
+                try:
+                    main_task = snap.get("main_task") or {}
+                    stream_task_id = str(main_task.get("taskId") or snap.get("bound_task_id") or "").strip()
+                    if stream_task_id:
+                        log_storage = get_task_stream_log_storage()
+                        log_storage.append_event(
+                            stream_task_id,
+                            {
+                                "ts": time.time(),
+                                "thread_id": thread_id,
+                                "terminal": terminal,
+                                "collab_phase": phase_str,
+                                "snapshot": snap,
+                                "memory": memory_payload,
+                            },
+                        )
+                except Exception:
+                    logger.debug("task-stream: append task stream log failed", exc_info=True)
                 yield f"event: task_progress\ndata: {json.dumps(payload, ensure_ascii=False, default=str)}\n\n"
 
                 if terminal:
@@ -243,3 +269,17 @@ async def stream_thread_task_progress(
         "X-Accel-Buffering": "no",
     }
     return StreamingResponse(_gen(), headers=headers, media_type="text/event-stream")
+
+
+@router.get("/tasks/{task_id}/stream-log", response_model=TaskStreamLogResponse)
+async def get_task_stream_log(task_id: str, limit: int = 200) -> TaskStreamLogResponse:
+    """Debug endpoint: return persisted task stream snapshots for a task_id."""
+    try:
+        storage = get_task_stream_log_storage()
+        events = storage.tail_events(task_id, limit=limit)
+        return TaskStreamLogResponse(task_id=task_id, count=len(events), events=events)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception:
+        logger.exception("Failed to read task stream log task_id=%s", task_id)
+        raise HTTPException(status_code=500, detail="Failed to read task stream log.") from None

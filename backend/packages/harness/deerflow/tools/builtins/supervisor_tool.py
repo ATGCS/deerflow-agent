@@ -15,7 +15,6 @@ import json
 import logging
 import os
 import time
-import uuid
 from typing import Annotated, Any
 
 from langchain.tools import InjectedToolCallId, ToolRuntime, tool
@@ -24,6 +23,7 @@ from pydantic import ValidationError
 
 from deerflow.collab.models import CollabPhase, WorkerProfile
 from deerflow.collab.authorize_execution import authorize_main_task_execution
+from deerflow.collab.id_format import make_subtask_id
 from deerflow.collab.storage import (
     find_main_task,
     find_open_main_task_id_by_name,
@@ -360,7 +360,6 @@ async def supervisor_tool(
                 if task.get("id") != task_id:
                     continue
 
-                import uuid as _uuid
                 from datetime import datetime
 
                 now = datetime.utcnow().isoformat() + "Z"
@@ -440,7 +439,7 @@ async def supervisor_tool(
                             continue
 
                     subtask_data: dict[str, Any] = {
-                        "id": str(_uuid.uuid4())[:8],
+                        "id": make_subtask_id(),
                         "name": nm,
                         "description": desc,
                         "status": "pending",
@@ -613,12 +612,11 @@ async def supervisor_tool(
             if project:
                 for i, task in enumerate(project.get("tasks", [])):
                     if task.get("id") == task_id:
-                        import uuid
                         from datetime import datetime
 
                         now = datetime.utcnow().isoformat() + "Z"
                         subtask_data = {
-                            "id": str(uuid.uuid4())[:8],
+                            "id": make_subtask_id(),
                             "name": subtask_name,
                             "description": subtask_description or "",
                             "status": "pending",
@@ -854,7 +852,6 @@ async def supervisor_tool(
                     if task.get("id") == task_id:
                         for j, subtask in enumerate(task.get("subtasks", [])):
                             if subtask.get("id") == subtask_id:
-                                import uuid
                                 from datetime import datetime
 
                                 now = datetime.utcnow().isoformat() + "Z"

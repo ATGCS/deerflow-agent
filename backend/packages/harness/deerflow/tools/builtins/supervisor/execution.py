@@ -9,11 +9,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import uuid
 from typing import Any
 
 from langchain.tools import ToolRuntime
 from langgraph.typing import ContextT
+
+from deerflow.collab.id_format import make_formatted_id
 
 logger = logging.getLogger(__name__)
 
@@ -145,7 +146,7 @@ async def delegate_collab_subtasks_for_start_execution(
         if dep_ctx:
             prompt = f"{prompt}{dep_ctx}"
         subagent_type = _resolved_subagent_type_for_subtask(st)
-        tcid = f"supervisor-start-exec-{main_task_id}-{sid}-{uuid.uuid4().hex[:12]}"
+        tcid = make_formatted_id("SupervisorExec")
         try:
             out = await delegate_via_task_tool(
                 runtime,

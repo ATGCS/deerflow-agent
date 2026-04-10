@@ -21,7 +21,6 @@ import logging
 import mimetypes
 import shutil
 import tempfile
-import uuid
 from collections.abc import Generator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -39,6 +38,7 @@ from deerflow.config.agents_config import AGENT_NAME_PATTERN
 from deerflow.config.app_config import get_app_config, reload_app_config
 from deerflow.config.extensions_config import ExtensionsConfig, SkillStateConfig, get_extensions_config, reload_extensions_config
 from deerflow.config.paths import get_paths
+from deerflow.collab.id_format import make_thread_id
 from deerflow.models import create_chat_model
 from deerflow.skills.installer import install_skill_from_archive
 from deerflow.uploads.manager import (
@@ -375,7 +375,7 @@ class DeerFlowClient:
             - type="end"             data={"usage": {"input_tokens": int, "output_tokens": int, "total_tokens": int}}
         """
         if thread_id is None:
-            thread_id = str(uuid.uuid4())
+            thread_id = make_thread_id()
 
         config = self._get_runnable_config(thread_id, **kwargs)
         self._ensure_agent(config)

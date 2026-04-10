@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import uuid
 from typing import Any, override
 
 from langchain.agents import AgentState
@@ -12,6 +11,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.runtime import Runtime
 
 from deerflow.collab.models import CollabPhase
+from deerflow.collab.id_format import make_formatted_id
 from deerflow.collab.storage import find_main_task, get_project_storage
 from deerflow.collab.thread_collab import load_thread_collab_state
 from deerflow.config.paths import get_paths
@@ -384,7 +384,7 @@ class CollabPhaseMiddleware(AgentMiddleware[AgentState]):
         final_content = preserved if preserved else (raw_c if isinstance(raw_c, str) else "") or ""
 
         extra_monitor = {
-            "id": f"forced-monitor-{uuid.uuid4().hex[:10]}",
+            "id": make_formatted_id("ForcedMonitor"),
             "name": "supervisor",
             "args": {
                 "action": "monitor_execution_step",

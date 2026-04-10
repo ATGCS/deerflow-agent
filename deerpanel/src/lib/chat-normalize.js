@@ -411,6 +411,17 @@ export function dedupeHistory(messages) {
       const id = t.id || t.tool_call_id
       const time = t.time || resolveToolTime(id, msg.timestamp)
       return { ...t, time, messageTimestamp: msg.timestamp }
+    }).filter((t) => {
+      const name = String(t?.name || '').trim()
+      const status = String(t?.status || '').toLowerCase()
+      const hasOutput = !(t?.output == null || t?.output === '')
+      const hasInput = !(t?.input == null || t?.input === '' || (typeof t?.input === 'object' && !Array.isArray(t?.input) && Object.keys(t.input || {}).length === 0))
+      // 过滤“占位型工具项”：名称是默认“工具” + running + 无输入无输出。
+      // 这些通常是流式中间态，不应在历史落库里作为独立工具块展示。
+      if ((name === '工具' || !name) && (status === 'running' || status === 'in_progress') && !hasInput && !hasOutput) {
+        return false
+      }
+      return true
     })
     const last = deduped[deduped.length - 1]
     if (last && last.role === role) {

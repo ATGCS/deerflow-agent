@@ -17,7 +17,6 @@ import os
 import signal
 import threading
 import time
-import uuid
 
 try:
     import fcntl
@@ -26,6 +25,7 @@ except ImportError:  # pragma: no cover - Windows fallback
     import msvcrt
 
 from deerflow.config import get_app_config
+from deerflow.collab.id_format import make_formatted_id
 from deerflow.config.paths import VIRTUAL_PATH_PREFIX, Paths, get_paths
 from deerflow.sandbox.sandbox import Sandbox
 from deerflow.sandbox.sandbox_provider import SandboxProvider
@@ -393,7 +393,7 @@ class AioSandboxProvider(SandboxProvider):
                         del self._thread_sandboxes[thread_id]
 
         # Deterministic ID for thread-specific, random for anonymous
-        sandbox_id = self._deterministic_sandbox_id(thread_id) if thread_id else str(uuid.uuid4())[:8]
+        sandbox_id = self._deterministic_sandbox_id(thread_id) if thread_id else make_formatted_id("Sandbox")
 
         # ── Layer 1.5: Warm pool (container still running, no cold-start) ──
         if thread_id:

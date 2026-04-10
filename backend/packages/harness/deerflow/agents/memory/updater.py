@@ -3,7 +3,6 @@
 import json
 import logging
 import re
-import uuid
 from datetime import datetime
 from typing import Any
 
@@ -13,6 +12,7 @@ from deerflow.agents.memory.prompt import (
 )
 from deerflow.agents.memory.storage import create_empty_memory, get_memory_storage
 from deerflow.config.memory_config import get_memory_config
+from deerflow.collab.id_format import make_fact_id
 from deerflow.models import create_chat_model
 
 logger = logging.getLogger(__name__)
@@ -348,7 +348,7 @@ class MemoryUpdater:
                     continue
 
                 fact_entry = {
-                    "id": f"fact_{uuid.uuid4().hex[:8]}",
+                    "id": make_fact_id(),
                     "content": normalized_content,
                     "category": fact.get("category", "context"),
                     "confidence": confidence,

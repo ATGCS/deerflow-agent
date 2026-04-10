@@ -12,7 +12,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import uuid
 from typing import Any
 
 from langchain.tools import ToolRuntime
@@ -26,6 +25,7 @@ _task_watch_state: dict[str, dict[str, Any]] = {}
 from deerflow.tools.builtins.supervisor.dependency import (
     _TERMINAL_SUBTASK as _MONITOR_TERMINAL_MAIN,
 )
+from deerflow.collab.id_format import make_formatted_id
 
 
 def _ensure_background_task_monitor(
@@ -106,7 +106,7 @@ def _ensure_background_task_monitor(
                             append_sidebar_supervisor_step(
                                 paths,
                                 tid,
-                                {"id": f"monitor-{key}-{uuid.uuid4().hex[:10]}", "action": "monitor", "label": detail, "done": bool(terminal_main)},
+                                {"id": make_formatted_id("Monitor"), "action": "monitor", "label": detail, "done": bool(terminal_main)},
                                 max_steps=120,
                             )
                         except Exception:

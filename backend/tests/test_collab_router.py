@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.gateway.routers import collab, threads
+from deerflow.collab.storage import get_task_stream_log_storage
 from deerflow.config.paths import Paths
 
 
@@ -103,3 +104,23 @@ def test_delete_thread_removes_collab_state(tmp_path):
             r = client.get("/api/collab/threads/wipe-me")
     assert r.status_code == 200
     assert r.json()["collab_phase"] == "idle"
+
+
+def test_get_task_stream_log_reads_persisted_events(tmp_path):
+    paths = Paths(tmp_path)
+    app = FastAPI()
+    app.include_router(collab.router)
+    with patch("app.gateway.routers.collab.get_paths", return_value=paths), patch(
+        "deerflow.collab.storage.get_paths", return_value=paths
+    ):
+        log_storage = get_task_stream_log_storage()
+        assert log_storage.append_event("task123", {"step": "a", "progress": 10})
+        assert log_storage.append_event("task123", {"step": "b", "progress": 50})
+        with TestClient(app) as client:
+            r = client.get("/api/collab/tasks/task123/stream-log?limit=10")
+    assert r.status_code == 200
+    j = r.json()
+    assert j["task_id"] == "task123"
+    assert j["count"] == 2
+    assert isinstance(j["events"], list)
+    assert j["events"][-1]["progress"] == 50

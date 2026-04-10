@@ -3,7 +3,6 @@
 import asyncio
 import logging
 import threading
-import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from dataclasses import dataclass
@@ -18,6 +17,7 @@ from langchain_core.runnables import RunnableConfig
 
 from deerflow.agents.thread_state import SandboxState, ThreadDataState, ThreadState
 from deerflow.models import create_chat_model
+from deerflow.collab.id_format import make_formatted_id, make_trace_id
 from deerflow.subagents.config import SubagentConfig
 
 logger = logging.getLogger(__name__)
@@ -154,7 +154,7 @@ class SubagentExecutor:
         self.thread_data = thread_data
         self.thread_id = thread_id
         # Generate trace_id if not provided (for top-level calls)
-        self.trace_id = trace_id or str(uuid.uuid4())[:8]
+        self.trace_id = trace_id or make_trace_id()
 
         # Filter tools based on config
         self.tools = _filter_tools(
@@ -219,7 +219,7 @@ class SubagentExecutor:
             result = result_holder
         else:
             # Create a new result for synchronous execution
-            task_id = str(uuid.uuid4())[:8]
+            task_id = make_formatted_id("SubagentTask")
             result = SubagentResult(
                 task_id=task_id,
                 trace_id=self.trace_id,
@@ -388,7 +388,7 @@ class SubagentExecutor:
                 result = result_holder
             else:
                 result = SubagentResult(
-                    task_id=str(uuid.uuid4())[:8],
+                    task_id=make_formatted_id("SubagentTask"),
                     trace_id=self.trace_id,
                     status=SubagentStatus.FAILED,
                 )
@@ -409,7 +409,7 @@ class SubagentExecutor:
         """
         # Use provided task_id or generate a new one
         if task_id is None:
-            task_id = str(uuid.uuid4())[:8]
+            task_id = make_formatted_id("SubagentTask")
 
         # Create initial pending result
         result = SubagentResult(

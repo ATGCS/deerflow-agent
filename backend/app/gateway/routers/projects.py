@@ -1,12 +1,12 @@
 """Projects API router for managing multi-agent collaboration projects."""
 
-import uuid
 from datetime import datetime
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from deerflow.collab.storage import get_project_storage
+from deerflow.collab.id_format import make_project_id, make_task_id
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
@@ -68,7 +68,7 @@ async def create_project(request: CreateProjectRequest) -> dict:
 
     now = datetime.utcnow().isoformat() + "Z"
     project = {
-        "id": str(uuid.uuid4())[:8],
+        "id": make_project_id(),
         "name": request.name,
         "description": request.description,
         "tasks": [],
@@ -122,7 +122,7 @@ async def add_task(project_id: str, request: AddTaskRequest) -> dict:
 
     now = datetime.utcnow().isoformat() + "Z"
     task = {
-        "id": str(uuid.uuid4())[:8],
+        "id": make_task_id(),
         "name": request.name,
         "description": request.description,
         "status": "pending",
