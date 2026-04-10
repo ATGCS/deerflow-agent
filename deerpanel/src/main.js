@@ -41,6 +41,7 @@ import './style/agents.css'
 import './style/debug.css'
 import './style/reset.css'
 import './style/ai-drawer.css'
+import './style/cron.css'
 
 // 初始化主题
 initTheme()

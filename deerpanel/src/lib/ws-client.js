@@ -710,6 +710,14 @@ function isHumanMessage(m) {
   return m.type === 'human' || m.role === 'user'
 }
 
+function normalizeLooseText(s) {
+  return String(s || '').replace(/\s+/g, ' ').trim()
+}
+
+function messageTextForMatch(m) {
+  return normalizeLooseText(extractAssistantText(m))
+}
+
 function isToolMessage(m) {
   if (!m || typeof m !== 'object') return false
   return m.role === 'tool' || m.type === 'tool'
@@ -1198,6 +1206,8 @@ export class WsClient {
     }
     const started = nowTs()
     let finalText = ''
+    const expectedUserText = normalizeLooseText(message || '')
+    let valuesSeenCurrentUser = false
     /** messages-tuple 已输出正文后，不再用 values 快照合并正文（双通道会重复/版本不一致） */
     let streamTextFromMessages = false
     /** 避免 values 快照每帧重复 emit 相同 tool_calls */
@@ -1248,12 +1258,35 @@ export class WsClient {
             if (!data || typeof data !== 'object') return
             const { messages } = normalizeStreamValues(data)
             const lastMsg = messages.length ? messages[messages.length - 1] : null
-            /* 末尾若是本轮 user，尚无 assistant，不能取更早的 ai（会把上一轮回答灌进当前气泡） */
+            // values 可能先到“上一轮尾部 ai 快照”。只有确认本轮用户消息已入队后，才允许 values 产出正文。
+            if (!valuesSeenCurrentUser) {
+              const humanIdx = findLastNonCollabHumanIndex(messages)
+              if (humanIdx >= 0) {
+                const humanText = messageTextForMatch(messages[humanIdx])
+                if (!expectedUserText || (humanText && humanText.includes(expectedUserText))) {
+                  valuesSeenCurrentUser = true
+                }
+              }
+            }
+            /* 只在“末尾就是 assistant”时才抽正文；
+               末尾若是 system/tool（中间件注入/工具结果）不能回退取更早 assistant，
+               否则会把上一轮大段回答灌进当前气泡。 */
             let lastAi = null
-            if (lastMsg && !isHumanMessage(lastMsg)) {
+            if (valuesSeenCurrentUser && lastMsg && isAssistantMessage(lastMsg)) {
               lastAi = findLastAssistantMessage(messages)
             }
             const text = lastAi ? extractAssistantText(lastAi) : ''
+            console.log('[ws-debug][values]', {
+              sessionKey: key,
+              runId,
+              streamTextFromMessages,
+              valuesSeenCurrentUser,
+              messagesCount: Array.isArray(messages) ? messages.length : 0,
+              lastMsgType: lastMsg?.type || lastMsg?.role || null,
+              pickedAssistant: !!lastAi,
+              textLen: String(text || '').length,
+              textHead: String(text || '').slice(0, 120),
+            })
             const prevFinal = finalText
             // 只要 messages-tuple 开始产出正文，就不要再用 values 快照去“拼正文”
             // 否则两路 delta 会交错，导致前端 accumulate 发生重复追加。
@@ -1263,7 +1296,7 @@ export class WsClient {
             }
             const textChanged = finalText !== prevFinal
             const callsRaw =
-              lastMsg && !isHumanMessage(lastMsg)
+              valuesSeenCurrentUser && lastMsg && isAssistantMessage(lastMsg)
                 ? collectToolCallsForTurnAfterLastUser(messages)
                 : null
             const calls = Array.isArray(callsRaw) ? callsRaw.filter(streamToolCallReadyForUi) : null
@@ -1271,6 +1304,13 @@ export class WsClient {
             const sig = hasToolCalls ? JSON.stringify(calls) : ''
             const toolCallsChanged = sig !== lastValuesToolCallsSig
             if (toolCallsChanged) lastValuesToolCallsSig = sig
+            if (toolCallsChanged) {
+              console.log('[ws-debug][values-tool-calls]', {
+                sessionKey: key,
+                runId,
+                toolCallsCount: Array.isArray(calls) ? calls.length : 0,
+              })
+            }
             /* values 快照常带完整 tool_calls+args（LangGraph 用 args 而非 function.arguments） */
             if ((textChanged && !streamTextFromMessages) || toolCallsChanged) {
               this._emitEvent('chat', {
@@ -1537,13 +1577,22 @@ export class WsClient {
           if (!data || typeof data !== 'object') return
           const { messages } = normalizeStreamValues(data)
           const lastMsg = messages.length ? messages[messages.length - 1] : null
-          // If last message is a user, use the latest assistant.
+          // 只在末尾就是 assistant 时抽正文，避免把历史 assistant 误当本轮续写。
           let lastAi = null
-          if (lastMsg && !isHumanMessage(lastMsg)) {
+          if (lastMsg && isAssistantMessage(lastMsg)) {
             lastAi = findLastAssistantMessage(messages)
           }
 
           const text = lastAi ? extractAssistantText(lastAi) : ''
+          console.log('[ws-debug][resume-values]', {
+            sessionKey: key,
+            runId: String(runId),
+            messagesCount: Array.isArray(messages) ? messages.length : 0,
+            lastMsgType: lastMsg?.type || lastMsg?.role || null,
+            pickedAssistant: !!lastAi,
+            textLen: String(text || '').length,
+            textHead: String(text || '').slice(0, 120),
+          })
           const prevFinal = finalText
 
           if (text && !streamTextFromMessages) {
@@ -1554,7 +1603,7 @@ export class WsClient {
           const textChanged = finalText !== prevFinal
 
           const callsRaw =
-            lastMsg && !isHumanMessage(lastMsg) ? collectToolCallsForTurnAfterLastUser(messages) : null
+            lastMsg && isAssistantMessage(lastMsg) ? collectToolCallsForTurnAfterLastUser(messages) : null
           const calls = Array.isArray(callsRaw) ? callsRaw.filter(streamToolCallReadyForUi) : null
           const hasToolCalls = Array.isArray(calls) && calls.length > 0
           const sig = hasToolCalls ? JSON.stringify(calls) : ''

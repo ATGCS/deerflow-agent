@@ -118,14 +118,8 @@ function debugSubtaskFlowEnabled(): boolean {
 }
 
 function debugAssistantDedupEnabled(): boolean {
-  try {
-    if (localStorage.getItem('DEERFLOW_DEBUG_ASSISTANT_DEDUP') === '1') return true
-    // 便于排障：开发环境默认开启（显式设为 '0' 可关闭）
-    if (import.meta.env.DEV) return localStorage.getItem('DEERFLOW_DEBUG_ASSISTANT_DEDUP') !== '0'
-    return false
-  } catch {
-    return !!import.meta.env.DEV
-  }
+  // 按用户要求：日志直接放开
+  return true
 }
 
 function enableAutoTaskResumeAfterFinal(): boolean {
@@ -576,6 +570,7 @@ export default function ChatApp() {
   const seenRunIdsRef = useRef(new Set<string>())
   const activeChatRunIdRef = useRef<string | null>(null)
   const pendingBindChatRunRef = useRef(false)
+  const suppressNextAbortToastRef = useRef(false)
   const sessionRef = useRef(selectedSessionKey)
   const lastErrorRef = useRef({ msg: '', ts: 0 })
   const unsubRef = useRef<(() => void) | null>(null)
@@ -1818,6 +1813,15 @@ export default function ChatApp() {
       const { state } = payload
       const runId = payload.runId
       const S = streamRef.current
+      console.log('[chat-debug][event]', {
+        sessionKey: payload.sessionKey,
+        state,
+        runId,
+        activeChatRunId: activeChatRunIdRef.current,
+        pendingBind: pendingBindChatRunRef.current,
+        streamRunId: S.runId,
+        isSending: isSendingRef.current,
+      })
 
       // 追加提问后：先等待本轮首个正文(delta/final)来绑定 runId。
       // 绑定前忽略 tool/subtask，避免旧会话残留任务流“顶上来”。
@@ -1826,10 +1830,16 @@ export default function ChatApp() {
         if ((state === 'delta' || state === 'final') && runId) {
           activeChatRunIdRef.current = String(runId)
           pendingBindChatRunRef.current = false
+          console.log('[chat-debug][bind-run]', { runId, state })
         }
       }
       // 已绑定本轮 run 后，严格丢弃其他 run 事件，避免串台。
       if (activeChatRunIdRef.current && runId && String(runId) !== activeChatRunIdRef.current) {
+        console.log('[chat-debug][drop-by-active-run]', {
+          activeChatRunId: activeChatRunIdRef.current,
+          runId,
+          state,
+        })
         return
       }
 
@@ -2250,6 +2260,13 @@ export default function ChatApp() {
       }
 
       if (state === 'aborted') {
+        if (suppressNextAbortToastRef.current) {
+          suppressNextAbortToastRef.current = false
+          streamRef.current = emptyStream()
+          setIsSending(false)
+          scheduleBump()
+          return
+        }
         if (S.text || S.segments.length || S.tools.length) {
           const segmentsOut = finalizeAssistantSegments(S)
           let textOut = ''
@@ -2399,9 +2416,15 @@ export default function ChatApp() {
     const { api } = await import('../lib/tauri-api.js')
     // 发送新一轮前先中止当前会话的残留流，防止旧 run 继续回灌内容。
     try {
+      suppressNextAbortToastRef.current = true
       await api.chatAbort(sessionKey)
     } catch {
       /* ignore */
+    } finally {
+      // 若本次没有收到 aborted 事件，也要及时复位，避免误伤用户手动停止提示
+      window.setTimeout(() => {
+        suppressNextAbortToastRef.current = false
+      }, 1500)
     }
     streamRef.current = emptyStream()
     seenRunIdsRef.current = new Set()

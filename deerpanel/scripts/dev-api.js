@@ -12,6 +12,7 @@ import { promisify } from 'util'
 const OPENCLAW_DIR = path.join(homedir(), '.deerpanel')
 const CONFIG_PATH = path.join(OPENCLAW_DIR, 'deerpanel.json')
 const PANEL_CONFIG_PATH = path.join(OPENCLAW_DIR, 'deerpanel.json')
+const AUTOMATIONS_DIR = path.join(homedir(), '.deerflow', 'automations')
 const DEERFLOW_GATEWAY_URL = process.env.DEERFLOW_GATEWAY_URL || 'http://localhost:2026'
 const PROJECT_ROOT = process.env.DEERFLOW_PROJECT_ROOT || path.resolve(process.cwd(), '..')
 const exec = promisify(_exec)
@@ -508,10 +509,392 @@ const handlers = {
     }
     return results
   },
+
+  // ========== 定时任务 / Automation（对接 core/scheduler）==========
+
+  async automation_list() {
+    return { automations: _listAllAutomations() }
+  },
+
+  async automation_get(args) {
+    const id = String(args?.id || '').trim()
+    if (!id) throw new Error('id is required')
+    const task = _loadAutomation(id)
+    if (!task) throw new Error(`Automation '${id}' not found`)
+    // 附带执行历史
+    const hp = _historyPath(id)
+    let history = []
+    try { history = fs.readFileSync(hp, 'utf8').split(/\r?\n/).filter(Boolean).map(l => { try { return JSON.parse(l) } catch { return null } }).filter(Boolean) } catch {}
+    return { id, ...task, history }
+  },
+
+  async automation_create(args) {
+    const name = String(args?.name || '').trim()
+    const prompt = String(args?.prompt || '').trim()
+    if (!name) throw new Error('name is required')
+    if (!prompt) throw new Error('prompt is required')
+
+    const scheduleType = args?.schedule_type || 'recurring'
+    let rrule = ''
+    let scheduledAt = ''
+    let schedule = ''
+
+    if (scheduleType === 'once' && args?.scheduled_at) {
+      scheduledAt = args.scheduled_at
+      schedule = scheduledAt
+    } else if (args?.rrule) {
+      rrule = args.rrule
+      schedule = rrule
+    } else if (args?.cron_expr) {
+      const converted = cronToRrule(args.cron_expr)
+      rrule = converted.rrule
+      scheduledAt = converted.scheduledAt || ''
+      schedule = rrule || scheduledAt
+    } else {
+      rrule = 'FREQ=DAILY;INTERVAL=1;BYHOUR=9'
+      schedule = rrule
+    }
+
+    const id = _genId()
+    _saveAutomation(id, {
+      name,
+      prompt,
+      schedule: args?.schedule || schedule,
+      rrule,
+      scheduled_at: scheduledAt || null,
+      status: 'active',
+      schedule_type: scheduleType,
+      workspace: args?.workspace || null,
+      valid_from: args?.valid_from || null,
+      valid_until: args?.valid_until || null,
+      max_duration_minutes: args?.max_duration_minutes || 30,
+    })
+    return { success: true, id, name, schedule_type: scheduleType, schedule: rrule || scheduledAt }
+  },
+
+  async automation_update(args) {
+    const id = String(args?.id || '').trim()
+    if (!id) throw new Error('id is required')
+    const task = _loadAutomation(id)
+    if (!task) throw new Error(`Automation '${id}' not found`)
+
+    // 如果前端传了 cron_expr，转换后更新 rrule
+    if (args?.cron_expr) {
+      const conv = cronToRrule(args.cron_expr)
+      args.rrule = conv.rrule || undefined
+      if (conv.scheduledAt) args.scheduled_at = conv.scheduledAt
+    }
+
+    const updated = { ...task }
+    // 允许显式传 null 来清除字段（如 scheduled_at 从一次性改周期性时需要清空）
+    for (const k of ['name', 'prompt', 'schedule', 'rrule', 'scheduled_at', 'status',
+                     'workspace', 'valid_from', 'valid_until', 'max_duration_minutes']) {
+      if (k in args) updated[k] = (args[k] === null ? '' : args[k])
+    }
+    _saveAutomation(id, updated)
+    return { success: true, id }
+  },
+
+  async automation_delete(args) {
+    const id = String(args?.id || '').trim()
+    if (!id) throw new Error('id is required')
+    const f = path.join(AUTOMATIONS_DIR, `${id}.toml`)
+    if (!fs.existsSync(f)) throw new Error(`Automation '${id}' not found`)
+    fs.unlinkSync(f)
+    // 清理历史文件
+    const hp = _historyPath(id)
+    if (fs.existsSync(hp)) fs.unlinkSync(hp)
+    return { success: true, id }
+  },
+
+  async automation_run(args) {
+    const id = String(args?.id || '').trim()
+    if (!id) throw new Error('id is required')
+    const task = _loadAutomation(id)
+    if (!task) throw new Error(`Automation '${id}' not found`)
+    // 记录一次手动触发的历史记录
+    const record = {
+      run_id: crypto.randomUUID().slice(0, 12),
+      started_at: new Date().toISOString(),
+      trigger_type: 'manual',
+      status: 'triggered',
+      output: '',
+      error: '',
+      duration_seconds: 0,
+    }
+    const hp = _historyPath(id)
+    try { fs.appendFileSync(hp, JSON.stringify(record) + '\n', 'utf8') } catch {}
+    return { success: true, id, run_id: record.run_id, message: 'Task triggered. Note: Full execution requires scheduler engine.' }
+  },
+
+  async automation_history(args) {
+    const id = String(args?.id || '').trim()
+    if (!id) throw new Error('id is required')
+    const hp = _historyPath(id)
+    let records = []
+    try { records = fs.readFileSync(hp, 'utf8').split(/\r?\n/).filter(Boolean).map(l => { try { return JSON.parse(l) } catch { return null } }).filter(Boolean) } catch {}
+    // 倒序，最新在前
+    records.reverse()
+    const limit = Math.min(50, Math.max(1, Number(args?.limit || 50)))
+    return { id, runs: records.slice(0, limit), total: records.length }
+  },
+
+  async automation_start() {
+    // 开发模式下返回模拟状态；生产模式走 Gateway 的 start action
+    const tasks = _listAllAutomations()
+    const active = tasks.filter(t => t.status === 'active').length
+    return { state: 'running', active_timers: active, total_tasks: tasks.length }
+  },
+
+  async automation_stop() {
+    return { state: 'stopped' }
+  },
+
+  async automation_pause(args) {
+    const id = String(args?.id || '').trim()
+    if (!id) throw new Error('id is required')
+    const task = _loadAutomation(id)
+    if (!task) throw new Error(`Automation '${id}' not found`)
+    task.status = 'paused'
+    _saveAutomation(id, task)
+    return { success: true, id, status: 'paused' }
+  },
+
+  async automation_resume(args) {
+    const id = String(args?.id || '').trim()
+    if (!id) throw new Error('id is required')
+    const task = _loadAutomation(id)
+    if (!task) throw new Error(`Automation '${id}' not found`)
+    task.status = 'active'
+    _saveAutomation(id, task)
+    return { success: true, id, status: 'active' }
+  },
+}
+
+// ========== Cron ↔ RRULE 转换器 ==========
+
+/** 解析标准 cron 表达式为结构化对象 */
+function parseCronExpression(expr) {
+  const parts = String(expr || '').trim().split(/\s+/)
+  if (parts.length < 5 && parts.length > 6) throw new Error(`无效 cron 表达式: ${expr}`)
+  const [minute = '*', hour = '*', dom = '*', month = '*', dow = '*'] = parts
+  return { minute, hour, dom, month, dow }
+}
+
+/** 将 cron 表达式转换为 RRULE 格式 */
+function cronToRrule(cronExpr) {
+  const c = parseCronExpression(cronExpr)
+
+  // 检查是否是一次性任务（scheduled_at 类型）
+  if (/^\d{4}-\d{2}-\d{2}/.test(cronExpr)) {
+    return { rrule: '', scheduleType: 'once', scheduledAt: cronExpr }
+  }
+
+  // 特殊关键字
+  const kw = cronExpr.toLowerCase().trim()
+  if (kw === '@hourly' || kw === '每小时') return { rrule: 'FREQ=HOURLY;INTERVAL=1', scheduleType: 'recurring' }
+  if (kw === '@daily' || kw === '每天' || kw === 'daily') return { rrule: 'FREQ=DAILY;INTERVAL=1', scheduleType: 'recurring' }
+  if (kw === '@weekly' || kw === '每周') return { rrule: 'FREQ=WEEKLY;INTERVAL=1;BYDAY=MO,TU,WE,TH,FR', scheduleType: 'recurring' }
+
+  // 判断频率类型
+  const isHourly = c.hour !== '*' && c.dom === '*' && c.month === '*' && (c.dow === '*' || c.dow === '?')
+    && c.minute.match(/^\*|^\d+$/)
+  if (isHourly) {
+    const h = parseInt(c.hour, 10)
+    const m = c.minute === '*' ? 0 : parseInt(c.minute, 10)
+    // 简化为 hourly（精确到小时）
+    return { rrule: `FREQ=HOURLY;INTERVAL=1`, scheduleType: 'recurring', byHour: h, byMinute: m }
+  }
+
+  const isDaily = c.hour !== '*' && c.dom === '*' && c.month === '*' && (c.dow === '*' || c.dow === '?')
+  if (isDaily) {
+    const h = parseInt(c.hour, 10)
+    const m = c.minute === '*' ? 0 : parseInt(c.minute, 10)
+    let rule = `FREQ=DAILY;INTERVAL=1`
+    if (h !== 0) rule += `;BYHOUR=${h}`
+    if (m !== 0) rule += `;BYMINUTE=${m}`
+    return { rrule: rule, scheduleType: 'recurring' }
+  }
+
+  const isWeekly = c.dow !== '*' && c.dow !== '?' || (
+    c.dom !== '*' && !c.dom.includes('/') && !c.dom.includes('-') && !c.dom.includes(',')
+  )
+  if (isWeekly) {
+    const DOW_MAP = { 0: 'SU', 1: 'MO', 2: 'TU', 3: 'WE', 4: 'TH', 5: 'FR', 6: 'SA' }
+    const days = []
+    if (c.dow !== '*' && c.dow !== '?') {
+      for (const d of c.dow.split(',')) {
+        const n = parseInt(d.trim(), 10)
+        if (!isNaN(n)) days.push(DOW_MAP[n] ?? d)
+      }
+    }
+    const h = parseInt(c.hour, 10) || 9
+    let rule = `FREQ=WEEKLY;INTERVAL=1`
+    if (days.length) rule += `;BYDAY=${days.join(',')}`
+    rule += `;BYHOUR=${h}`
+    return { rrule: rule, scheduleType: 'recurring' }
+  }
+
+  // 默认 daily
+  const dh = c.hour !== '*' ? parseInt(c.hour, 10) : 9
+  return { rrule: `FREQ=DAILY;INTERVAL=1;BYHOUR=${dh}`, scheduleType: 'recurring' }
+}
+
+/** 从 RRULE 反推可读的 cron 表达式 */
+function rruleToCron(rruleStr, scheduledAt) {
+  if (scheduledAt) return scheduledAt
+  if (!rruleStr) return '0 * * * *'
+  try {
+    const parts = {}
+    for (const seg of rruleStr.toUpperCase().split(';')) {
+      const [k, v] = seg.split('=').map(s => s.trim())
+      if (k && v) parts[k] = v
+    }
+    const freq = parts.FREQ || ''
+    const interval = parseInt(parts.INTERVAL || '1', 10)
+    const hour = parseInt(parts.BYHOUR || '9', 10)
+    const min = parseInt(parts.BYMINUTE || '0', 10)
+    const byday = parts.BYDAY || ''
+
+    switch (freq) {
+      case 'HOURLY':
+        return `0 */${interval} * * *`
+      case 'DAILY': {
+        if (byday && byday.includes(',')) {
+          // 实际上是按周几的 daily
+          const DOW_NUM = { SU: 0, MO: 1, TU: 2, WE: 3, TH: 4, FR: 5, SA: 6 }
+          const nums = byday.split(',').map(d => DOW_NUM[d.trim()] ?? '?').join(',')
+          return `${min} ${hour} * * ${nums}`
+        }
+        return `${min} ${hour} * * *`
+      }
+      case 'WEEKLY':
+        if (byday) {
+          const DOW_NUM = { SU: 0, MO: 1, TU: 2, WE: 3, TH: 4, FR: 5, SA: 6 }
+          const nums = byday.split(',').map(d => DOW_NUM[d.trim()] ?? '?').join(',')
+          return `${min} ${hour} * * ${nums}`
+        }
+        return `${min} ${hour} * * 1`  // default Monday
+      default:
+        return `${min} ${hour} * * *`
+    }
+  } catch { return '0 9 * * *' }
+}
+
+/** RRULE → 可读中文描述 */
+function rruleToHuman(rruleStr, scheduleType, scheduledAt) {
+  if (scheduleType === 'once' || scheduledAt) return `一次性: ${scheduledAt || rruleStr}`
+  if (!rruleStr) return '每分钟'
+  try {
+    const parts = {}
+    for (const seg of rruleStr.toUpperCase().split(';')) {
+      const [k, v] = seg.split('=').map(s => s.trim())
+      if (k && v) parts[k] = v
+    }
+    const freq = parts.FREQ || ''
+    const interval = parseInt(parts.INTERVAL || '1', 10)
+    const hour = parts.BYHOUR ? parseInt(parts.BYHOUR, 10) : null
+
+    switch (freq) {
+      case 'HOURLY': return interval > 1 ? `每 ${interval} 小时` : `每小时`
+      case 'DAILY': {
+        const timeStr = hour != null ? ` ${String(hour).padStart(2, '0')}:00` : ''
+        return interval > 1 ? `每 ${interval} 天${timeStr}` : `每天${timeStr}`
+      }
+      case 'WEEKLY': {
+        const DAY_CN = { MO: '周一', TU: '周二', WE: '周三', TH: '周四', FR: '周五', SA: '周六', SU: '周日' }
+        const days = (parts.BYDAY || '').split(',').map(d => DAY_CN[d.trim()] || d).filter(Boolean)
+        const dayStr = days.length ? `(${days.join(',')})` : '(工作日)'
+        return interval > 1 ? `每 ${interval} 周 ${dayStr}` : `每周 ${dayStr}`
+      }
+      default: return rruleStr
+    }
+  } catch { return rruleStr }
+}
+
+// ========== Automation TOML 读写 ==========
+
+const _ensureAutomationsDir = () => {
+  if (!fs.existsSync(AUTOMATIONS_DIR)) fs.mkdirSync(AUTOMATIONS_DIR, { recursive: true })
+}
+
+function _parseTomlSimple(content) {
+  /** 极简 TOML parser — 只处理我们需要的扁平键值对和基础类型 */
+  const result = {}
+  const lines = content.split(/\r?\n/)
+  let currentSection = null
+  for (const line of lines) {
+    const trimmed = line.trim()
+    if (!trimmed || trimmed.startsWith('#')) continue
+    const sectionMatch = trimmed.match(/^\[(.+)\]$/)
+    if (sectionMatch) { currentSection = sectionMatch[1]; continue }
+    const kvMatch = trimmed.match(/^(\w[\w.-]*)\s*=\s*(.+)$/)
+    if (kvMatch) {
+      const key = kvMatch[1]
+      let value = kvMatch[2].trim()
+      if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+        value = value.slice(1, -1)
+      } else if (value === 'true') value = true
+      else if (value === 'false') value = false
+      else if (/^-?\d+(\.\d+)?$/.test(value)) value = parseFloat(value)
+      if (currentSection) {
+        if (!result[currentSection]) result[currentSection] = {}
+        result[currentSection][key] = value
+      } else {
+        result[key] = value
+      }
+    }
+  }
+  return result
+}
+
+function _loadAutomation(id) {
+  const f = path.join(AUTOMATIONS_DIR, `${id}.toml`)
+  if (!fs.existsSync(f)) return null
+  return _parseTomlSimple(fs.readFileSync(f, 'utf8'))
+}
+
+function _listAllAutomations() {
+  _ensureAutomationsDir()
+  const items = []
+  try {
+    for (const entry of fs.readdirSync(AUTOMATIONS_DIR)) {
+      if (!entry.endsWith('.toml') || entry.endsWith('_history.jsonl')) continue
+      const id = entry.replace(/\.toml$/, '')
+      const task = _loadAutomation(id)
+      if (task) items.push({ id, ...task })
+    }
+  } catch (_) {}
+  return items
+}
+
+function _saveAutomation(id, data) {
+  _ensureAutomationsDir()
+  const lines = ['name = "' + String(data.name || '').replace(/"/g, '\\"') + '"']
+  if (data.prompt) lines.push('prompt = "' + String(data.prompt).replace(/"/g, '\\"').replace(/\n/g, '\\n') + '"')
+  if (data.schedule) lines.push('schedule = "' + String(data.schedule) + '"')
+  if (data.rrule) lines.push('rrule = "' + String(data.rrule) + '"')
+  if (data.scheduled_at) lines.push('scheduled_at = "' + String(data.scheduled_at) + '"')
+  if (data.status) lines.push('status = "' + data.status + '"')
+  if (data.schedule_type) lines.push('schedule_type = "' + data.schedule_type + '"')
+  if (data.workspace) lines.push('workspace = "' + String(data.workspace) + '"')
+  if (data.valid_from) lines.push('valid_from = "' + data.valid_from + '"')
+  if (data.valid_until) lines.push('valid_until = "' + data.valid_until + '"')
+  if (data.max_duration_minutes) lines.push('max_duration_minutes = ' + Number(data.max_duration_minutes))
+  lines.push('created_at = "' + (data.created_at || new Date().toISOString()) + '"')
+  fs.writeFileSync(path.join(AUTOMATIONS_DIR, `${id}.toml`), lines.join('\n') + '\n', 'utf8')
+}
+
+function _genId() {
+  return crypto.randomUUID().slice(0, 8)
+}
+
+function _historyPath(id) {
+  return path.join(AUTOMATIONS_DIR, `${id}_history.jsonl`)
 }
 
 // 不需要认证的命令
-const PUBLIC_CMDS = new Set(['health', 'auth_check', 'auth_login', 'auth_logout', 'list_agents', 'agents_list', 'agents_get', 'agents_create', 'agents_update', 'agents_delete', 'read_deerpanel_config', 'get_services_status', 'check_installation', 'get_version_info', 'get_status_summary', 'read_log_tail', 'search_log', 'assistant_read_file', 'assistant_write_file', 'assistant_exec', 'mcp_market_search', 'skills_list', 'skills_info', 'skills_check', 'skills_install_dep', 'skills_skillhub_check', 'skills_skillhub_setup', 'skills_skillhub_search', 'skills_skillhub_browse', 'skills_skillhub_install', 'skills_clawhub_search', 'skills_clawhub_install', 'skills_uninstall'])
+const PUBLIC_CMDS = new Set(['health', 'auth_check', 'auth_login', 'auth_logout', 'list_agents', 'agents_list', 'agents_get', 'agents_create', 'agents_update', 'agents_delete', 'read_deerpanel_config', 'get_services_status', 'check_installation', 'get_version_info', 'get_status_summary', 'read_log_tail', 'search_log', 'assistant_read_file', 'assistant_write_file', 'assistant_exec', 'mcp_market_search', 'skills_list', 'skills_info', 'skills_check', 'skills_install_dep', 'skills_skillhub_check', 'skills_skillhub_setup', 'skills_skillhub_search', 'skills_skillhub_browse', 'skills_skillhub_install', 'skills_clawhub_search', 'skills_clawhub_install', 'skills_uninstall', 'automation_list', 'automation_create', 'automation_get', 'automation_update', 'automation_delete', 'automation_run', 'automation_history', 'automation_start', 'automation_stop', 'automation_pause', 'automation_resume'])
 
 // API 中间件
 async function _apiMiddleware(req, res, next) {

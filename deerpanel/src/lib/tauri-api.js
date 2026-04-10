@@ -561,4 +561,17 @@ export const api = {
   getSubtaskMemory: async (taskId, subtaskId) => gatewayProxy('GET', `/task-memory/subtasks/${subtaskId}`),
   searchTaskFacts: async (taskId, keyword) => gatewayProxy('GET', `/task-memory/tasks/${taskId}/search`, null, { keyword }),
   getTaskRuntime: async (taskId) => gatewayProxy('GET', `/task-memory/tasks/${taskId}/runtime`),
+
+  // ========== 定时任务 / Automation ==========
+  automationList: () => invoke('automation_list'),
+  automationGet: (id) => invoke('automation_get', { id }),
+  automationCreate: (params) => { invalidate('automation_list'); return invoke('automation_create', params) },
+  automationUpdate: (params) => { invalidate('automation_list'); return invoke('automation_update', params) },
+  automationDelete: (id) => { invalidate('automation_list'); return invoke('automation_delete', { id }) },
+  automationRun: (id) => invoke('automation_run', { id }),
+  automationHistory: (id, limit = 50) => invoke('automation_history', { id, limit }),
+  automationStart: () => invoke('automation_start'),
+  automationStop: () => invoke('automation_stop'),
+  automationPause: (id) => { invalidate('automation_list'); return invoke('automation_pause', { id }) },
+  automationResume: (id) => { invalidate('automation_list'); return invoke('automation_resume', { id }) },
 }
