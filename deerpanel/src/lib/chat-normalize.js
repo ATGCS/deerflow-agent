@@ -760,7 +760,7 @@ export function isToolRunning(tool) {
   if (!tool) return false
   const hasOutput = !(tool.output == null || tool.output === '')
   if ((tool.status === 'running' || tool.status === 'in_progress') && !hasOutput) return true
-  return !hasOutput
+  return false
 }
 
 export function toolLabel(tool) {

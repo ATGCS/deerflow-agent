@@ -1,5 +1,6 @@
 export interface Agent {
-  name: string;
+  agent_code: string;
+  agent_name: string | null;
   description: string;
   model: string | null;
   tool_groups: string[] | null;
@@ -7,7 +8,8 @@ export interface Agent {
 }
 
 export interface CreateAgentRequest {
-  name: string;
+  agent_code: string;
+  agent_name?: string | null;
   description?: string;
   model?: string | null;
   tool_groups?: string[] | null;
@@ -15,6 +17,7 @@ export interface CreateAgentRequest {
 }
 
 export interface UpdateAgentRequest {
+  agent_name?: string | null;
   description?: string | null;
   model?: string | null;
   tool_groups?: string[] | null;

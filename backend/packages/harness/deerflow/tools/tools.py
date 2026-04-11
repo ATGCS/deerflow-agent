@@ -5,7 +5,7 @@ from langchain.tools import BaseTool
 from deerflow.config import get_app_config
 from deerflow.reflection import resolve_variable
 from deerflow.sandbox.security import is_host_bash_allowed
-from deerflow.tools.builtins import ask_clarification_tool, present_file_tool, supervisor_tool, task_tool, todo_tool, view_image_tool, preview_url_tool, remember_tool, recall_tool, automation_tool
+from deerflow.tools.builtins import ask_clarification_tool, present_file_tool, supervisor_tool, task_tool, todo_tool, view_image_tool, preview_url_tool, remember_tool, recall_tool, automation_tool, create_agent_tool, update_agent_tool, list_agents_tool
 from deerflow.tools.builtins.tool_search import reset_deferred_registry
 from deerflow.community.baidu_search import web_search_tool
 
@@ -20,6 +20,9 @@ BUILTIN_TOOLS = [
     remember_tool,
     recall_tool,
     automation_tool,
+    create_agent_tool,
+    update_agent_tool,
+    list_agents_tool,
 ]
 
 SUBAGENT_TOOLS = [

@@ -15,9 +15,7 @@ from deerflow.config.agents_config import AgentConfig, list_custom_agents, load_
 from deerflow.config.extensions_config import ExtensionsConfig
 from deerflow.config.paths import get_paths
 from deerflow.sandbox.security import is_host_bash_allowed
-from deerflow.tools.builtins import ask_clarification_tool, present_file_tool, supervisor_tool, task_tool, view_image_tool
-from deerflow.tools.builtins.invoke_acp_agent_tool import build_invoke_acp_agent_tool
-from deerflow.tools.builtins.tool_search import tool_search as tool_search_tool
+from deerflow.tools.ui_metadata import collect_native_tool_specs_for_role_ui
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["agents"])
@@ -86,9 +84,16 @@ def _save_main_agent_config(updates: dict) -> None:
         elif "skills" in existing:
             del existing["skills"]
 
-    # Ensure name
-    if "name" not in existing:
-        existing["name"] = "main"
+    # Ensure agent_code
+    if "agent_code" not in existing and "name" not in existing:
+        existing["agent_code"] = "main"
+    elif "name" in existing:
+        # Backward compatibility
+        existing["agent_code"] = existing.pop("name")
+    
+    # Backward compatibility for agent_name
+    if "name_cn" in existing:
+        existing["agent_name"] = existing.pop("name_cn")
 
     with open(config_file, "w", encoding="utf-8") as f:
         yaml.dump(existing, f, default_flow_style=False, allow_unicode=True)
@@ -105,7 +110,8 @@ def _main_agent_to_response(include_soul: bool = False) -> AgentResponse:
     model = agent_cfg.model if agent_cfg else None
 
     return AgentResponse(
-        name="main",
+        agent_code="main",
+        agent_name="YT智能助手",  # Friendly Chinese name for main agent
         description=agent_cfg.description if agent_cfg else "",
         model=model,
         tool_groups=agent_cfg.tool_groups if agent_cfg else None,
@@ -113,13 +119,15 @@ def _main_agent_to_response(include_soul: bool = False) -> AgentResponse:
         mcp_servers=agent_cfg.mcp_servers if agent_cfg else None,
         skills=agent_cfg.skills if agent_cfg else None,
         soul=soul,
+        system_prompt=agent_cfg.system_prompt if agent_cfg else None,
     )
 
 
 class AgentResponse(BaseModel):
     """Response model for a custom agent."""
 
-    name: str = Field(..., description="Agent name (hyphen-case)")
+    agent_code: str = Field(..., description="Agent code/identifier (hyphen-case)")
+    agent_name: str | None = Field(default=None, description="Optional Chinese display name for UI")
     description: str = Field(default="", description="Agent description")
     model: str | None = Field(default=None, description="Optional model override")
     tool_groups: list[str] | None = Field(default=None, description="Optional tool group whitelist")
@@ -127,6 +135,7 @@ class AgentResponse(BaseModel):
     mcp_servers: list[str] | None = Field(default=None, description="Optional MCP server names")
     skills: list[str] | None = Field(default=None, description="Optional skill names")
     soul: str | None = Field(default=None, description="SOUL.md content (included on GET /{name})")
+    system_prompt: str | None = Field(default=None, description="System prompt for the agent")
 
 
 class AgentsListResponse(BaseModel):
@@ -138,7 +147,8 @@ class AgentsListResponse(BaseModel):
 class AgentCreateRequest(BaseModel):
     """Request body for creating a custom agent."""
 
-    name: str = Field(..., description="Agent name (must match ^[A-Za-z0-9-]+$, stored as lowercase)")
+    agent_code: str = Field(..., description="Agent code (must match ^[A-Za-z0-9-]+$, stored as lowercase)")
+    agent_name: str | None = Field(default=None, description="Optional Chinese display name for UI")
     description: str = Field(default="", description="Agent description")
     model: str | None = Field(default=None, description="Optional model override")
     tool_groups: list[str] | None = Field(default=None, description="Optional tool group whitelist")
@@ -151,6 +161,7 @@ class AgentCreateRequest(BaseModel):
 class AgentUpdateRequest(BaseModel):
     """Request body for updating a custom agent."""
 
+    agent_name: str | None = Field(default=None, description="Updated Chinese display name for UI")
     description: str | None = Field(default=None, description="Updated description")
     model: str | None = Field(default=None, description="Updated model override")
     tool_groups: list[str] | None = Field(default=None, description="Updated tool group whitelist")
@@ -158,6 +169,7 @@ class AgentUpdateRequest(BaseModel):
     mcp_servers: list[str] | None = Field(default=None, description="Updated MCP server names")
     skills: list[str] | None = Field(default=None, description="Updated skill names")
     soul: str | None = Field(default=None, description="Updated SOUL.md content")
+    system_prompt: str | None = Field(default=None, description="Updated system prompt")
 
 
 def _validate_agent_name(name: str) -> None:
@@ -185,10 +197,11 @@ def _agent_config_to_response(agent_cfg: AgentConfig, include_soul: bool = False
     """Convert AgentConfig to AgentResponse."""
     soul: str | None = None
     if include_soul:
-        soul = load_agent_soul(agent_cfg.name) or ""
+        soul = load_agent_soul(agent_cfg.agent_code) or ""
 
     return AgentResponse(
-        name=agent_cfg.name,
+        agent_code=agent_cfg.agent_code,
+        agent_name=agent_cfg.agent_name,
         description=agent_cfg.description,
         model=agent_cfg.model,
         tool_groups=agent_cfg.tool_groups,
@@ -196,6 +209,7 @@ def _agent_config_to_response(agent_cfg: AgentConfig, include_soul: bool = False
         mcp_servers=agent_cfg.mcp_servers,
         skills=agent_cfg.skills,
         soul=soul,
+        system_prompt=agent_cfg.system_prompt,
     )
 
 
@@ -305,8 +319,8 @@ async def create_agent_endpoint(request: AgentCreateRequest) -> AgentResponse:
     Raises:
         HTTPException: 409 if agent already exists, 422 if name is invalid.
     """
-    _validate_agent_name(request.name)
-    normalized_name = _normalize_agent_name(request.name)
+    _validate_agent_name(request.agent_code)
+    normalized_name = _normalize_agent_name(request.agent_code)
 
     agent_dir = get_paths().agent_dir(normalized_name)
 
@@ -317,7 +331,9 @@ async def create_agent_endpoint(request: AgentCreateRequest) -> AgentResponse:
         agent_dir.mkdir(parents=True, exist_ok=True)
 
         # Write config.yaml
-        config_data: dict = {"name": normalized_name}
+        config_data: dict = {"agent_code": normalized_name}
+        if request.agent_name:
+            config_data["agent_name"] = request.agent_name
         if request.description:
             config_data["description"] = request.description
         if request.model is not None:
@@ -376,16 +392,23 @@ async def update_agent(name: str, request: AgentUpdateRequest) -> AgentResponse:
     # Special handling for main agent
     if name.lower() == "main":
         updates = {}
-        if request.description is not None:
+        # Check if field was explicitly provided (not just not None)
+        # For optional fields, we need to distinguish between "not provided" and "explicitly set to None"
+        request_dict = request.model_dump(exclude_unset=True)
+        if "agent_name" in request_dict:
+            updates["agent_name"] = request.agent_name
+        if "description" in request_dict:
             updates["description"] = request.description
-        if request.model is not None:
+        if "model" in request_dict:
             updates["model"] = request.model
-        if request.tools is not None:
+        if "tools" in request_dict:
             updates["tools"] = request.tools
-        if request.mcp_servers is not None:
+        if "mcp_servers" in request_dict:
             updates["mcp_servers"] = request.mcp_servers
-        if request.skills is not None:
+        if "skills" in request_dict:
             updates["skills"] = request.skills
+        if "system_prompt" in request_dict:
+            updates["system_prompt"] = request.system_prompt
 
         _save_main_agent_config(updates)
 
@@ -411,15 +434,21 @@ async def update_agent(name: str, request: AgentUpdateRequest) -> AgentResponse:
 
     try:
         # Update config if any config fields changed
-        config_fields = [request.description, request.model, request.tool_groups, 
-                        request.tools, request.mcp_servers, request.skills]
+        config_fields = [request.agent_name, request.description, request.model, request.tool_groups,
+                        request.tools, request.mcp_servers, request.skills, request.system_prompt]
         config_changed = any(v is not None for v in config_fields)
 
         if config_changed:
             updated: dict = {
-                "name": agent_cfg.name,
+                "agent_code": agent_cfg.agent_code,
                 "description": request.description if request.description is not None else agent_cfg.description,
             }
+            # Handle agent_name
+            if request.agent_name is not None:
+                updated["agent_name"] = request.agent_name
+            elif agent_cfg.agent_name is not None:
+                updated["agent_name"] = agent_cfg.agent_name
+            
             new_model = request.model if request.model is not None else agent_cfg.model
             if new_model is not None:
                 updated["model"] = new_model
@@ -440,6 +469,10 @@ async def update_agent(name: str, request: AgentUpdateRequest) -> AgentResponse:
             new_skills = request.skills if request.skills is not None else agent_cfg.skills
             if new_skills is not None:
                 updated["skills"] = new_skills
+
+            new_system_prompt = request.system_prompt if request.system_prompt is not None else agent_cfg.system_prompt
+            if new_system_prompt is not None:
+                updated["system_prompt"] = new_system_prompt
 
             config_file = agent_dir / "config.yaml"
             with open(config_file, "w", encoding="utf-8") as f:
@@ -590,8 +623,8 @@ class ToolListResponse(BaseModel):
     skills: list[SkillInfo]
 
 
-# Map tool names to display labels/icons for built-in tools that are not in config.yaml
-_BUILTIN_TOOL_DISPLAY: dict[str, dict] = {
+# Optional Chinese labels/icons for role editor (falls back to tool docstring / Title Case name)
+_TOOL_UI_DISPLAY: dict[str, dict] = {
     "present_files": {"label": "展示文件", "icon": "📎", "description": "向用户展示文件内容"},
     "ask_clarification": {"label": "等待确认", "icon": "❔", "description": "等待用户确认后再继续"},
     "supervisor": {"label": "任务调度", "icon": "🧭", "description": "创建和管理子任务调度"},
@@ -599,82 +632,78 @@ _BUILTIN_TOOL_DISPLAY: dict[str, dict] = {
     "view_image": {"label": "查看图片", "icon": "🖼️", "description": "查看和分析图片文件"},
     "invoke_acp_agent": {"label": "ACP 子代理", "icon": "🤖", "description": "调用 ACP 外部代理"},
     "tool_search": {"label": "查找工具", "icon": "🔎", "description": "搜索并调用延迟加载的工具"},
+    "read_file": {"label": "读取文件", "icon": "📄", "description": "读取工作区或本地文件内容"},
+    "write_to_file": {"label": "写入文件", "icon": "✍️", "description": "写入或追加文件内容"},
+    "replace_in_file": {"label": "编辑文件", "icon": "🔧", "description": "在文件中进行精确替换"},
+    "delete_file": {"label": "删除文件", "icon": "🗑️", "description": "删除指定文件"},
+    "list_dir": {"label": "列出目录", "icon": "📂", "description": "列出目录内容"},
+    "search_content": {"label": "搜索内容", "icon": "🔎", "description": "在文件中搜索文本"},
+    "execute_command": {"label": "执行命令", "icon": "⌨️", "description": "在本地环境执行 shell 命令"},
+    "web_fetch": {"label": "网页抓取", "icon": "🌐", "description": "抓取并读取网页内容"},
+    "web_search": {"label": "网络搜索", "icon": "🔍", "description": "联网搜索"},
+    "todo": {"label": "待办列表", "icon": "📋", "description": "会话内轻量待办跟踪"},
+    "preview_url": {"label": "预览网页", "icon": "🖥️", "description": "网页截图或文本快照（Playwright）"},
+    "remember": {"label": "写入记忆", "icon": "💾", "description": "持久化存储跨会话知识"},
+    "recall": {"label": "回忆记忆", "icon": "🧠", "description": "按关键词检索已存储记忆"},
+    "automation": {"label": "自动化任务", "icon": "⏰", "description": "创建与管理定时/周期自动化任务"},
+    "bash": {"label": "终端命令", "icon": "⌨️", "description": "沙箱内执行 shell 命令"},
+    "ls": {"label": "列出目录", "icon": "📂", "description": "沙箱内列出目录（树形）"},
+    "write_file": {"label": "写入文件", "icon": "✍️", "description": "沙箱内写入或追加文件"},
+    "str_replace": {"label": "编辑文件", "icon": "🔧", "description": "沙箱内字符串替换编辑"},
+    # Agent management tools
+    "create_agent": {"label": "创建智能体", "icon": "🤖", "group": "agent_management", "description": "创建新的自定义智能体，支持中文名、工具/技能配置"},
+    "update_agent": {"label": "更新智能体", "icon": "✏️", "group": "agent_management", "description": "更新现有智能体的配置，包括中文名、工具、技能等"},
+    "list_agents": {"label": "查询智能体", "icon": "📋", "group": "agent_management", "description": "列出所有可用智能体及其配置信息"},
 }
 
 
 def _get_all_tools() -> list[ToolInfo]:
-    """Get all available builtin tools from config + hardcoded builtins."""
+    """Builtin/native tools for role editor: same name surface as lead agent (minus MCP)."""
     config = get_app_config()
-    results: list[ToolInfo] = []
+    model_name = config.models[0].name if config.models else None
 
-    # 1. Tools from config.yaml
+    specs = collect_native_tool_specs_for_role_ui(model_name=model_name)
+    results: list[ToolInfo] = []
     seen: set[str] = set()
-    for t in config.tools:
-        # Skip jina_ai tools (disabled)
-        if "jina_ai" in getattr(t, 'use', ''):
-            continue
-        name = t.name or ""
+
+    for spec in specs:
+        name = str(spec.get("name") or "").strip()
         if not name:
             continue
         seen.add(name)
-        results.append(ToolInfo(
-            name=name,
-            label=name.replace("_", " ").title(),
-            group=t.group or "",
-            description=f"Group: {t.group}",
-        ))
+        disp = _TOOL_UI_DISPLAY.get(name, {})
+        
+        # Prefer UI metadata from tool spec, fallback to _TOOL_UI_DISPLAY
+        group = str(spec.get("group") or "").strip() or str(disp.get("group") or "").strip()
+        label = str(spec.get("label") or "").strip() or str(disp.get("label") or "")
+        icon = str(spec.get("icon") or "").strip() or str(disp.get("icon") or "")
+        desc = (disp.get("description") or "").strip()
+        if not desc:
+            desc = str(spec.get("description") or "").strip()
+        if not desc and group:
+            desc = f"Group: {group}"
+        
+        results.append(
+            ToolInfo(
+                name=name,
+                label=label or name.replace("_", " ").title(),
+                icon=icon,
+                group=group,
+                description=desc,
+            )
+        )
 
-    # 2. Built-in tools (not from config)
-    builtin_instances = [
-        ("present_files", present_file_tool),
-        ("ask_clarification", ask_clarification_tool),
-        ("supervisor", supervisor_tool),
-        ("task", task_tool),
-        ("view_image", view_image_tool),
-    ]
-
-    for display_name, tool_instance in builtin_instances:
-        if display_name in seen:
-            continue
-        seen.add(display_name)
-        info = _BUILTIN_TOOL_DISPLAY.get(display_name, {})
-        results.append(ToolInfo(
-            name=display_name,
-            label=info.get("label", display_name),
-            icon=info.get("icon", ""),
-            group=getattr(tool_instance, "group", "") or "",
-            description=info.get("description", ""),
-        ))
-
-    # 3. Conditional tools
-    # view_image - already added above, but check vision support
-    # invoke_acp_agent - always show option
-    if "invoke_acp_agent" not in seen:
-        try:
-            build_invoke_acp_agent_tool()  # verify it works
-            info = _BUILTIN_TOOL_DISPLAY.get("invoke_acp_agent", {})
-            results.append(ToolInfo(
-                name="invoke_acp_agent",
-                label=info.get("label", "ACP 子代理"),
-                icon=info.get("icon", "🤖"),
-                group="acp",
+    if "tool_search" not in seen and getattr(config.tool_search, "enabled", False):
+        info = _TOOL_UI_DISPLAY["tool_search"]
+        results.append(
+            ToolInfo(
+                name="tool_search",
+                label=info.get("label", "查找工具"),
+                icon=info.get("icon", "🔎"),
+                group="builtin",
                 description=info.get("description", ""),
-            ))
-            seen.add("invoke_acp_agent")
-        except Exception:
-            pass
-
-    # tool_search - show if enabled in config
-    if "tool_search" not in seen and getattr(config.tool_search, 'enabled', False):
-        info = _BUILTIN_TOOL_DISPLAY.get("tool_search", {})
-        results.append(ToolInfo(
-            name="tool_search",
-            label=info.get("label", "查找工具"),
-            icon=info.get("icon", "🔎"),
-            group="builtin",
-            description=info.get("description", ""),
-        ))
-        seen.add("tool_search")
+            )
+        )
 
     return results
 

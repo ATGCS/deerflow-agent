@@ -597,15 +597,30 @@ async function fetchJson(url, options = {}) {
 
 function extractAssistantText(message) {
   if (!message) return ''
-  if (typeof message.content === 'string') return message.content
-  if (Array.isArray(message.content)) {
-    return message.content
+  
+  // 提取思考内容
+  let reasoningText = ''
+  if (message.additional_kwargs && typeof message.additional_kwargs.reasoning_content === 'string') {
+    const reasoning = message.additional_kwargs.reasoning_content.trim()
+    if (reasoning) {
+      reasoningText = `**思考：**\n${reasoning}\n\n`
+    }
+  }
+  
+  // 提取正文内容
+  let mainText = ''
+  if (typeof message.content === 'string') {
+    mainText = message.content
+  } else if (Array.isArray(message.content)) {
+    mainText = message.content
       .filter(x => x && x.type === 'text' && typeof x.text === 'string')
       .map(x => x.text)
       .join('\n')
+  } else if (typeof message.text === 'string') {
+    mainText = message.text
   }
-  if (typeof message.text === 'string') return message.text
-  return ''
+  
+  return reasoningText + mainText
 }
 
 /** LangGraph 可能发累计全文或 token 小块：合并为单调增长的展示文本 */
@@ -634,10 +649,10 @@ function textFromLangGraphStreamPart(obj) {
   if (typeof obj.content === 'string') return obj.content
   if (!Array.isArray(obj.content)) return extractAssistantText(obj)
   return obj.content.map(part => {
-    if (typeof part === 'string') return part
-    if (part && part.type === 'text' && typeof part.text === 'string') return part.text
-    return ''
-  }).join('')
+      if (typeof part === 'string') return part
+      if (part && part.type === 'text' && typeof part.text === 'string') return part.text
+      return ''
+    }).join('')
 }
 
 function textFromStreamAiPayload(obj) {
@@ -1327,25 +1342,18 @@ export class WsClient {
               lastAi = findLastAssistantMessage(messages)
             }
             const text = lastAi ? extractAssistantText(lastAi) : ''
-            console.log('[ws-debug][values]', {
-              sessionKey: key,
-              runId,
-              streamTextFromMessages,
-              valuesSeenCurrentUser,
-              messagesCount: Array.isArray(messages) ? messages.length : 0,
-              lastMsgType: lastMsg?.type || lastMsg?.role || null,
-              pickedAssistant: !!lastAi,
-              textLen: String(text || '').length,
-              textHead: String(text || '').slice(0, 120),
-            })
             const prevFinal = finalText
-            // 只要 messages-tuple 开始产出正文，就不要再用 values 快照去“拼正文”
-            // 否则两路 delta 会交错，导致前端 accumulate 发生重复追加。
+            // 简化调试日志
+            let textChanged = false
             if (text && !streamTextFromMessages) {
               const next = accumulateStreamAssistantText(finalText, text)
-              if (next !== finalText) finalText = next
+              if (next !== finalText) {
+                finalText = next
+                textChanged = true
+                // 只在文本变化时显示日志
+                console.log('[ws-debug][values-text]', finalText)
+              }
             }
-            const textChanged = finalText !== prevFinal
             const callsRaw =
               valuesSeenCurrentUser && lastMsg && isAssistantMessage(lastMsg)
                 ? collectToolCallsForTurnAfterLastUser(messages)
@@ -1354,13 +1362,10 @@ export class WsClient {
             const hasToolCalls = Array.isArray(calls) && calls.length > 0
             const sig = hasToolCalls ? JSON.stringify(calls) : ''
             const toolCallsChanged = sig !== lastValuesToolCallsSig
-            if (toolCallsChanged) lastValuesToolCallsSig = sig
             if (toolCallsChanged) {
-              console.log('[ws-debug][values-tool-calls]', {
-                sessionKey: key,
-                runId,
-                toolCallsCount: Array.isArray(calls) ? calls.length : 0,
-              })
+              lastValuesToolCallsSig = sig
+              // 简化工具调用日志
+              console.log('[ws-debug][values-tool-calls]', calls?.length || 0)
             }
             /* values 快照常带完整 tool_calls+args（LangGraph 用 args 而非 function.arguments） */
             if ((textChanged && !streamTextFromMessages) || toolCallsChanged) {

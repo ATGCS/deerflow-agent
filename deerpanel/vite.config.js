@@ -5,8 +5,10 @@ import fs from 'fs'
 // Read package.json version for build injection
 const pkg = JSON.parse(fs.readFileSync(new URL('./package.json', import.meta.url), 'utf8'))
 
-// Auto-follow redirects in proxy to avoid CORS from backend 301/302
-function configureProxyFollowRedirects(proxy) {
+const gatewayProxyTarget = process.env.DEERFLOW_GATEWAY_URL || 'http://localhost:8012'
+
+// Auto-follow redirects in proxy to avoid CORS from backend 301/302; surface clear errors when Gateway is down
+function configureGatewayProxy(proxy) {
   proxy.on('proxyRes', (proxyRes, req, res) => {
     if ([301, 302, 303, 307, 308].includes(proxyRes.statusCode)) {
       const location = proxyRes.headers.location
@@ -17,6 +19,18 @@ function configureProxyFollowRedirects(proxy) {
           proxyRes.headers.location = urlObj.pathname + urlObj.search
         } catch { /* ignore */ }
       }
+    }
+  })
+  proxy.on('error', (err, req, res) => {
+    const code = err && (err.code || err.message || String(err))
+    console.error(`[vite] /api proxy → ${gatewayProxyTarget} failed:`, code)
+    if (res && typeof res.writeHead === 'function' && !res.headersSent) {
+      const detail =
+        `DeerFlow Gateway not reachable at ${gatewayProxyTarget} (${code}). ` +
+        'Start LangGraph (2024) + Gateway (8012), e.g. scripts/windows/start-backend.ps1, ' +
+        'or set DEERFLOW_GATEWAY_URL if your Gateway uses another port (e.g. 8001 with make gateway).'
+      res.writeHead(502, { 'Content-Type': 'application/json; charset=utf-8' })
+      res.end(JSON.stringify({ detail }))
     }
   })
 }
@@ -41,17 +55,18 @@ export default defineConfig({
     strictPort: false,
     proxy: {
       '/api/langgraph': {
-        target: process.env.DEERFLOW_GATEWAY_URL || 'http://localhost:8012',
+        target: gatewayProxyTarget,
         changeOrigin: true,
         timeout: 600000,
         proxyTimeout: 600000,
+        configure: configureGatewayProxy,
       },
       '/api': {
-        target: process.env.DEERFLOW_GATEWAY_URL || 'http://localhost:8012',
+        target: gatewayProxyTarget,
         changeOrigin: true,
         timeout: 600000,
         proxyTimeout: 600000,
-        configure: configureProxyFollowRedirects,
+        configure: configureGatewayProxy,
       },
     },
     warmup: {

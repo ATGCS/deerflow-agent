@@ -38,12 +38,12 @@ export function AgentCard({ agent }: AgentCardProps) {
   const [deleteOpen, setDeleteOpen] = useState(false);
 
   function handleChat() {
-    router.push(`/workspace/agents/${agent.name}/chats/new`);
+    router.push(`/workspace/agents/${agent.agent_code}/chats/new`);
   }
 
   async function handleDelete() {
     try {
-      await deleteAgent.mutateAsync(agent.name);
+      await deleteAgent.mutateAsync(agent.agent_code);
       toast.success(t.agents.deleteSuccess);
       setDeleteOpen(false);
     } catch (err) {
@@ -62,12 +62,17 @@ export function AgentCard({ agent }: AgentCardProps) {
               </div>
               <div className="min-w-0">
                 <CardTitle className="truncate text-base">
-                  {agent.name}
+                  {agent.agent_name || agent.agent_code}
                 </CardTitle>
                 {agent.model && (
                   <Badge variant="secondary" className="mt-0.5 text-xs">
                     {agent.model}
                   </Badge>
+                )}
+                {agent.agent_name && (
+                  <div className="text-muted-foreground mt-0.5 text-xs">
+                    {agent.agent_code}
+                  </div>
                 )}
               </div>
             </div>

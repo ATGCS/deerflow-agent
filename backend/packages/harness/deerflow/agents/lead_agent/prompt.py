@@ -527,7 +527,7 @@ ask_clarification(
     **默认异步模式**：系统会在子智能体结束时自动更新子任务状态；如需进度确认，调用 `get_status` / `list_subtasks` 即可。
 
 10. **创建新智能体（进化能力）：**
-    `supervisor(action="create_agent", agent_name="agent-name", agent_type="subagent", description="它做什么", model="model-name", system_prompt="说明", tools=["tool1"], skills=["skill1"])`
+    `create_agent(agent_name="agent-name", agent_name_cn="中文名称", description="它做什么", model="model-name", system_prompt="说明", tools=["tool1"], skills=["skill1"])`
    
    **何时创建智能体：**
    - 重复的任务模式需要 specialized 处理
@@ -537,19 +537,20 @@ ask_clarification(
    
    **必需参数：**
    - `agent_name`：唯一标识符（小写、字母数字、连字符）
-   - `agent_type`："subagent"（默认）、"custom"或"acp"
-   - `system_prompt`：subagent 类型必需——定义智能体的行为
    
    **可选参数：**
+   - `agent_name_cn`：中文显示名称，用于界面展示
+   - `agent_type`："subagent"（默认）、"custom"或"acp"
    - `description`：智能体做什么
    - `model`：使用的默认模型（例如 "gpt-4", "claude-3", "qwen-2.5"）
+   - `system_prompt`：subagent 类型必需——定义智能体的行为
    - `tools`：允许的工具名称列表
    - `skills`：允许的技能名称列表
    - `max_turns`：最大对话轮次（默认：50）
    - `timeout_seconds`：超时时间（秒）（默认：900）
 
 11. **更新现有智能体（进化能力）：**
-    `supervisor(action="update_agent", agent_name="agent-name", description="新描述", model="新模型", system_prompt="新说明", tools=["新工具"], skills=["新技能"])`
+    `update_agent(agent_name="agent-name", description="新描述", model="新模型", system_prompt="新说明", tools=["新工具"], skills=["新技能"])`
     
     **何时更新智能体：**
     - 任务需求已改变
@@ -560,7 +561,7 @@ ask_clarification(
     **注意：** 只提供你想更新的字段。所有字段都是可选的。
 
 12. **列出所有智能体：**
-    `supervisor(action="list_agents")` - 返回所有智能体的详细信息（包括类型、模型、`tools`、`skills` 等），用于在创建子任务前正确选择 `assigned_agent/subagent_type`
+    `list_agents()` - 返回所有智能体的详细信息（包括类型、模型、`tools`、`skills` 等），用于在创建子任务前正确选择 `assigned_agent/subagent_type`
 
 **分配可用的智能体：**
 - **researcher**：网络研究和数据收集
@@ -576,10 +577,9 @@ ask_clarification(
 用户："我需要一个专门用于审查 pull request 的智能体"
 
 # 步骤 1：创建智能体
-supervisor(
-  action="create_agent",
+create_agent(
   agent_name="pr-reviewer",
-  agent_type="subagent",
+  agent_name_cn="代码审查专家",
   description="代码审查专家",
   model="deepseek-coder",
   system_prompt="你是一位经验丰富的代码审查专家。专注于：1) 安全漏洞 2) 性能问题 3) 代码质量...",

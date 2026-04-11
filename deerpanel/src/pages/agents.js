@@ -137,9 +137,9 @@ async function loadRoles(page, state) {
   try {
     const agents = await api.listAgents()
     state.agents = agents.sort((a, b) => {
-      if (a.name === 'main') return -1
-      if (b.name === 'main') return 1
-      return String(a.name || '').localeCompare(String(b.name || ''))
+      if (a.agent_code === 'main') return -1
+      if (b.agent_code === 'main') return 1
+      return String(a.agent_code || '').localeCompare(String(b.agent_code || ''))
     })
     renderRoles(page, state)
     window._roleState = state  // 供详情弹窗的"编辑"按钮使用
@@ -161,7 +161,7 @@ function renderRoles(page, state) {
   const list = state.agents.filter((a) => {
     if (!state.filter) return true
     const text = [
-      a.name, a.description, parseModelValue(a),
+      a.agent_code, a.agent_name, a.description, parseModelValue(a),
       a.tool_groups?.join(','), a.tools?.join(','),
       a.mcp_servers?.join(','), a.skills?.join(','),
     ].map(v => String(v || '').toLowerCase()).join(' ')
@@ -181,8 +181,8 @@ function renderRoles(page, state) {
   const MODEL_COLORS = ['#6366f1', '#8b5cf6', '#ec4899', '#06b6d4', '#f59e0b', '#10b981', '#ef4444']
 
   container.innerHTML = list.map(a => {
-    const isDefault = a.isDefault || a.name === 'main'
-    const name = a.name || '-'
+    const isDefault = a.isDefault || a.agent_code === 'main'
+    const name = a.agent_name || a.agent_code || '-'
     const desc = a.description || '暂无描述'
     const modelText = parseModelValue(a) || '未设置'
     
@@ -221,7 +221,7 @@ function renderRoles(page, state) {
     const initial = name.charAt(0).toUpperCase()
 
     return `
-      <div class="role-card" data-id="${a.name}">
+      <div class="role-card" data-id="${a.agent_code}">
         <div class="role-card-top">
           <div class="role-avatar" style="background:${avatarBg}">${initial}</div>
           <div class="role-info">
@@ -240,13 +240,13 @@ function renderRoles(page, state) {
         ).join('')}</div>` : ''}
 
         <div class="role-actions">
-          <button class="role-btn" data-action="edit" data-id="${a.name}" title="编辑配置">
+          <button class="role-btn" data-action="edit" data-id="${a.agent_code}" title="编辑配置">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
             编辑
           </button>
-          <button class="role-btn" data-action="detail" data-id="${a.name}" title="查看详情">详情</button>
+          <button class="role-btn" data-action="detail" data-id="${a.agent_code}" title="查看详情">详情</button>
         </div>
-        ${!isDefault ? `<button class="role-delete-btn" data-action="delete" data-id="${a.name}" title="删除角色">
+        ${!isDefault ? `<button class="role-delete-btn" data-action="delete" data-id="${a.agent_code}" title="删除角色">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3,6 5,6 21,6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
         </button>` : ''}
       </div>
@@ -362,7 +362,11 @@ async function showRoleDetailDialog(id) {
                 <div class="detail-grid">
                   <div class="detail-field">
                     <label class="detail-label">角色标识</label>
-                    <div class="detail-value"><code>${escapeHtml(agent.name || '-')}</code></div>
+                    <div class="detail-value"><code>${escapeHtml(agent.agent_code || '-')}</code></div>
+                  </div>
+                  <div class="detail-field">
+                    <label class="detail-label">中文名称</label>
+                    <div class="detail-value">${escapeHtml(agent.agent_name || '-')}</div>
                   </div>
                   <div class="detail-field">
                     <label class="detail-label">描述</label>
@@ -376,6 +380,12 @@ async function showRoleDetailDialog(id) {
                     <label class="detail-label">类型</label>
                     <div class="detail-value">${id === 'main' ? '<span class="re-badge re-badge--default">主智能体</span>' : '<span class="re-badge">自定义角色</span>'}</div>
                   </div>
+                  ${agent.system_prompt ? `
+                  <div class="detail-field" style="grid-column: 1 / -1">
+                    <label class="detail-label">系统提示词</label>
+                    <pre class="detail-soul" style="white-space: pre-wrap; word-break: break-word; margin-top: 8px; padding: 12px; background: var(--bg-tertiary); border-radius: 6px; font-size: 13px; line-height: 1.6;">${escapeHtml(agent.system_prompt)}</pre>
+                  </div>
+                  ` : ''}
                 </div>
               </section>
 
@@ -531,7 +541,7 @@ const EDITOR_TABS = [
  * 打开角色编辑器弹窗
  */
 async function showEditRoleDialog(page, state, id) {
-  const agent = state.agents.find(a => a.name === id)
+  const agent = state.agents.find(a => a.agent_code === id)
   if (!agent) return
 
   // 获取模型列表
@@ -592,8 +602,9 @@ async function showEditRoleDialog(page, state, id) {
     mcp_servers: (Array.isArray(agent.mcp_servers) ? agent.mcp_servers : metaMcpServers.map(s => s.value)),
     skills: (Array.isArray(agent.skills) ? agent.skills : metaSkills.map(s => s.value)),
     soul: agent.soul || '',
+    system_prompt: agent.system_prompt || '',
   }
-
+  
   // 创建 overlay
   const overlay = document.createElement('div')
   overlay.className = 'modal-overlay role-editor-overlay'
@@ -629,6 +640,10 @@ async function showEditRoleDialog(page, state, id) {
                 <input class="form-input re-field-id" value="${escapeHtml(id)}" readonly style="opacity:.55;cursor:not-allowed;font-family:var(--font-mono)">
               </div>
               <div class="form-group">
+                <label class="form-label">中文名称</label>
+                <input class="form-input re-field-name" value="${escapeHtml(agent.agent_name || '')}" placeholder="例如：在线搜索同学">
+              </div>
+              <div class="form-group">
                 <label class="form-label">角色描述</label>
                 <input class="form-input re-field-desc" value="${escapeHtml(editState.description)}" placeholder="例如：翻译助手、代码审查助手">
               </div>
@@ -639,6 +654,10 @@ async function showEditRoleDialog(page, state, id) {
                   ${models.map(m => `<option value="${escapeAttr(m.value)}"${m.value === editState.model ? ' selected' : ''}>${escapeHtml(m.label)}</option>`).join('')}
                 </select>
               </div>` : ''}
+              <div class="form-group">
+                <label class="form-label">系统提示词</label>
+                <textarea class="form-input re-field-system-prompt" placeholder="定义该角色的核心指令和行为规范&#10;&#10;示例：&#10;- 你是专业的在线搜索助手&#10;- 擅长查找最新资讯和信息&#10;- 回答要简洁准确" rows="8" style="font-family:var(--font-mono);font-size:13px;line-height:1.6;resize:vertical;">${escapeHtml(editState.system_prompt)}</textarea>
+              </div>
             </section>
 
             <!-- 工具面板 -->
@@ -762,7 +781,7 @@ async function showEditRoleDialog(page, state, id) {
   overlay.querySelectorAll('.re-search').forEach(input => {
     input.addEventListener('input', () => {
       const kw = input.value.trim().toLowerCase()
-      input.closest('.re-panel').querySelectorAll('.re-check').forEach(item => {
+      input.closest('.re-panel').querySelectorAll('.re-check, .skill-card').forEach(item => {
         item.style.display = (!kw || (item.dataset.search || '').includes(kw)) ? '' : 'none'
       })
     })
@@ -790,31 +809,46 @@ async function showEditRoleDialog(page, state, id) {
 
   // 保存
   overlay.querySelector('[data-action=save]')?.addEventListener('click', async () => {
+    const agent_name = overlay.querySelector('.re-field-name')?.value?.trim() || null
     const description = overlay.querySelector('.re-field-desc').value.trim()
     const model = overlay.querySelector('.re-field-model')?.value?.trim() || ''
     const soul = overlay.querySelector('.re-field-soul')?.value?.trim() || ''
+    const system_prompt = overlay.querySelector('.re-field-system-prompt')?.value?.trim() || null
     const tools = [...overlay.querySelectorAll('.editor-tool-list input:checked')].map(el => el.value)
     const mcp_servers = [...overlay.querySelectorAll('.editor-mcp-list input:checked')].map(el => el.value)
     const skills = [...overlay.querySelectorAll('.editor-skill-list input:checked')].map(el => el.value)
 
     try {
       // 保存逻辑：全选时存 null（= 全部可用），部分选/空则存实际数组
-      const isAllTools = tools.length === metaTools.length && tools.every((v,i) => v === metaTools[i]?.value)
-      const isAllMcp = mcp_servers.length === metaMcpServers.length && mcp_servers.every((v,i) => v === metaMcpServers[i]?.value)
-      const isAllSkills = skills.length === metaSkills.length && skills.every((v,i) => v === metaSkills[i]?.value)
+      // 使用集合比较，不依赖顺序
+      const isAllTools = tools.length === metaTools.length &&
+                         tools.every(v => metaTools.some(t => t.value === v))
+      const isAllMcp = mcp_servers.length === metaMcpServers.length &&
+                       mcp_servers.every(v => metaMcpServers.some(t => t.value === v))
+      const isAllSkills = skills.length === metaSkills.length &&
+                          skills.every(v => metaSkills.some(t => t.value === v))
 
-      await api.updateAgent(id, {
+      const requestData = {
+        agent_name,
         description,
         model: model || null,
-        // 全选存 null（= 未限制），部分选/空选存实际数组（[] 表示显式清空）
         tools: isAllTools ? null : tools,
         mcp_servers: isAllMcp ? null : mcp_servers,
         skills: isAllSkills ? null : skills,
-        soul: soul || null
-      })
+        soul: soul || null,
+        system_prompt,
+      }
+
+      await api.updateAgent(id, requestData)
+      agent.agent_name = agent_name
       agent.description = description
       if (model) agent.model = model
-      agent.tools = tools; agent.mcp_servers = mcp_servers; agent.skills = skills; agent.soul = soul
+      // 保持与后端一致：全选时存 null，部分选时存数组
+      agent.tools = isAllTools ? null : tools
+      agent.mcp_servers = isAllMcp ? null : mcp_servers
+      agent.skills = isAllSkills ? null : skills
+      agent.soul = soul || null
+      agent.system_prompt = system_prompt
       renderRoles(page, state)
       closeFn()
       toast(`角色「${id}」已更新`, 'success')

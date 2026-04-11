@@ -8,6 +8,8 @@ import pytest
 
 from deerflow.agents.lead_agent import agent as lead_agent_module
 from deerflow.config.app_config import AppConfig
+from deerflow.config.paths import Paths
+import deerflow.config.paths as paths_module
 from deerflow.config.model_config import ModelConfig
 from deerflow.config.sandbox_config import SandboxConfig
 from deerflow.config.summarization_config import SummarizationConfig
@@ -74,6 +76,59 @@ def test_resolve_model_name_raises_when_no_models_configured(monkeypatch):
         match="No chat models are configured",
     ):
         lead_agent_module._resolve_model_name("missing-model")
+
+
+def test_make_lead_agent_missing_main_agent_dir_uses_global_defaults(monkeypatch, tmp_path, caplog):
+    """Fresh .deer-flow without agents/main/ should not crash (matches Gateway optional main)."""
+    monkeypatch.setattr(paths_module, "_paths", Paths(base_dir=tmp_path))
+
+    app_config = _make_app_config([_make_model("m1", supports_thinking=False)])
+
+    import deerflow.tools as tools_module
+
+    monkeypatch.setattr(lead_agent_module, "get_app_config", lambda: app_config)
+    monkeypatch.setattr(tools_module, "get_available_tools", lambda **kwargs: [])
+    monkeypatch.setattr(lead_agent_module, "_build_middlewares", lambda config, model_name, agent_name=None: [])
+    monkeypatch.setattr(lead_agent_module, "create_chat_model", lambda **kwargs: object())
+    monkeypatch.setattr(lead_agent_module, "create_agent", lambda **kwargs: {"ok": True})
+
+    with caplog.at_level("WARNING"):
+        out = lead_agent_module.make_lead_agent(
+            {
+                "configurable": {
+                    "agent_name": "main",
+                    "model_name": "m1",
+                    "is_plan_mode": False,
+                    "subagent_enabled": False,
+                }
+            }
+        )
+
+    assert "Main agent directory not found" in caplog.text
+    assert out == {"ok": True}
+
+
+def test_make_lead_agent_missing_custom_agent_still_raises(monkeypatch, tmp_path):
+    monkeypatch.setattr(paths_module, "_paths", Paths(base_dir=tmp_path))
+
+    app_config = _make_app_config([_make_model("m1", supports_thinking=False)])
+
+    import deerflow.tools as tools_module
+
+    monkeypatch.setattr(lead_agent_module, "get_app_config", lambda: app_config)
+    monkeypatch.setattr(tools_module, "get_available_tools", lambda **kwargs: [])
+
+    with pytest.raises(FileNotFoundError, match="Agent directory not found"):
+        lead_agent_module.make_lead_agent(
+            {
+                "configurable": {
+                    "agent_name": "my-custom-agent",
+                    "model_name": "m1",
+                    "is_plan_mode": False,
+                    "subagent_enabled": False,
+                }
+            }
+        )
 
 
 def test_make_lead_agent_disables_thinking_when_model_does_not_support_it(monkeypatch):

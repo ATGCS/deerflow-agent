@@ -13,7 +13,8 @@ const OPENCLAW_DIR = path.join(homedir(), '.deerpanel')
 const CONFIG_PATH = path.join(OPENCLAW_DIR, 'deerpanel.json')
 const PANEL_CONFIG_PATH = path.join(OPENCLAW_DIR, 'deerpanel.json')
 const AUTOMATIONS_DIR = path.join(homedir(), '.deerflow', 'automations')
-const DEERFLOW_GATEWAY_URL = process.env.DEERFLOW_GATEWAY_URL || 'http://localhost:2026'
+// Align with vite.config.js and scripts/windows/start-backend.ps1 (Gateway on 8012, not nginx 2026)
+const DEERFLOW_GATEWAY_URL = process.env.DEERFLOW_GATEWAY_URL || 'http://127.0.0.1:8012'
 const PROJECT_ROOT = process.env.DEERFLOW_PROJECT_ROOT || path.resolve(process.cwd(), '..')
 const exec = promisify(_exec)
 

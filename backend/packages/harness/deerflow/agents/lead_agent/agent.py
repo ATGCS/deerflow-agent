@@ -20,6 +20,7 @@ from deerflow.agents.middlewares.view_image_middleware import ViewImageMiddlewar
 from deerflow.agents.thread_state import ThreadState
 from deerflow.config.agents_config import load_agent_config
 from deerflow.config.app_config import get_app_config
+from deerflow.config.paths import get_paths
 from deerflow.config.summarization_config import get_summarization_config
 from deerflow.models import create_chat_model
 
@@ -262,10 +263,10 @@ def _build_middlewares(config: RunnableConfig, model_name: str | None, agent_nam
         middlewares.append(DeferredToolFilterMiddleware())
 
     # Add SubagentLimitMiddleware to truncate excess parallel task calls
-    subagent_enabled = config.get("configurable", {}).get("subagent_enabled", False)
-    if subagent_enabled:
-        max_concurrent_subagents = config.get("configurable", {}).get("max_concurrent_subagents", 3)
-        middlewares.append(SubagentLimitMiddleware(max_concurrent=max_concurrent_subagents))
+    # subagent_enabled is always True now (no config switch needed)
+    subagent_enabled = True
+    max_concurrent_subagents = config.get("configurable", {}).get("max_concurrent_subagents", 3)
+    middlewares.append(SubagentLimitMiddleware(max_concurrent=max_concurrent_subagents))
 
     # Collaboration phase hints (runtime.context.collab_phase from /api/collab + ws-client)
     middlewares.append(CollabPhaseMiddleware())
@@ -292,8 +293,8 @@ def make_lead_agent(config: RunnableConfig):
     thinking_enabled = cfg.get("thinking_enabled", True)
     reasoning_effort = cfg.get("reasoning_effort", None)
     requested_model_name: str | None = cfg.get("model_name") or cfg.get("model")
-    is_plan_mode = cfg.get("is_plan_mode", True)  # 默认启用规划模式，让 Lead Agent 自主判断和规划
-    subagent_enabled = cfg.get("subagent_enabled", True)  # 默认启用子代理，让 Lead Agent 能够分配任务
+    is_plan_mode = True  # 默认启用规划模式，让 Lead Agent 自主判断和规划
+    subagent_enabled = True  # 始终启用子代理，让 Lead Agent 能够分配任务（去掉开关）
     max_concurrent_subagents = cfg.get("max_concurrent_subagents", 3)
     is_bootstrap = cfg.get("is_bootstrap", False)
     agent_name = cfg.get("agent_name")
@@ -302,7 +303,21 @@ def make_lead_agent(config: RunnableConfig):
     tools_mode = cfg.get("tools_mode", None)  # "host_direct" | "sandbox" | None
     local_workspace_root = cfg.get("local_workspace_root")
 
-    agent_config = load_agent_config(agent_name) if not is_bootstrap else None
+    agent_config = None
+    if not is_bootstrap and agent_name is not None:
+        try:
+            agent_config = load_agent_config(agent_name)
+        except FileNotFoundError:
+            # Fresh installs often have no backend/.deer-flow/agents/main yet; Gateway treats that as optional.
+            if str(agent_name).lower() == "main":
+                logger.warning(
+                    "Main agent directory not found at %s; using global config.yaml defaults only. "
+                    "Create it from the UI (Agents) or add config.yaml under agents/main.",
+                    get_paths().agent_dir("main"),
+                )
+                agent_config = None
+            else:
+                raise
     # Custom agent model or fallback to global/default model resolution
     agent_model_name = agent_config.model if agent_config and agent_config.model else _resolve_model_name()
 
@@ -369,10 +384,12 @@ def make_lead_agent(config: RunnableConfig):
     # Determine available skills from config: None = all, [] = none, ["a","b"] = filtered
     _cfg_skills = agent_config.skills if agent_config else None
     _available_skills = set(_cfg_skills) if _cfg_skills is not None else None
+    logger.info(f"[Agent Config] skills config: {_cfg_skills}, available_skills: {_available_skills}")
 
     # Determine available tools from config: None = all, [] = none, ["a","b"] = filtered
     _cfg_tools = agent_config.tools if agent_config else None
     _tool_whitelist = set(_cfg_tools) if _cfg_tools is not None else None
+    logger.info(f"[Agent Config] tools config: {_cfg_tools}, tool_whitelist: {_tool_whitelist}")
 
     tools = get_available_tools(
         model_name=model_name,

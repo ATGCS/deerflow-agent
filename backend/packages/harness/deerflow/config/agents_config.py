@@ -19,7 +19,8 @@ class AgentConfig(BaseModel):
     """Unified configuration for all types of agents.
     
     Attributes:
-        name: Unique identifier for the agent.
+        agent_code: Unique identifier for the agent (hyphen-case, e.g. "online-search-genius").
+        agent_name: Chinese display name for UI (e.g. "在线搜索天才").
         description: What the agent does.
         model: Model to use (optional).
         tool_groups: Optional tool group whitelist.
@@ -37,7 +38,8 @@ class AgentConfig(BaseModel):
         auto_approve_permissions: For ACP - auto-approve permission requests.
     """
 
-    name: str
+    agent_code: str
+    agent_name: str | None = None
     description: str = ""
     model: str | None = None
     tool_groups: list[str] | None = None
@@ -97,15 +99,51 @@ def load_agent_config(name: str | None) -> AgentConfig | None:
     except yaml.YAMLError as e:
         raise ValueError(f"Failed to parse agent config {config_file}: {e}") from e
 
-    # Ensure name is set from directory name if not in file
-    if "name" not in data:
-        data["name"] = name
+    # Ensure agent_code is set from directory name if not in file
+    if "agent_code" not in data and "name" not in data:
+        data["agent_code"] = name
+    elif "name" in data:
+        # Backward compatibility: rename 'name' to 'agent_code'
+        data["agent_code"] = data.pop("name")
+    
+    # Backward compatibility: rename 'name_cn' to 'agent_name'
+    if "name_cn" in data:
+        data["agent_name"] = data.pop("name_cn")
 
     # Strip unknown fields before passing to Pydantic (e.g. legacy prompt_file)
     known_fields = set(AgentConfig.model_fields.keys())
     data = {k: v for k, v in data.items() if k in known_fields}
 
     return AgentConfig(**data)
+
+
+def save_agent_config(agent_code: str, config_data: dict) -> None:
+    """Save agent configuration to config.yaml.
+
+    Args:
+        agent_code: The agent code (will be normalized to lowercase).
+        config_data: Dictionary containing agent configuration fields.
+
+    Raises:
+        ValueError: If the agent code is invalid.
+    """
+    if not AGENT_NAME_PATTERN.match(agent_code):
+        raise ValueError(f"Invalid agent code '{agent_code}'. Must match pattern: {AGENT_NAME_PATTERN.pattern}")
+    
+    agent_code = agent_code.lower()
+    agent_dir = get_paths().agent_dir(agent_code)
+    config_file = agent_dir / "config.yaml"
+
+    # Create directory if it doesn't exist
+    agent_dir.mkdir(parents=True, exist_ok=True)
+
+    # Ensure agent_code field is set
+    config_data = config_data.copy()
+    config_data["agent_code"] = agent_code
+
+    # Write config file
+    with open(config_file, "w", encoding="utf-8") as f:
+        yaml.dump(config_data, f, default_flow_style=False, allow_unicode=True)
 
 
 def load_agent_soul(agent_name: str | None) -> str | None:

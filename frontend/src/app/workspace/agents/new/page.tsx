@@ -33,6 +33,7 @@ export default function NewAgentPage() {
   // ── Step 1: name form ──────────────────────────────────────────────────────
   const [step, setStep] = useState<Step>("name");
   const [nameInput, setNameInput] = useState("");
+  const [nameCnInput, setNameCnInput] = useState("");
   const [nameError, setNameError] = useState("");
   const [isCheckingName, setIsCheckingName] = useState(false);
   const [agentName, setAgentName] = useState("");
@@ -83,12 +84,20 @@ export default function NewAgentPage() {
     }
     setAgentName(trimmed);
     setStep("chat");
+    
+    // Build bootstrap message with optional Chinese name
+    let bootstrapMsg = t.agents.nameStepBootstrapMessage.replace("{name}", trimmed);
+    if (nameCnInput.trim()) {
+      bootstrapMsg += ` 中文名：${nameCnInput.trim()}`;
+    }
+    
     await sendMessage(threadId, {
-      text: t.agents.nameStepBootstrapMessage.replace("{name}", trimmed),
+      text: bootstrapMsg,
       files: [],
     });
   }, [
     nameInput,
+    nameCnInput,
     sendMessage,
     threadId,
     t.agents.nameStepBootstrapMessage,
@@ -165,6 +174,17 @@ export default function NewAgentPage() {
                 }}
                 onKeyDown={handleNameKeyDown}
                 className={cn(nameError && "border-destructive")}
+              />
+              <Input
+                placeholder="中文名称（可选）"
+                value={nameCnInput}
+                onChange={(e) => setNameCnInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    void handleConfirmName();
+                  }
+                }}
               />
               {nameError && (
                 <p className="text-destructive text-sm">{nameError}</p>
